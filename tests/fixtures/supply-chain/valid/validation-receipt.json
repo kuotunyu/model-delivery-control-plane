@@ -1,0 +1,48 @@
+{
+  "schema_version": "mdcp.validation-receipt.v1",
+  "request_id": "synthetic-release-fixture",
+  "artifact_descriptor_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "policy_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "evidence_class": "synthetic_test",
+  "resource_limits": {
+    "cpu_cores": 0.5,
+    "memory_mib": 384,
+    "pids_limit": 128,
+    "timeout_seconds": 30,
+    "tmpfs_mib": 64
+  },
+  "checks": [
+    {
+      "code": "VAL_TRUST_FAILURE",
+      "verdict": "PASS",
+      "evidence_digest": "57f23a07fff0ee5655e00bd6848792ec03704c936a91b791d13fe210da6dd3e0",
+      "explanation": "supply-chain trust verification failed"
+    },
+    {
+      "code": "VAL_SUBJECT_MISMATCH",
+      "verdict": "PASS",
+      "evidence_digest": "578e5d9b9746f8799a35f1ba432ae2d84fa5ab4b220fdf50cb18040fa0095e66",
+      "explanation": "supply-chain evidence subject does not match"
+    },
+    {
+      "code": "VAL_LICENSE",
+      "verdict": "PASS",
+      "evidence_digest": "4f7b45498850bc31ab83bc36eae535f445ab722908308747a5fb6a6b5283fe8c",
+      "explanation": "runtime license policy is not satisfied"
+    },
+    {
+      "code": "VAL_VULNERABILITY",
+      "verdict": "PASS",
+      "evidence_digest": "d353c4adcdb91f17fb5dcd5980d992143136a496afb1af5c4329ba5bbbb13056",
+      "explanation": "vulnerability policy is not satisfied"
+    },
+    {
+      "code": "VAL_SCAN_EXPIRED",
+      "verdict": "PASS",
+      "evidence_digest": "30e91934b44fad065d7ee0cba4a71e3ad328f0aa649dfcbef9e7d16e4ed83030",
+      "explanation": "vulnerability evidence is outside its validity window"
+    }
+  ],
+  "verdict": "PASS",
+  "digest": "93241248e530fa15c0ad4354b8ed484e539c84db5237e0c227861882a9907938"
+}

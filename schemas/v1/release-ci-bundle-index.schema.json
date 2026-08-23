@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "BundleMember": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "media_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "media_type",
+        "size_bytes",
+        "sha256"
+      ],
+      "title": "BundleMember",
+      "type": "object"
+    },
+    "EvidenceClass": {
+      "enum": [
+        "bootstrap_baseline",
+        "measured_workload",
+        "injected_test",
+        "release_ci_verified",
+        "reviewer_locally_recomputed",
+        "synthetic_test"
+      ],
+      "title": "EvidenceClass",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "mdcp.release-ci-bundle-index.v1",
+      "default": "mdcp.release-ci-bundle-index.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "evidence_class": {
+      "$ref": "#/$defs/EvidenceClass"
+    },
+    "release_id": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Release Id",
+      "type": "string"
+    },
+    "final_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Final Manifest Sha256",
+      "type": "string"
+    },
+    "validation_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Validation Receipt Sha256",
+      "type": "string"
+    },
+    "members": {
+      "items": {
+        "$ref": "#/$defs/BundleMember"
+      },
+      "title": "Members",
+      "type": "array"
+    }
+  },
+  "required": [
+    "evidence_class",
+    "release_id",
+    "final_manifest_sha256",
+    "validation_receipt_sha256",
+    "members"
+  ],
+  "title": "ReleaseCIBundleIndex",
+  "type": "object"
+}

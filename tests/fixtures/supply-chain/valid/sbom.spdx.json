@@ -1,0 +1,14 @@
+{
+  "spdx_version": "SPDX-2.3",
+  "subject": {
+    "repository": "ghcr.io/kuotunyu/model-delivery-control-plane",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "packages": [
+    {
+      "name": "onnxruntime",
+      "version": "1.22.1",
+      "license": "MIT"
+    }
+  ]
+}

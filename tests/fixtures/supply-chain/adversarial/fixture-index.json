@@ -1,0 +1,30 @@
+{
+  "schema_version": "mdcp.adversarial-fixture-index.v1",
+  "fixtures": [
+    {
+      "id": "wrong-attestation-subject",
+      "expected_code": "VAL_SUBJECT_MISMATCH",
+      "expected_verdict": "QUARANTINE"
+    },
+    {
+      "id": "wrong-workflow-identity",
+      "expected_code": "VAL_TRUST_FAILURE",
+      "expected_verdict": "QUARANTINE"
+    },
+    {
+      "id": "critical-vulnerability",
+      "expected_code": "VAL_VULNERABILITY",
+      "expected_verdict": "FAIL"
+    },
+    {
+      "id": "unknown-runtime-license",
+      "expected_code": "VAL_LICENSE",
+      "expected_verdict": "FAIL"
+    },
+    {
+      "id": "expired-scan",
+      "expected_code": "VAL_SCAN_EXPIRED",
+      "expected_verdict": "FAIL"
+    }
+  ]
+}

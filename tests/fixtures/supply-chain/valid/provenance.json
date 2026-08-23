@@ -1,0 +1,10 @@
+{
+  "subject": {
+    "repository": "ghcr.io/kuotunyu/model-delivery-control-plane",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "repository": "kuotunyu/model-delivery-control-plane",
+  "workflow": ".github/workflows/release-ci.yml",
+  "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "builder": "https://github.com/actions/runner"
+}

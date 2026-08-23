@@ -1,0 +1,45 @@
+{
+  "schema_version": "mdcp.release-ci-bundle-index.v1",
+  "evidence_class": "synthetic_test",
+  "release_id": "sha256:9b4dcaacd2907d7921f13cedd5d9c97ac4cda2e85cb6a2901d7c063f742b3aad",
+  "final_manifest_sha256": "83dbb18e1feed40a6a09f977a22290a1ccff285d0913769f2dc03870020a7bdf",
+  "validation_receipt_sha256": "8491e03399e689a921e315403a9d46129a8d0cbbfce46ca8193af888b06ce831",
+  "members": [
+    {
+      "path": "attestation.json",
+      "media_type": "application/json",
+      "size_bytes": 365,
+      "sha256": "a5cf09816483cf9c2ac3abd086bd7c9b43091ec962b039469fc8b5ddfc8e574b"
+    },
+    {
+      "path": "final-release-manifest.json",
+      "media_type": "application/json",
+      "size_bytes": 2552,
+      "sha256": "83dbb18e1feed40a6a09f977a22290a1ccff285d0913769f2dc03870020a7bdf"
+    },
+    {
+      "path": "provenance.json",
+      "media_type": "application/json",
+      "size_bytes": 395,
+      "sha256": "b3e2c1e224fb5737ba9275627ad7e16a11fd7371c00c6c862a16d7e45bdd9c70"
+    },
+    {
+      "path": "sbom.spdx.json",
+      "media_type": "application/spdx+json",
+      "size_bytes": 320,
+      "sha256": "92eb6cbddfd5530d67f3800117da15cd4d41761a2364aaa494f16e5e7bf7360a"
+    },
+    {
+      "path": "validation-receipt.json",
+      "media_type": "application/json",
+      "size_bytes": 1742,
+      "sha256": "8491e03399e689a921e315403a9d46129a8d0cbbfce46ca8193af888b06ce831"
+    },
+    {
+      "path": "vulnerability-scan.json",
+      "media_type": "application/json",
+      "size_bytes": 297,
+      "sha256": "10698cdb8c6995f469bb3015d107e6de076bf258e61976f5531d27ae7bb06bac"
+    }
+  ]
+}

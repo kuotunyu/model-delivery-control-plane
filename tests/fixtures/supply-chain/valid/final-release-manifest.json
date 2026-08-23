@@ -1,0 +1,47 @@
+{
+  "schema_version": "mdcp.final-release-manifest.v1",
+  "canonicalization": "RFC8785",
+  "release_id": "sha256:9b4dcaacd2907d7921f13cedd5d9c97ac4cda2e85cb6a2901d7c063f742b3aad",
+  "image_descriptor_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "image_descriptor_schema_version": "artifact-descriptor/v1",
+  "registered_model_name": "mdcp-bike-demand",
+  "mlflow_numeric_version": 2,
+  "mlflow_run_id": "22222222222222222222222222222222",
+  "onnx": {
+    "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "size_bytes": 707,
+    "opset": 18,
+    "operators": [
+      "Add",
+      "Concat",
+      "MatMul",
+      "Relu"
+    ],
+    "input_names": [
+      "season"
+    ],
+    "output_name": "prediction"
+  },
+  "input_schema_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+  "output_schema_digest": "5555555555555555555555555555555555555555555555555555555555555555",
+  "git_source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "serving_code_config_id": "7777777777777777777777777777777777777777777777777777777777777777",
+  "training_config_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+  "uci_doi": "10.24432/C5W894",
+  "uci_source_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+  "uci_attribution_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "dataset_manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "split_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "preprocessing_receipt_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "leakage_receipt_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "h1_evaluation_report_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "oci": {
+    "repository": "ghcr.io/kuotunyu/model-delivery-control-plane",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "sbom_sha256": "92eb6cbddfd5530d67f3800117da15cd4d41761a2364aaa494f16e5e7bf7360a",
+  "provenance_sha256": "b3e2c1e224fb5737ba9275627ad7e16a11fd7371c00c6c862a16d7e45bdd9c70",
+  "attestation_sha256": "a5cf09816483cf9c2ac3abd086bd7c9b43091ec962b039469fc8b5ddfc8e574b",
+  "scan_receipt_sha256": "10698cdb8c6995f469bb3015d107e6de076bf258e61976f5531d27ae7bb06bac",
+  "rollout_policy_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+}

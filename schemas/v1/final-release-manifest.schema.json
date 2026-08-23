@@ -1,0 +1,256 @@
+{
+  "$defs": {
+    "OciSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "pattern": "^ghcr\\.io/[a-z0-9](?:[a-z0-9._-]*/)*[a-z0-9][a-z0-9._-]*$",
+          "title": "Repository",
+          "type": "string"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "digest"
+      ],
+      "title": "OciSubject",
+      "type": "object"
+    },
+    "OnnxMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "opset": {
+          "exclusiveMinimum": 0,
+          "title": "Opset",
+          "type": "integer"
+        },
+        "operators": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Operators",
+          "type": "array"
+        },
+        "input_names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Names",
+          "type": "array"
+        },
+        "output_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Output Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "size_bytes",
+        "opset",
+        "operators",
+        "input_names",
+        "output_name"
+      ],
+      "title": "OnnxMetadata",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Acyclic binding of pre-build lineage to one immutable OCI subject.",
+  "properties": {
+    "schema_version": {
+      "const": "mdcp.final-release-manifest.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "canonicalization": {
+      "const": "RFC8785",
+      "title": "Canonicalization",
+      "type": "string"
+    },
+    "release_id": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Release Id"
+    },
+    "image_descriptor_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Image Descriptor Digest",
+      "type": "string"
+    },
+    "image_descriptor_schema_version": {
+      "const": "artifact-descriptor/v1",
+      "title": "Image Descriptor Schema Version",
+      "type": "string"
+    },
+    "registered_model_name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Registered Model Name",
+      "type": "string"
+    },
+    "mlflow_numeric_version": {
+      "exclusiveMinimum": 0,
+      "title": "Mlflow Numeric Version",
+      "type": "integer"
+    },
+    "mlflow_run_id": {
+      "pattern": "^[0-9a-f]{32}$",
+      "title": "Mlflow Run Id",
+      "type": "string"
+    },
+    "onnx": {
+      "$ref": "#/$defs/OnnxMetadata"
+    },
+    "input_schema_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Schema Digest",
+      "type": "string"
+    },
+    "output_schema_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Output Schema Digest",
+      "type": "string"
+    },
+    "git_source_sha": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Git Source Sha",
+      "type": "string"
+    },
+    "serving_code_config_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Serving Code Config Id",
+      "type": "string"
+    },
+    "training_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Training Config Sha256",
+      "type": "string"
+    },
+    "uci_doi": {
+      "const": "10.24432/C5W894",
+      "title": "Uci Doi",
+      "type": "string"
+    },
+    "uci_source_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Uci Source Sha256",
+      "type": "string"
+    },
+    "uci_attribution_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Uci Attribution Sha256",
+      "type": "string"
+    },
+    "dataset_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Dataset Manifest Sha256",
+      "type": "string"
+    },
+    "split_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Split Manifest Sha256",
+      "type": "string"
+    },
+    "preprocessing_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Preprocessing Receipt Sha256",
+      "type": "string"
+    },
+    "leakage_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Leakage Receipt Sha256",
+      "type": "string"
+    },
+    "h1_evaluation_report_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "H1 Evaluation Report Sha256",
+      "type": "string"
+    },
+    "oci": {
+      "$ref": "#/$defs/OciSubject"
+    },
+    "sbom_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Sbom Sha256",
+      "type": "string"
+    },
+    "provenance_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Provenance Sha256",
+      "type": "string"
+    },
+    "attestation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Attestation Sha256",
+      "type": "string"
+    },
+    "scan_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scan Receipt Sha256",
+      "type": "string"
+    },
+    "rollout_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Rollout Policy Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "canonicalization",
+    "image_descriptor_digest",
+    "image_descriptor_schema_version",
+    "registered_model_name",
+    "mlflow_numeric_version",
+    "mlflow_run_id",
+    "onnx",
+    "input_schema_digest",
+    "output_schema_digest",
+    "git_source_sha",
+    "serving_code_config_id",
+    "training_config_sha256",
+    "uci_doi",
+    "uci_source_sha256",
+    "uci_attribution_sha256",
+    "dataset_manifest_sha256",
+    "split_manifest_sha256",
+    "preprocessing_receipt_sha256",
+    "leakage_receipt_sha256",
+    "h1_evaluation_report_sha256",
+    "oci",
+    "sbom_sha256",
+    "provenance_sha256",
+    "attestation_sha256",
+    "scan_receipt_sha256",
+    "rollout_policy_sha256"
+  ],
+  "title": "FinalReleaseManifest",
+  "type": "object"
+}
