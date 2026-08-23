@@ -1151,8 +1151,7 @@ Memory evidence is `UNKNOWN` only when at least one of these conditions holds:
 - observed `memory.max` or `cpu.max` does not match the frozen 384 MiB / 1.0 CPU profile;
 - a claimed reset does not have the same-`O_RDWR`-descriptor proof above;
 - whole-lifetime evidence does not come from a fresh candidate container/cgroup for that scenario;
-- evidence identity is not bound to the candidate container, release, route revision, and scenario
-  window.
+- evidence identity is not bound to the candidate container, route revision, and scenario window.
 
 An unsupported reset is not itself `UNKNOWN` when all
 `WHOLE_LIFETIME_PEAK_UPPER_BOUND` requirements pass. Process RSS, `psutil`, Docker Desktop UI,

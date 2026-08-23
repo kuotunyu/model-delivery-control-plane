@@ -14,7 +14,7 @@
 - Candidate admission is counted once by `(request_id, release_id, route_revision)`; terminal identity additionally includes execution role.
 - Application errors and accounting use all candidate admissions; schema validity uses candidate 2xx; latency p95 uses only successful schema-valid candidate terminal responses.
 - Stage targets are two consecutive PASS windows: CANARY_10 `300`, CANARY_25 `500`, CANARY_50 `1000` candidate admissions per window, each with 15-minute maximum.
-- p95 is nearest rank `ceil(0.95*n)` on integer microseconds; cgroup v2 `memory.peak` is reset after warm-up and <=256 MiB under a 384 MiB hard limit.
+- p95 is nearest rank `ceil(0.95*n)` on integer microseconds. Candidate cgroup v2 `memory.peak` uses either proven `FD_LOCAL_POST_WARMUP_PEAK` or fresh-container `WHOLE_LIFETIME_PEAK_UPPER_BOUND`, is explicitly labeled, and remains <=256 MiB under a 384 MiB hard limit.
 - Atomic control-plane rollback has bounded data-plane convergence; never claim instantaneous global rollback.
 - Completion command: `uv run pytest tests/unit/policy/test_canary_policy.py tests/property/control/test_safety_properties.py tests/integration/control/test_canary_lifecycle.py tests/integration/control/test_recovery.py tests/integration/test_golden_rollback.py -q`.
 
@@ -33,8 +33,8 @@
 - Test: `tests/property/policy/test_canary_denominators.py`
 
 **Interfaces:**
-- Consumes: `Sequence[CanaryEvent]`, verified post-warm-up `memory_peak_bytes`, `CanaryPolicy`.
-- Produces: `CanaryGateResult`, `nearest_rank_us(samples: Sequence[int], percentile: Literal[0.95] = 0.95) -> int`, `evaluate_canary_window(events: Sequence[CanaryEvent], policy: CanaryPolicy) -> CanaryGateResult`.
+- Consumes: `Sequence[CanaryEvent]`, `MemoryPeakEvidence(measurement_mode, memory_peak_bytes, memory_current_bytes, memory_max_bytes, cpu_max, candidate_cgroup_identity_digest, evidence_digest, reset_capability_verdict, fresh_candidate, bound_route_revision, bound_window_id)`, `CanaryPolicy`.
+- Produces: `CanaryGateResult`, `MemoryGateResult`, `nearest_rank_us(samples: Sequence[int], percentile: Literal[0.95] = 0.95) -> int`, `evaluate_memory(evidence: MemoryPeakEvidence, policy: CanaryPolicy) -> MemoryGateResult`, `evaluate_canary_window(events: Sequence[CanaryEvent], memory: MemoryPeakEvidence, policy: CanaryPolicy) -> CanaryGateResult`.
 
 - [ ] **Step 1: Write failing denominator/quantile tests**
 
@@ -47,6 +47,20 @@ def test_failures_remain_in_admission_denominator(events):
 
 def test_nearest_rank_has_no_interpolation():
     assert nearest_rank_us(list(range(1, 101)), .95) == 95
+
+@pytest.mark.parametrize("mode", [
+    "FD_LOCAL_POST_WARMUP_PEAK", "WHOLE_LIFETIME_PEAK_UPPER_BOUND"
+])
+def test_both_authoritative_memory_modes_use_same_threshold(valid_memory, mode):
+    evidence = valid_memory.for_mode(mode, peak_bytes=256 * MIB)
+    assert evaluate_memory(evidence, POLICY).verdict == "PASS"
+    assert evaluate_memory(evidence.model_copy(update={"memory_peak_bytes": 256 * MIB + 1}),
+                           POLICY).verdict == "FAIL"
+
+def test_unsupported_reset_uses_fresh_whole_lifetime_evidence(valid_memory):
+    evidence = valid_memory.for_mode("WHOLE_LIFETIME_PEAK_UPPER_BOUND",
+                                     reset="UNSUPPORTED_READ_ONLY", fresh=True)
+    assert evaluate_memory(evidence, POLICY).verdict == "PASS"
 ```
 
 - [ ] **Step 2: Verify red**
@@ -57,15 +71,19 @@ Expected: FAIL because denominator/quantile evaluators are absent.
 
 - [ ] **Step 3: Implement exact metric sets and verdict rules**
 
-Deduplicate admissions, classify timeout/5xx/crash/disconnect as application errors, count exactly-one terminal for accounting, divide schema-valid 2xx by all 2xx, and admit latency only for successful schema-valid terminals. Exact duplicate changes only duplicate count; conflict is UNKNOWN. Convert monotonic ns with ceiling division. Missing/unresettable cgroup peak makes whole window UNKNOWN; >256 MiB is FAIL; OOM/restart is hard FAIL.
+Deduplicate admissions, classify timeout/5xx/crash/disconnect as application errors, count exactly-one terminal for accounting, divide schema-valid 2xx by all 2xx, and admit latency only for successful schema-valid terminals. Exact duplicate changes only duplicate count; conflict is UNKNOWN. Convert monotonic ns with ceiling division. Validate memory independently: missing/unreadable peak, an inexact cgroup binding, wrong `memory.max`/`cpu.max`, a reset-mode claim without same-FD proof, a whole-lifetime claim without a fresh candidate, or an unbound container/revision/window identity is `UNKNOWN`. Unsupported reset with otherwise valid fresh whole-lifetime evidence is authoritative, not `UNKNOWN`. Peak >256 MiB is FAIL; a 384 MiB limit mismatch is UNKNOWN; OOM/restart is hard FAIL. Warm-ups are excluded from latency/error denominators but included in whole-lifetime peak.
 
 ```python
 def evaluate_canary_window(events: Sequence[CanaryEvent],
+                           memory: MemoryPeakEvidence,
                            policy: CanaryPolicy) -> CanaryGateResult:
     accounted = deduplicate_admissions_and_terminals(events)
-    if accounted.has_conflict or accounted.memory_peak is None:
+    memory_result = evaluate_memory(memory, policy)
+    if accounted.has_conflict:
         return CanaryGateResult.unknown(accounted.reason_code)
-    if accounted.memory_peak > 256 * MIB or accounted.oom_or_restart:
+    if memory_result.verdict == "UNKNOWN":
+        return CanaryGateResult.unknown(memory_result.reason_code)
+    if memory_result.verdict == "FAIL" or accounted.oom_or_restart:
         return CanaryGateResult.fail("MEMORY_OR_RESTART")
     return apply_operational_slo(accounted, policy, quantile=nearest_rank(0.95))
 ```
@@ -74,7 +92,7 @@ def evaluate_canary_window(events: Sequence[CanaryEvent],
 
 Run: `uv run pytest tests/unit/policy/test_denominators.py tests/unit/policy/test_quantiles.py tests/unit/policy/test_canary_policy.py tests/property/policy/test_canary_denominators.py -q`
 
-Expected: no timeout/5xx/crash disappears, duplicate cannot grow a denominator, nearest-rank vectors match on all platforms, and PASS/FAIL/UNKNOWN truth table is exact.
+Expected: no timeout/5xx/crash disappears, duplicate cannot grow a denominator, nearest-rank vectors match on all platforms, both memory modes enforce the same threshold, and each enumerated memory `UNKNOWN` condition plus fresh whole-lifetime PASS has an exact truth-table case.
 
 - [ ] **Step 5: Commit**
 

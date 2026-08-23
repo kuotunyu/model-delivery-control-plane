@@ -10,10 +10,13 @@
 
 ## Global Constraints
 
-- Entry requires approved spec commit `6bfa2e6781f1f1ba6fbcd13833c5e3b03691f28f` and approval-status commit recorded by the plan owner.
+- Entry requires approved spec commit `6bfa2e6781f1f1ba6fbcd13833c5e3b03691f28f`, approval-status commit `69cba0a798454ddee04012251f1116afcf2a038a`, and cgroup-mode amendment commit `219eb81660f0fb36c7d22c5444d798259a274e1f`.
+- Execute Wave 0 only on branch `codex/wave0-foundation-feasibility`, in `.worktrees/wave0-foundation-feasibility`, with untracked runtime state under `D:\model-delivery-control-plane-runtime\wave0`. Do not create Wave 1–7 skeletons.
 - Do not download UCI data, create a remote, authenticate to GHCR, generate a real attestation, tag, release, install Kubernetes/k3d, or use cloud/GPU resources.
 - A cgroup failure cannot be converted to an RSS measurement. A load failure cannot be hidden by reducing 80 rps, 32 in-flight, 25 ms, 256 MiB, 384 MiB, or the sample schedule.
-- The aggregate gate must report exactly eight named feasibility results: cgroup-v2 exposure, scoped peak reset, Compose CPU/memory enforcement, load harness, canonical/signing vectors, atomic PostgreSQL transaction, 8-GB stack budget, and GitHub capability research.
+- The aggregate gate must report exactly eight named feasibility results: `cgroup_v2`, `scoped_memory_peak`, `compose_resource_limits`, `load_harness`, `rfc8785_ed25519_vectors`, `postgres_atomic_transition`, `reviewer_stack_budget`, and `github_supply_chain_research`.
+- Expected owner-host memory mode is `WHOLE_LIFETIME_PEAK_UPPER_BOUND`; unsupported reset is not failure when exact readable files, fresh-candidate lifetime, resource limits, and identity bindings pass. Never fake reset PASS.
+- Public reports must contain no username, absolute local path, raw container ID, hostname, secret, or raw environment dump. Raw diagnostic evidence stays under the external runtime root; public evidence uses logical identities and digests.
 - Wave 0 completion command is `uv run python -m mdcp.feasibility.gate --report evidence/public/feasibility/wave0-report.json`; expected terminal line is `WAVE0 PASS 8/8`.
 
 ---
@@ -82,7 +85,7 @@ git add .gitignore .dockerignore .python-version pyproject.toml uv.lock constrai
 git commit -m "build: lock mdcp foundation"
 ```
 
-### Task 0.2: Prove cgroup v2 peak reset and Compose resource enforcement
+### Task 0.2: Qualify cgroup v2 peak mode and Compose resource enforcement
 
 **Files:**
 - Create: `src/mdcp/feasibility/cgroup.py`
@@ -94,17 +97,32 @@ git commit -m "build: lock mdcp foundation"
 
 **Interfaces:**
 - Consumes: `Settings` and the version-locked Python image.
-- Produces: `CgroupProbeResult(version, memory_peak_bytes, memory_max_bytes, cpu_quota, cpu_period, socket_present, reset_verified)`, feasibility results `cgroup_v2`, `scoped_memory_peak_reset`, `compose_resource_limits`, and command `pwsh ./scripts/feasibility.ps1 -Gate CgroupResource`.
+- Produces: `CgroupProbeResult(measurement_mode, kernel, cgroup_version, memory_current_bytes, memory_peak_bytes, memory_max_bytes, cpu_max, candidate_cgroup_identity_digest, reset_capability_verdict, fresh_candidate, captured_phases, docker_socket_present, evidence_digest)`, feasibility results `cgroup_v2`, `scoped_memory_peak`, `compose_resource_limits`, and command `pwsh ./scripts/feasibility.ps1 -Gate CgroupResource`.
 
 - [ ] **Step 1: Write the failing platform contract**
 
 ```python
 def test_candidate_cgroup_contract(probe_result):
-    assert probe_result.version == 2
+    assert probe_result.cgroup_version == 2
+    assert probe_result.kernel
+    assert probe_result.memory_current_bytes >= 0
+    assert probe_result.memory_peak_bytes >= probe_result.memory_current_bytes
+    assert probe_result.memory_peak_bytes <= 256 * 1024 * 1024
     assert probe_result.memory_max_bytes == 384 * 1024 * 1024
-    assert probe_result.cpu_quota / probe_result.cpu_period == 1.0
-    assert probe_result.socket_present is False
-    assert probe_result.reset_verified is True
+    assert probe_result.cpu_max == "100000 100000"
+    assert probe_result.docker_socket_present is False
+    assert len(probe_result.candidate_cgroup_identity_digest) == 64
+    assert len(probe_result.evidence_digest) == 64
+    assert probe_result.measurement_mode in {
+        "FD_LOCAL_POST_WARMUP_PEAK", "WHOLE_LIFETIME_PEAK_UPPER_BOUND"
+    }
+    if probe_result.measurement_mode == "FD_LOCAL_POST_WARMUP_PEAK":
+        assert probe_result.reset_capability_verdict == "SUPPORTED_SAME_FD"
+    else:
+        assert probe_result.reset_capability_verdict == "UNSUPPORTED_READ_ONLY"
+        assert probe_result.fresh_candidate is True
+        assert probe_result.captured_phases == {
+            "container_start", "model_load", "warmup", "scenario_end"}
 ```
 
 - [ ] **Step 2: Verify the probe is red before capability code exists**
@@ -115,24 +133,36 @@ Expected: FAIL with `fixture 'probe_result' not found`.
 
 - [ ] **Step 3: Implement the bounded measurement probe**
 
-Implement `read_cgroup_v2(root: Path)`, `reset_memory_peak(root: Path)`, and `read_resource_limits(root: Path)`. The measurement container receives a bind mount scoped to the candidate cgroup files and no `/var/run/docker.sock`; the candidate has `cpus: 1.0`, `mem_limit: 384m`, `pids_limit: 128`, and a read-only root filesystem. The reset proof must observe peak > 0, write the kernel-supported reset value, then observe a lower post-reset peak without writing `memory.max` or `cpu.max`.
+Implement `read_cgroup_v2(root: Path)`, `prove_fd_local_reset(peak: Path, allocate: Callable[[], None])`, `read_resource_limits(root: Path)`, and candidate identity binding. Host PowerShell uses Docker CLI only to resolve the exact candidate cgroup files. Whole-lifetime mode mounts exactly `memory.peak`, `memory.current`, `memory.max`, and `cpu.max` read-only into an unprivileged measurement container; FD-local mode may make only the exact `memory.peak` mount writable. Neither mode mounts `/var/run/docker.sock`. The candidate has `cpus: 1.0`, `mem_limit: 384m`, `pids_limit: 128`, and a read-only root filesystem.
+
+The reset capability proof MUST keep one `O_RDWR` descriptor open while it reads the previous peak, writes non-empty `b"0"`, seeks/reads the reset value, invokes a bounded allocation, then seeks/reads a strictly increased peak. Do not use `Path.write_text()`/`Path.read_text()`. `EROFS`, `EACCES`, or an unwritable mode selects `WHOLE_LIFETIME_PEAK_UPPER_BOUND` only if the orchestrator creates a new synthetic candidate, starts the observer at container start, records synthetic model-load allocation, performs 200 warm-up calls, runs the bounded allocation scenario, and captures scenario-end peak before teardown. All exact read-only mounts and container/revision/window bindings must pass. Missing/unreadable peak, wrong/missing limits, wrong cgroup identity, reset claims without same-FD proof, or whole-lifetime reuse yields `UNKNOWN`.
 
 ```python
-def reset_memory_peak(root: Path) -> None:
-    peak = root / "memory.peak"
-    if not peak.is_file():
-        raise EvidenceUnavailable("memory.peak")
-    before = int(peak.read_text(encoding="ascii"))
-    peak.write_text("0", encoding="ascii")
-    if before <= 0 or int(peak.read_text(encoding="ascii")) >= before:
-        raise EvidenceUnavailable("memory.peak reset")
+def read_int_same_fd(fd: int) -> int:
+    os.lseek(fd, 0, os.SEEK_SET)
+    return int(os.read(fd, 64).decode("ascii").strip())
+
+def prove_fd_local_reset(peak: Path, allocate: Callable[[], None]) -> tuple[int, int, int]:
+    fd = os.open(peak, os.O_RDWR)
+    try:
+        before = read_int_same_fd(fd)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, b"0")
+        reset_value = read_int_same_fd(fd)
+        allocate()
+        increased = read_int_same_fd(fd)
+        if not (reset_value <= before and increased > reset_value):
+            raise EvidenceUnavailable("same-fd reset proof")
+        return before, reset_value, increased
+    finally:
+        os.close(fd)
 ```
 
 - [ ] **Step 4: Run the real Compose feasibility gate**
 
 Run: `pwsh ./scripts/feasibility.ps1 -Gate CgroupResource`
 
-Expected: PASS JSON contains `"version":2`, `"memory_max_bytes":402653184`, `"cpu_ratio":1.0`, `"docker_socket_present":false`, and `"reset_verified":true`. Any absent/unreadable/non-resettable `memory.peak` exits 1 with `FEAS-CGROUP-UNKNOWN`; no RSS field may appear.
+Expected on the declared owner host: PASS JSON contains `"measurement_mode":"WHOLE_LIFETIME_PEAK_UPPER_BOUND"`, kernel `6.6.114.1-microsoft-standard-WSL2`, `"cgroup_version":2`, integer `memory_current_bytes` and `memory_peak_bytes`, `"memory_max_bytes":402653184`, `"cpu_max":"100000 100000"`, `"docker_socket_present":false`, `"reset_capability_verdict":"UNSUPPORTED_READ_ONLY"`, a candidate cgroup identity digest, and an evidence digest. `scoped_memory_peak` passes because the conservative mode is authoritative. An enumerated identity/mount/read/limit/freshness failure exits 1 with `FEAS-CGROUP-UNKNOWN`; no RSS, `psutil`, Docker UI, authoritative `docker stats`, host estimate, or relaxed threshold field may appear.
 
 - [ ] **Step 5: Commit**
 
@@ -153,6 +183,8 @@ git commit -m "test: prove cgroup resource contract"
 **Interfaces:**
 - Consumes: cgroup-qualified predictor container from Task 0.2.
 - Produces: `LoadProbeResult(admitted, completed, errors, achieved_rps, max_in_flight, p95_us, wall_time_ms)` and feasibility result `load_harness`.
+
+This probe proves only that the frozen scheduler/load harness is feasible on the owner host. It is not final predictor performance evidence and MUST NOT be reported as natural or release-candidate latency.
 
 - [ ] **Step 1: Write the failing deterministic load assertion**
 
@@ -333,6 +365,8 @@ git commit -m "test: prove atomic transition persistence"
 - Consumes: locked PostgreSQL, MLflow, Prometheus, Grafana, predictor, and probe images.
 - Produces: `StackBudgetResult(services, ready, peak_bytes, disk_bytes)` with required services `postgres`, `mlflow`, `prometheus`, `grafana`, `control-probe`, `router-probe`, `stable`, `candidate`, plus feasibility result `reviewer_stack_budget`.
 
+This is a `FEASIBILITY` budget result. Only Wave 6 may produce the formal reviewer-path resource and wall-time acceptance claim.
+
 - [ ] **Step 1: Write the failing resource-budget test**
 
 ```python
@@ -400,14 +434,14 @@ git commit -m "test: prove reviewer stack budget"
 
 ```python
 def test_wave0_requires_all_named_gates():
-    report = Wave0Gate.evaluate(pass_results_except("scoped_memory_peak_reset"))
+    report = Wave0Gate.evaluate(pass_results_except("scoped_memory_peak"))
     assert report.verdict == "FAIL"
     assert report.next_wave_allowed is False
 
 def test_research_declares_read_only_boundary(research_text):
-    assert "contents: read" in research_text
-    assert "packages: write" in research_text
-    assert "attestations: write" in research_text
+    assert "Retrieved: 2026-08-24" in research_text
+    assert "packages permission" in research_text
+    assert "attestations permission" in research_text
     assert "No remote mutation performed" in research_text
 ```
 
@@ -419,11 +453,13 @@ Expected: FAIL because the research document and `Wave0Gate` do not exist.
 
 - [ ] **Step 3: Perform read-only research and implement fail-closed aggregation**
 
-Use only official GitHub documentation to record GHCR subject naming, required workflow permissions, artifact-attestation subject binding, public-repository/quota caveats, and the later authorization boundaries. Do not log in, create a repository, push, dispatch a workflow, or call a mutating API. `Wave0Gate` validates report schema/version, unique gate names, evidence digests, timestamps, and the eight-name exact set; `UNKNOWN` and missing are non-PASS.
+Use only official GitHub documentation and record each URL plus retrieval date `2026-08-24`. Document GHCR subject naming, workflow design, and public-repository/quota caveats; describe package publication permissions separately from artifact-attestation permissions. This research proves only that the workflow design is feasible—it does not verify the future account, repository, GHCR subject, real attestation, quota, or runtime permissions. Do not log in, create a repository, push, dispatch a workflow, or call a mutating API.
+
+`Wave0Gate` validates report schema/version, unique gate names, timestamps, the eight-name exact set, and an evidence digest for every gate. The cgroup result also requires `measurement_mode`, kernel, cgroup version, `memory.current`, `memory.peak`, `memory.max`, `cpu.max`, candidate cgroup identity digest, and reset capability verdict. Its identity binds the candidate container/revision/window and full-lifetime freshness without publishing a raw container ID. `UNKNOWN` and missing are non-PASS. The public aggregate report is rejected if it contains a username, absolute path, raw container ID, hostname, secret, or raw environment dump.
 
 ```python
 REQUIRED_GATES = frozenset({
-    "cgroup_v2", "scoped_memory_peak_reset", "compose_resource_limits", "load_harness",
+    "cgroup_v2", "scoped_memory_peak", "compose_resource_limits", "load_harness",
     "rfc8785_ed25519_vectors", "postgres_atomic_transition",
     "reviewer_stack_budget", "github_supply_chain_research",
 })

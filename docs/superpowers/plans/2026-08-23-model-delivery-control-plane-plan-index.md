@@ -10,16 +10,17 @@
 
 ## Global Constraints
 
-- The approved normative source is `docs/superpowers/specs/2026-08-23-model-delivery-control-plane-design.md` at commit `6bfa2e6781f1f1ba6fbcd13833c5e3b03691f28f`; plans may not silently revise it.
+- The approved normative source is `docs/superpowers/specs/2026-08-23-model-delivery-control-plane-design.md`: base contract commit `6bfa2e6781f1f1ba6fbcd13833c5e3b03691f28f`, approval commit `69cba0a798454ddee04012251f1116afcf2a038a`, and owner-directed cgroup-mode amendment commit `219eb81660f0fb36c7d22c5444d798259a274e1f`. Plans may not silently revise it.
 - Docker Compose is the only v0.1 deployment profile. Kubernetes, k3d, Argo Rollouts, service mesh, Kafka, OPA, cloud deployment, persistent trace backends, and a custom administration UI are excluded.
 - Reviewer acceptance is CPU-only with 8 GB available RAM, no GPU, no UCI download, no retraining, no GitHub CLI, no paid API, and no Kubernetes.
 - Each predictor has exactly 1.0 CPU, a 384 MiB hard memory limit, and a 256 MiB policy threshold.
 - The measured profile is a fixed single-row Bike request at 80 admissions/second, at most 32 in flight, with at least 200 excluded warm-ups per predictor.
-- Authoritative memory evidence is Linux cgroup v2 `memory.peak`; unavailable or non-resettable evidence is `UNKNOWN`, never RSS.
+- Authoritative memory evidence is Linux cgroup v2 `memory.peak` in exactly one labeled mode: proven same-descriptor `FD_LOCAL_POST_WARMUP_PEAK`, or fresh-candidate `WHOLE_LIFETIME_PEAK_UPPER_BOUND` when reset is unsupported. The latter includes model load and warm-up; both retain the 256 MiB threshold and 384 MiB hard limit. Only the spec's enumerated telemetry/resource/identity failures are memory `UNKNOWN`; RSS, `psutil`, Docker UI/authoritative `docker stats`, host estimates, and threshold substitution are forbidden.
 - Router polling and RPC deadline are 500 ms, the local lease is at most 1.5 seconds, and the external rollback convergence SLA is 2 seconds.
 - H1/H2 use 2,000 paired calendar-day cluster resamples with `numpy.random.Generator(PCG64(2026))`; overall point/UCB ratios are at most 0.97 and every fixed subgroup point/UCB ratio is at most 1.05 with `n >= 100`.
 - Natural evidence and injected evidence use distinct processes, revisions, windows, receipts, and claims.
 - Runtime databases, credentials, raw UCI data, generated model/build caches, and private evidence remain outside Git.
+- Public reports contain no username, absolute local path, raw container ID, hostname, secret, or raw environment dump; use public-safe logical identities and digests.
 - Git author and committer are `kuotunyu <61350295+kuotunyu@users.noreply.github.com>`.
 - Every source-changing implementation task follows red-green TDD, ends with a scoped commit, and stops on a failed wave gate. Wave 7 Task 7.5 is the sole no-source external-publication task: it moves a prewritten acceptance check from red to green and deliberately creates no post-release commit, preserving exact source/OCI/tag identity.
 - No external GitHub mutation is authorized by these plans alone; the authorization matrix below governs every remote action.
@@ -31,7 +32,7 @@
 
 | Wave | Plan | Spec milestone | Entry gate | Completion gate | Immutable input to next wave |
 |---|---|---|---|---|---|
-| 0 | `2026-08-23-mdcp-wave-0-foundation-feasibility.md` | M0 implementation-readiness extension | Approved spec and clean local repository | All seven feasibility tasks PASS; aggregate report verdict is `PASS`; no threshold substitution | Locked toolchain, capability report, resource budget, cgroup contract, crypto vectors, transaction proof |
+| 0 | `2026-08-23-mdcp-wave-0-foundation-feasibility.md` | M0 implementation-readiness extension | Approved amended spec and clean local repository | All seven feasibility tasks and exactly eight named gates PASS; aggregate report verdict is `PASS`; no threshold substitution | Locked toolchain, capability report with measurement mode/resource/identity/evidence digests, FEASIBILITY-only resource/load results, crypto vectors, transaction proof |
 | 1 | `2026-08-23-mdcp-wave-1-workload-identity.md` | M1 | Wave 0 PASS | Leakage, split, reproducible ONNX, H1 evidence, MLflow numeric-version snapshot, descriptor identity PASS | Bike schemas, frozen split/feature manifests, predictor contract, stable/candidate artifacts, descriptor schemas/vectors |
 | 2 | `2026-08-23-mdcp-wave-2-validator-supply-chain.md` | M2 | Wave 1 immutable identities | Validator/adversarial/offline-verifier tests PASS and owner-authorized real GHCR/attestation evidence verifies | Validation receipt, final-manifest schema, bundle-index schema, immutable OCI/supply-chain evidence bundle |
 | 3 | `2026-08-23-mdcp-wave-3-control-routing-shadow.md` | M3 | Waves 0–2 PASS | Bootstrap, atomic state/route/audit, signed route API, lease/cache, deterministic routing, non-blocking shadow, delayed labels PASS | Core DB migrations, signed route-plan API, router/predictor contracts, durable paired evidence |
@@ -114,20 +115,23 @@ RTX 4090 and Colab are deliberately absent from every gate. Using either may acc
 
 | Risk | Earliest detector | Mandatory response |
 |---|---|---|
-| Docker Desktop does not expose/reset the candidate cgroup v2 `memory.peak` safely | W0 cgroup probe | Fail Wave 0 and return to owner spec review; never substitute RSS |
+| Docker Desktop exposes readable but non-resettable candidate `memory.peak` | W0 cgroup probe | Use a fresh candidate and `WHOLE_LIFETIME_PEAK_UPPER_BOUND`; include start/model-load/warm-up/scenario-end evidence and never claim reset semantics |
+| Exact candidate cgroup mounts, 1-vCPU/384-MiB limits, freshness, or evidence identity cannot be proven | W0 cgroup probe; W6 reviewer run | Mark memory `UNKNOWN`, stop the wave, and preserve evidence; never substitute RSS/`psutil`/Docker UI/authoritative `docker stats`/host estimates or relax thresholds |
 | 1-vCPU/384-MiB enforcement or 80-rps/32-in-flight harness is not authoritative | W0 resource/load probes | Fail Wave 0 without reducing rate, latency, memory, or denominator thresholds |
 | Full reviewer topology exceeds 8 GB RAM or 5 GB artifacts | W0 stack budget; W6 final Compose measurement | Stop and reduce non-normative overhead only; preserve all normative roles/evidence |
 | UCI checksum, license attribution, chronology, or leakage boundary fails | W1 workload gates | Reject the fixture; never publish raw UCI or use H2 before freeze-manifest lock |
 | OCI/manifest/receipt identity becomes cyclic or mutable | W2 schema/property tests; W7 exact-commit preflight | Reject publication; dynamic final digests stay in immutable workflow/Release assets |
-| GitHub capability, quota, permissions, or authorization is absent | W0 read-only research; W2/W7 authorization gates | Record `BLOCKED_EXTERNAL_AUTHORIZATION`; do not emulate real attestation with local evidence |
+| GitHub capability, quota, permissions, or authorization is absent | W0 official-doc workflow-design research; W2/W7 authorization gates | W0 claims design feasibility only and records dated official URLs with package/attestation permissions separated; W2/W7 record `BLOCKED_EXTERNAL_AUTHORIZATION` and never emulate real account/GHCR/attestation verification |
 | Windows scheduling variance makes natural latency nondeterministic | W0 load probe; W6 natural/injected separation | Report natural result honestly; use the separately labeled deterministic failure profile only to prove control behavior |
 | Telemetry/dashboard outage is mistaken for decision evidence loss | W3 durable events; W6 outage tests | PostgreSQL remains decision source; dashboards degrade without inventing PASS |
 | Router restart or stale lease extends candidate exposure | W3 cache/restart tests; W5 convergence set | Enter stable-only after lease expiry and keep recovery pending until restart-safe evidence passes |
 | Public repository leaks local paths, credentials, payloads, raw data, or private evidence | W7 tracked-tree and clean-clone gates | Block release; sanitize only non-normative metadata and prove spec §1–§28 bytes unchanged |
 
-## Locked Python package and repository tree
+## Planned path upper bound and scope-compression rule
 
-The wave named in comments owns initial creation; `planning` and `M0` are already-approved documentation. Later waves may modify a file only where their exact task lists say so. This file-level tree is generated from all 316 unique implementation `Create`/`Test` paths plus the nine plan documents and approved spec; directory summaries do not conceal additional test files.
+The 316 unique implementation `Create`/`Test` paths below are a planning upper bound, not a delivery target or KPI. The wave named in comments owns a possible initial creation; `planning` and `M0` are approved documentation. Every wave creates only files required for behavior and evidence in that wave. Do not create empty directories, placeholders, empty tests, or any Wave 1–7 skeleton during an earlier wave.
+
+Before each wave ends, perform a scope-compression review. Modules or tests MAY be merged or omitted when the required behavior, evidence, interfaces, and normative contracts remain unchanged and traceable. File count, test count, commit count, and matching this tree one-for-one are not portfolio KPIs. Later waves may modify a file only where their exact tasks require it; the tree remains an upper-bound map so directory summaries do not conceal planned test responsibilities.
 
 ```text
 .
@@ -593,4 +597,4 @@ No later migration renames an earlier public column during v0.1. Additive change
 
 ## Execution rule
 
-Run exactly one wave at a time. At each wave boundary, execute its full completion command, review the immutable artifact inventory/digests, and obtain the owner checkpoint named in that plan. If Wave 0 reports any non-PASS feasibility gate, stop all implementation and request a normative spec review; never substitute RSS, reduce 80 rps/32 in-flight, relax 25 ms/256 MiB, shrink samples, or extend the five-minute target.
+Run exactly one wave at a time. At each wave boundary, execute its full completion command, perform scope compression, review the immutable artifact inventory/digests, and obtain the owner checkpoint named in that plan. If Wave 0 reports any non-PASS feasibility gate, stop all implementation and request a normative spec review. Unsupported reset alone may pass through fresh-container `WHOLE_LIFETIME_PEAK_UPPER_BOUND`; otherwise never substitute RSS/`psutil`/Docker UI/authoritative `docker stats`/host estimates, reduce 80 rps/32 in-flight, relax 25 ms/256 MiB, shrink samples, or extend the five-minute target.

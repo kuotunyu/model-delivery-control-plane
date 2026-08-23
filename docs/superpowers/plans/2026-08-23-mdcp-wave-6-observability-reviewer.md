@@ -16,6 +16,8 @@
 - Dynamic metric labels are limited to release ID, execution role, stage, status class, fixed subgroup, fixed reason code, service name, and evidence class; request IDs/payloads/raw exceptions/paths/tokens are forbidden.
 - Warm reviewer scenarios must run with 8 GB available RAM, CPU only, and no network/UCI/retraining/GPU/GitHub CLI/Kubernetes/paid API.
 - The conservative request schedule is 212.5 seconds with 87.5 seconds remaining; a measured warm path over 300 seconds fails M6 without reducing any count or threshold.
+- Every reviewer receipt, report, and Canary Comparison dashboard shows `measurement_mode`; unsupported reset selects a fresh candidate and `WHOLE_LIFETIME_PEAK_UPPER_BOUND` without weakening the 256 MiB policy threshold or 384 MiB hard limit.
+- Public reviewer evidence contains no username, absolute local path, raw container ID, hostname, secret, or raw environment dump.
 - Completion command: `pwsh ./scripts/demo.ps1 -Scenario GoldenRollback -Warm -Verify; pwsh ./scripts/demo.ps1 -Scenario FullSuccess -Warm -Verify`.
 
 ---
@@ -35,7 +37,7 @@
 
 **Interfaces:**
 - Consumes: control/router/predictor domain events.
-- Produces: `/metrics` on each service and frozen names `mdcp_requests_total`, `mdcp_predictor_rpc_latency_seconds`, `mdcp_route_revision`, `mdcp_route_plan_age_seconds`, `mdcp_router_ack_lag_seconds`, `mdcp_candidate_errors_total`, `mdcp_candidate_memory_peak_bytes`, `mdcp_window_progress_ratio`, `mdcp_label_completeness_ratio`, `mdcp_subgroup_denominator`, `mdcp_gate_verdict`, `mdcp_transition_total`, `mdcp_validator_checks_total`.
+- Produces: `/metrics` on each service and frozen names `mdcp_requests_total`, `mdcp_predictor_rpc_latency_seconds`, `mdcp_route_revision`, `mdcp_route_plan_age_seconds`, `mdcp_router_ack_lag_seconds`, `mdcp_candidate_errors_total`, `mdcp_candidate_memory_peak_bytes`, `mdcp_candidate_memory_measurement_mode`, `mdcp_window_progress_ratio`, `mdcp_label_completeness_ratio`, `mdcp_subgroup_denominator`, `mdcp_gate_verdict`, `mdcp_transition_total`, `mdcp_validator_checks_total`.
 
 - [ ] **Step 1: Write failing label/cardinality tests**
 
@@ -47,6 +49,12 @@ def test_metric_catalogue_uses_only_allowed_labels(catalogue):
 
 def test_latency_histogram_contains_policy_boundary(catalogue):
     assert .025 in catalogue["mdcp_predictor_rpc_latency_seconds"].buckets
+
+def test_memory_mode_is_bounded_without_container_identity_label(catalogue):
+    metric = catalogue["mdcp_candidate_memory_measurement_mode"]
+    assert metric.allowed_values == {"FD_LOCAL_POST_WARMUP_PEAK": 1,
+                                     "WHOLE_LIFETIME_PEAK_UPPER_BOUND": 2}
+    assert "container_id" not in metric.labels
 ```
 
 - [ ] **Step 2: Verify red**
@@ -57,15 +65,19 @@ Expected: FAIL because metric catalogue/endpoints are absent.
 
 - [ ] **Step 3: Implement bounded mirrors**
 
-Define the exact catalogue once and have service wrappers update it from durable outcomes. Never use metric output to call transition code. Sanitize exception/status to fixed classes; expose W3C trace context only in request headers/log correlation and never baggage payloads. Include 25-ms latency bucket.
+Define the exact catalogue once and have service wrappers update it from durable outcomes. Never use metric output to call transition code. Sanitize exception/status to fixed classes; expose W3C trace context only in request headers/log correlation and never baggage payloads. Include the 25-ms latency bucket. Encode the two measurement modes as documented numeric values rather than a new unbounded label; dashboards translate 1/2 back to the exact mode name.
 
 ```python
-REQUESTS = Counter("mdcp_requests_total", "Completed requests", ("service", "release", "role", "status_class"))
+REQUESTS = Counter("mdcp_requests_total", "Completed requests",
+                   ("service", "release_id", "execution_role", "status_class"))
 LATENCY = Histogram("mdcp_predictor_rpc_latency_seconds", "Full-body latency",
-                    ("service", "release", "role"),
+                    ("service", "release_id", "execution_role"),
                     buckets=(0.005, 0.010, 0.015, 0.020, 0.025, 0.050, 0.100))
 WINDOW_VERDICT = Gauge("mdcp_gate_verdict", "Durable sealed-window verdict",
-                       ("release", "stage", "status_class"))
+                       ("release_id", "stage", "status_class"))
+MEMORY_MODE = Gauge("mdcp_candidate_memory_measurement_mode",
+                    "1=FD local post-warm-up, 2=whole-lifetime upper bound",
+                    ("release_id", "evidence_class"))
 ```
 
 - [ ] **Step 4: Verify endpoints and decision isolation**
@@ -107,6 +119,13 @@ def test_predictor_resources(compose):
 
 def test_no_data_plane_docker_socket(compose):
     assert all("/var/run/docker.sock" not in s.mounts for s in compose.services.values())
+
+def test_whole_lifetime_measurement_mounts_are_exact_and_read_only(compose):
+    assert compose.measurement.cgroup_mounts == {
+        "memory.peak": "ro", "memory.current": "ro",
+        "memory.max": "ro", "cpu.max": "ro",
+    }
+    assert compose.measurement.privileged is False
 ```
 
 - [ ] **Step 2: Verify red**
@@ -117,7 +136,7 @@ Expected: FAIL because `compose.yaml` and monitoring provisioning are missing.
 
 - [ ] **Step 3: Implement resource/network/secret-isolated Compose profiles**
 
-Pin image references, health checks, memory/CPU/pids, non-root/read-only/cap-drop/no-new-privileges, bounded tmpfs/volumes, and explicit internal networks. Predictor accepts only router; router accepts replay and calls predictors/control; control alone reaches PostgreSQL/signing secret; MLflow/Grafana bind loopback; measurement role gets only scoped candidate `memory.peak` reset mount and no Docker socket. Keep runtime state under named volumes excluded from Git.
+Pin image references, health checks, memory/CPU/pids, non-root/read-only/cap-drop/no-new-privileges, bounded tmpfs/volumes, and explicit internal networks. Predictor accepts only router; router accepts replay and calls predictors/control; control alone reaches PostgreSQL/signing secret; MLflow/Grafana bind loopback. Host PowerShell may use Docker CLI to locate the exact candidate cgroup, but passes no Docker authority into the measurement container. In whole-lifetime mode, measurement receives exact read-only file mounts for candidate `memory.peak`, `memory.current`, `memory.max`, and `cpu.max`; in FD-local mode only that exact `memory.peak` file may be writable. It is never privileged, has no Docker socket, and cannot see a cgroup directory/parent/peer. An exact scoped mount failure is `UNKNOWN` and stops the scenario. Keep runtime state under named volumes excluded from Git.
 
 ```yaml
 services:
@@ -140,7 +159,7 @@ services:
 
 Run: `docker compose --profile review config --quiet; docker compose --profile review up --wait --detach; uv run pytest tests/contract/compose/test_compose_contract.py tests/integration/compose/test_stack_health.py tests/security/test_compose_boundary.py -q`
 
-Expected: config exits 0, all eight required services healthy within 120 seconds, cgroup limits match, security assertions pass, and measured stack peak remains <=6.5 GiB.
+Expected: config exits 0, all eight required services healthy within 120 seconds, exact cgroup mounts and 1.0-CPU/384-MiB limits match, no privileged/socket authority exists, security assertions pass, and the formal measured stack peak remains <=6.5 GiB.
 
 - [ ] **Step 5: Commit**
 
@@ -181,7 +200,7 @@ Expected: FAIL because dashboard JSON files do not exist.
 
 - [ ] **Step 3: Implement the three fixed dashboards**
 
-Release Overview shows pointer/release/state/policy/revision/gates/evidence age/supply-chain class. Canary Comparison shows intended/observed weights, admissions, distinct denominators, nearest-rank latency, cgroup peak, errors/restarts/accounting, natural-vs-injected labels. Decision Timeline shows transitions/windows/pause/rollback/quarantine/frozen set/acks/restarts/recovery. Use only catalogue metrics and read-only links to receipt/MLflow; include no control buttons.
+Release Overview shows pointer/release/state/policy/revision/gates/evidence age/supply-chain class. Canary Comparison shows intended/observed weights, admissions, distinct denominators, nearest-rank latency, cgroup peak, the exact decoded `measurement_mode`, errors/restarts/accounting, and natural-vs-injected labels. Decision Timeline shows transitions/windows/pause/rollback/quarantine/frozen set/acks/restarts/recovery. Use only catalogue metrics and read-only links to receipt/MLflow; include no control buttons.
 
 ```json
 {
@@ -199,7 +218,7 @@ Release Overview shows pointer/release/state/policy/revision/gates/evidence age/
 
 Run: `uv run pytest tests/contract/observability/test_dashboards.py tests/integration/observability/test_dashboard_queries.py -q`
 
-Expected: exactly three dashboards parse/provision, every PromQL metric exists, no request_id/unbounded label query appears, and seeded golden evidence renders expected panels.
+Expected: exactly three dashboards parse/provision, every PromQL metric exists, no request_id/unbounded label query appears, both memory mode names render correctly, and seeded golden evidence renders expected panels.
 
 - [ ] **Step 5: Commit**
 
@@ -223,7 +242,7 @@ git commit -m "feat: provision reviewer dashboards"
 
 **Interfaces:**
 - Consumes: deterministic request IDs/features/labels, router URL, candidate cgroup path, scenario/fault profile.
-- Produces: CLI `python -m mdcp.replay.cli scenario {golden-rollback|full-success} --rate 80 --max-in-flight 32`, `ReplayReport`, verified memory reset/peak, exact HMAC stage counts.
+- Produces: CLI `python -m mdcp.replay.cli scenario {golden-rollback|full-success} --rate 80 --max-in-flight 32`, `ReplayReport` with explicit `measurement_mode` and identity/resource/evidence digests, authoritative cgroup peak in either approved mode, exact HMAC stage counts.
 
 - [ ] **Step 1: Write failing schedule/timing tests**
 
@@ -234,6 +253,12 @@ def test_full_request_schedule(schedule):
     assert schedule.canary_total_requests == {"CANARY_10": 6_000, "CANARY_25": 4_000, "CANARY_50": 4_000}
     assert schedule.recovery_requests == 600
     assert schedule.request_seconds == 212.5
+
+def test_whole_lifetime_mode_includes_warmup_and_requires_fresh_candidate(measurement):
+    assert measurement.measurement_mode == "WHOLE_LIFETIME_PEAK_UPPER_BOUND"
+    assert measurement.captured_phases == {
+        "container_start", "model_load", "warmup", "scenario_end"}
+    assert measurement.fresh_candidate is True
 ```
 
 - [ ] **Step 2: Verify red**
@@ -244,7 +269,9 @@ Expected: FAIL because scheduler/measurement modules and schedule fixture are ab
 
 - [ ] **Step 3: Implement exact 80-Hz replay and measurement lifecycle**
 
-Use precomputed request IDs whose HMAC buckets produce exact configured shares, one monotonic admission clock, semaphore 32, full-body latency, 200 warm-ups per predictor excluded by flag, verified post-warm-up `memory.peak` reset, and separate candidate container/revision/window/receipt for natural versus injected runs. Delayed labels arrive only after routing and carry source calendar day/digest.
+Use precomputed request IDs whose HMAC buckets produce exact configured shares, one monotonic admission clock, semaphore 32, full-body latency, and 200 warm-ups per predictor excluded from latency/error/quality/admission evidence by flag. Select memory mode before each scenario. If writable reset is proven, use one `O_RDWR` descriptor for read/write/seek-read/bounded-allocation/seek-read proof and keep same-descriptor semantics for the exact candidate measurement. Otherwise create a fresh candidate/cgroup per natural or injected scenario and capture `memory.peak` from start/model-load/warm-up through scenario end as `WHOLE_LIFETIME_PEAK_UPPER_BOUND`; never reset or call it post-warm-up. Separate candidate lifetimes, container identity digests, revisions, windows, and receipts for natural and injected runs. Delayed labels arrive only after routing and carry source calendar day/digest.
+
+Return memory `UNKNOWN` only for missing/unreadable peak, inability to bind the exact candidate cgroup, `memory.max`/`cpu.max` mismatch, a reset claim without same-FD proof, a whole-lifetime claim without a fresh candidate, or evidence not bound to container/revision/window. Unsupported reset alone selects the whole-lifetime mode. RSS, `psutil`, Docker UI, authoritative `docker stats`, host estimates, and threshold relaxation are forbidden.
 
 ```python
 async def replay(schedule: Sequence[ScheduledRequest], send: SendRequest) -> ReplayReport:
@@ -260,7 +287,7 @@ async def replay(schedule: Sequence[ScheduledRequest], send: SendRequest) -> Rep
 
 Run: `uv run pytest tests/unit/replay/test_scheduler.py tests/unit/replay/test_measurement.py tests/integration/replay/test_request_schedule.py -q`
 
-Expected: schedule reports warm 5 s, shadow 25 s, C10 75 s, C25 50 s, C50 50 s, recovery 7.5 s, total 212.5 s; golden request schedule is 75 s; concurrency never exceeds 32.
+Expected: schedule reports warm 5 s, shadow 25 s, C10 75 s, C25 50 s, C50 50 s, recovery 7.5 s, total 212.5 s; golden request schedule is 75 s; concurrency never exceeds 32; both modes and all enumerated `UNKNOWN` cases pass unit tests; the owner-host fixture reports `WHOLE_LIFETIME_PEAK_UPPER_BOUND` with warm-up included.
 
 - [ ] **Step 5: Commit**
 
@@ -293,6 +320,10 @@ def test_demo_requires_no_gpu_uci_or_github_cli(demo_contract):
 
 def test_prometheus_outage_does_not_change_decision(run_with_prometheus_down):
     assert run_with_prometheus_down.control_decision == run_with_prometheus_down.expected_decision
+
+def test_public_reports_are_sanitized(public_reports):
+    assert public_reports.forbidden_fields_found == []
+    assert all(report.measurement_mode for report in public_reports.reviewer_reports)
 ```
 
 - [ ] **Step 2: Verify red**
@@ -303,7 +334,7 @@ Expected: FAIL because `scripts/demo.ps1` and public reviewer reports are absent
 
 - [ ] **Step 3: Implement idempotent demo and explicit cold/warm reporting**
 
-Validate Docker/cgroup capability, start Compose, load prebuilt fixtures, offline-verify bundle, bootstrap, validate, shadow, run selected canary scenario, observe rollback/convergence/recovery, export/verify receipt, and print MLflow/Grafana/receipt locations. Measure cold pull/extract separately and exclude only that named interval; warm timer includes validation through receipt verification. Grafana/Prometheus outage removes views only; MLflow outage blocks new validation only; PostgreSQL outage stops transitions and lease-expiry becomes stable-only.
+Validate Docker/cgroup capability and selected memory mode, start Compose, create a fresh candidate for each whole-lifetime scenario, load prebuilt fixtures, offline-verify bundle, bootstrap, validate, shadow, run selected canary scenario, observe rollback/convergence/recovery, export/verify receipt, and print public-safe logical MLflow/Grafana/receipt locations. Measure cold pull/extract separately and exclude only that named interval; warm timer includes validation through receipt verification. Grafana/Prometheus outage removes views only; MLflow outage blocks new validation only; PostgreSQL outage stops transitions and lease-expiry becomes stable-only. Before commit, reject any public report containing username, absolute local path, raw container ID, hostname, secret, or raw environment dump.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -318,7 +349,7 @@ uv run python -m mdcp.verify.cli receipt --path evidence/public/reviewer/golden-
 
 Run: `pwsh ./scripts/demo.ps1 -Scenario GoldenRollback -Warm -Verify; pwsh ./scripts/demo.ps1 -Scenario FullSuccess -Warm -Verify`
 
-Expected: each exits 0 in <=300 seconds; golden prints `INJECTED FAILURE — EXPECTED TEST OUTCOME`, `decision=ROLLED_BACK`, `recovery=PASS`, `receipt=PASS`; full-success prints `decision=PRODUCTION`; neither accesses UCI/network/GPU/GitHub CLI/Kubernetes.
+Expected: each exits 0 in <=300 seconds; golden prints `INJECTED FAILURE — EXPECTED TEST OUTCOME`, `decision=ROLLED_BACK`, `recovery=PASS`, `receipt=PASS`; full-success prints `decision=PRODUCTION`; both show the exact `measurement_mode`, enforce 256/384 MiB unchanged, and bind candidate cgroup/container/revision/window evidence; neither accesses UCI/network/GPU/GitHub CLI/Kubernetes or emits forbidden public metadata.
 
 - [ ] **Step 5: Commit public-safe reviewer evidence and guide**
 
@@ -331,4 +362,4 @@ git commit -m "feat: complete cpu reviewer path"
 
 Run: `uv run pytest tests/unit/observability tests/unit/replay tests/contract/observability tests/contract/compose tests/integration/observability tests/integration/compose tests/integration/replay tests/integration/reviewer tests/security/test_compose_boundary.py -q; pwsh ./scripts/demo.ps1 -Scenario GoldenRollback -Warm -Verify; pwsh ./scripts/demo.ps1 -Scenario FullSuccess -Warm -Verify; git status --short`
 
-Expected: M6 PASS, exactly three dashboards, both warm scenarios <=300 seconds with fixed counts, cold timing separate, decision isolation proven during observability outages, no prohibited dependency, verified public-safe receipts, and clean worktree.
+Expected: M6 PASS, exactly three dashboards, both warm scenarios <=300 seconds with fixed counts, cold timing separate, formal reviewer-path stack/memory evidence (not the W0 feasibility claim), selected `measurement_mode` visible in receipt/report/dashboard, decision isolation proven during observability outages, no prohibited dependency or public metadata, verified public-safe receipts, and clean worktree.
