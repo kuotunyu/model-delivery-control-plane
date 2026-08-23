@@ -9,6 +9,7 @@
 
 # Runtime state and private evidence live outside Git.
 /runtime/
+/mlruns/
 /evidence/private/
 /data/raw/
 /data/derived/
