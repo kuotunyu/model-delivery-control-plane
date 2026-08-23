@@ -1,0 +1,176 @@
+{
+  "$defs": {
+    "EvidenceClass": {
+      "enum": [
+        "bootstrap_baseline",
+        "measured_workload",
+        "injected_test",
+        "release_ci_verified",
+        "reviewer_locally_recomputed",
+        "synthetic_test"
+      ],
+      "title": "EvidenceClass",
+      "type": "string"
+    },
+    "ReasonCode": {
+      "enum": [
+        "VAL_OK",
+        "VAL_EVIDENCE_MISSING",
+        "VAL_DIGEST_MISMATCH",
+        "VAL_FORBIDDEN_FORMAT",
+        "VAL_ONNX_OPERATOR",
+        "VAL_ONNX_INVALID",
+        "VAL_PATH_ESCAPE",
+        "VAL_RESOURCE_LIMIT",
+        "VAL_IDENTITY_INVALID",
+        "VAL_TRUST_FAILURE",
+        "VAL_SUBJECT_MISMATCH",
+        "VAL_LICENSE",
+        "VAL_VULNERABILITY",
+        "VAL_SCAN_EXPIRED",
+        "VAL_RECEIPT_INVALID",
+        "VAL_BUNDLE_TAMPER"
+      ],
+      "title": "ReasonCode",
+      "type": "string"
+    },
+    "ValidationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ReasonCode"
+        },
+        "evidence_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Digest",
+          "type": "string"
+        },
+        "explanation": {
+          "title": "Explanation",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ValidationVerdict"
+        }
+      },
+      "required": [
+        "code",
+        "verdict",
+        "evidence_digest",
+        "explanation"
+      ],
+      "title": "ValidationCheck",
+      "type": "object"
+    },
+    "ValidationVerdict": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "UNKNOWN",
+        "QUARANTINE"
+      ],
+      "title": "ValidationVerdict",
+      "type": "string"
+    },
+    "ValidatorResourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_cores": {
+          "default": 0.5,
+          "exclusiveMinimum": 0,
+          "maximum": 1.0,
+          "title": "Cpu Cores",
+          "type": "number"
+        },
+        "memory_mib": {
+          "default": 384,
+          "maximum": 384,
+          "minimum": 64,
+          "title": "Memory Mib",
+          "type": "integer"
+        },
+        "pids_limit": {
+          "default": 128,
+          "maximum": 128,
+          "minimum": 16,
+          "title": "Pids Limit",
+          "type": "integer"
+        },
+        "timeout_seconds": {
+          "default": 30,
+          "maximum": 60,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "tmpfs_mib": {
+          "default": 64,
+          "maximum": 128,
+          "minimum": 16,
+          "title": "Tmpfs Mib",
+          "type": "integer"
+        }
+      },
+      "title": "ValidatorResourceLimits",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifact_descriptor_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Descriptor Digest",
+      "type": "string"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/ValidationCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Digest",
+      "type": "string"
+    },
+    "evidence_class": {
+      "$ref": "#/$defs/EvidenceClass"
+    },
+    "policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Sha256",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "resource_limits": {
+      "$ref": "#/$defs/ValidatorResourceLimits"
+    },
+    "schema_version": {
+      "const": "mdcp.validation-receipt.v1",
+      "default": "mdcp.validation-receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "verdict": {
+      "$ref": "#/$defs/ValidationVerdict"
+    }
+  },
+  "required": [
+    "request_id",
+    "artifact_descriptor_digest",
+    "policy_sha256",
+    "evidence_class",
+    "resource_limits",
+    "checks",
+    "verdict",
+    "digest"
+  ],
+  "title": "ValidationReceipt",
+  "type": "object"
+}
