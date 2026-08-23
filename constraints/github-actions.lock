@@ -1,0 +1,10 @@
+# Retrieved from immutable official GitHub release tags on 2026-08-24.
+actions/checkout=de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+docker/setup-buildx-action=bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+docker/build-push-action=f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+actions/attest-build-provenance=a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+actions/upload-artifact=043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+
+# Non-root scanner images are pinned by multi-platform OCI manifest digest.
+oci.anchore/syft=ghcr.io/anchore/syft:v1.51.0-nonroot@sha256:d2dc3ec86cb2b4e7ddb226ba0305c4523b7c0694c45d9f576b42b4c2f5ce7aa8
+oci.anchore/grype=ghcr.io/anchore/grype:v0.117.0-nonroot@sha256:1b7edf71b35394c6917fe482b00868ddaaba724a30cd31ef6b81f8165e603561

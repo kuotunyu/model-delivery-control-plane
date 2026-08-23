@@ -1,0 +1,216 @@
+name: Release CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Exact reviewed source commit to release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-ci-${{ inputs.expected_commit }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/kuotunyu/model-delivery-control-plane
+  MDCP_PYTHON_IMAGE: python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+  POSTGRES_IMAGE: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+  MLFLOW_IMAGE: ghcr.io/mlflow/mlflow:v3.3.2@sha256:b166428a3ab479e396f14d671987a70b27741a8d9b22f9d69a559c1fbf09d551
+  PROMETHEUS_IMAGE: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+  GRAFANA_IMAGE: grafana/grafana:12.1.0@sha256:6ac590e7cabc2fbe8d7b8fc1ce9c9f0582177b334e0df9c927ebd9670469440f
+  SYFT_IMAGE: ghcr.io/anchore/syft:v1.51.0-nonroot@sha256:d2dc3ec86cb2b4e7ddb226ba0305c4523b7c0694c45d9f576b42b4c2f5ce7aa8
+  GRYPE_IMAGE: ghcr.io/anchore/grype:v0.117.0-nonroot@sha256:1b7edf71b35394c6917fe482b00868ddaaba724a30cd31ef6b81f8165e603561
+
+jobs:
+  release:
+    if: github.repository == 'kuotunyu/model-delivery-control-plane'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact reviewed commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.expected_commit }}
+          persist-credentials: false
+
+      - name: Reject an ineligible or mismatched formal candidate before mutation
+        id: formal_candidate_preflight
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${EXPECTED_COMMIT}"
+          test "${GITHUB_SHA}" = "${EXPECTED_COMMIT}"
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          freeze = json.loads(Path("tests/fixtures/workload/freeze-manifest.json").read_text())
+          descriptor = json.loads(
+              Path("tests/fixtures/artifacts/candidate/artifact-descriptor.json").read_text()
+          )
+          if freeze["candidate_selection"] != "ELIGIBLE_H1_PASS":
+              raise SystemExit("formal candidate is not ELIGIBLE_H1_PASS")
+          if descriptor["git_source_sha"] != os.environ["EXPECTED_COMMIT"]:
+              raise SystemExit("artifact descriptor does not bind expected commit")
+          if not Path("release-ci-input/final-manifest-input.json").is_file():
+              raise SystemExit("reviewed final-manifest input is absent")
+          PY
+
+      - name: Stage descriptor-bound candidate bytes
+        run: |
+          set -euo pipefail
+          mkdir --mode=0755 .release-model
+          cp tests/fixtures/artifacts/candidate/model.onnx .release-model/model.onnx
+          cp tests/fixtures/artifacts/candidate/artifact-descriptor.json \
+            .release-model/artifact-descriptor.json
+
+      - name: Set up BuildKit
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+
+      - name: Authenticate only after formal candidate preflight
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Stage 1 - build once and push
+        id: build_push
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
+        with:
+          context: .
+          file: docker/release.Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ inputs.expected_commit }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Stage 2 - attest the immutable BuildKit subject
+        id: supply_chain
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
+        with:
+          subject-name: ${{ env.IMAGE_REPOSITORY }}
+          subject-digest: ${{ steps.build_push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Capture SPDX, provenance, attestation, and dated scan evidence
+        env:
+          OCI_DIGEST: ${{ steps.build_push.outputs.digest }}
+          ATTESTATION_BUNDLE: ${{ steps.supply_chain.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir --mode=0755 release-ci
+          subject="${IMAGE_REPOSITORY}@${OCI_DIGEST}"
+          docker run --rm --network host \
+            -v "${HOME}/.docker/config.json:/config/config.json:ro" \
+            -e DOCKER_CONFIG=/config "${SYFT_IMAGE}" "${subject}" -o spdx-json \
+            > release-ci/sbom.spdx.json
+          docker buildx imagetools inspect "${subject}" \
+            --format '{{json .Provenance.SLSA}}' > release-ci/provenance.json
+          cp "${ATTESTATION_BUNDLE}" release-ci/attestation.json
+          docker run --rm --network host \
+            -v "${HOME}/.docker/config.json:/config/config.json:ro" \
+            -e DOCKER_CONFIG=/config "${GRYPE_IMAGE}" "${subject}" \
+            --fail-on high -o json > release-ci/vulnerability-scan.json
+
+      - name: Stage 3 - derive the final manifest without image bake-back
+        id: final_manifest
+        env:
+          OCI_DIGEST: ${{ steps.build_push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from mdcp.common.digests import sha256_hex
+          from mdcp.contracts.release import FinalReleaseManifest, release_id
+
+          root = Path("release-ci")
+          document = json.loads(
+              Path("release-ci-input/final-manifest-input.json").read_text()
+          )
+          document.update(
+              release_id=None,
+              oci={
+                  "repository": os.environ["IMAGE_REPOSITORY"],
+                  "digest": os.environ["OCI_DIGEST"],
+              },
+              sbom_sha256=sha256_hex((root / "sbom.spdx.json").read_bytes()),
+              provenance_sha256=sha256_hex((root / "provenance.json").read_bytes()),
+              attestation_sha256=sha256_hex((root / "attestation.json").read_bytes()),
+              scan_receipt_sha256=sha256_hex(
+                  (root / "vulnerability-scan.json").read_bytes()
+              ),
+          )
+          manifest = FinalReleaseManifest.model_validate(document)
+          manifest = FinalReleaseManifest.model_validate(
+              {**manifest.model_dump(mode="json"), "release_id": release_id(manifest)}
+          )
+          (root / "final-release-manifest.json").write_text(
+              json.dumps(manifest.model_dump(mode="json"), indent=2) + "\n"
+          )
+          PY
+
+      - name: Stage 4 - validate the immutable candidate and supply chain
+        id: validate
+        env:
+          MDCP_VALIDATOR_INPUT_DIR: ${{ github.workspace }}/tests/fixtures/artifacts/candidate
+          MDCP_VALIDATOR_SNAPSHOT_DIR: ${{ github.workspace }}/release-ci-input
+          MDCP_VALIDATOR_OUTPUT_DIR: ${{ github.workspace }}/release-ci
+        run: |
+          set -euo pipefail
+          docker compose -p mdcp-release-ci -f compose.feasibility.yaml \
+            --profile validator build validator
+          docker compose -p mdcp-release-ci -f compose.feasibility.yaml \
+            --profile validator run --rm --no-deps validator
+          subject="${IMAGE_REPOSITORY}@${{ steps.build_push.outputs.digest }}"
+          gh attestation verify "${subject}" \
+            --repo kuotunyu/model-delivery-control-plane --format json \
+            > release-ci/attestation-verification.json
+          uv run python - <<'PY'
+          from pathlib import Path
+
+          from mdcp.validator.service import ValidationReceipt
+
+          receipt = ValidationReceipt.model_validate_json(
+              Path("release-ci/validation-receipt.json").read_text()
+          )
+          if receipt.verdict.value != "PASS":
+              raise SystemExit("validator receipt did not pass")
+          PY
+
+      - name: Stage 5 - seal and recompute the evidence bundle
+        id: seal
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from mdcp.verify.bundle import seal_bundle
+
+          root = Path("release-ci")
+          index = seal_bundle(root)
+          (root / "bundle-index.json").write_text(
+              json.dumps(index.model_dump(mode="json"), indent=2) + "\n"
+          )
+          PY
+
+      - name: Upload immutable workflow evidence only after verification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recorded-release-ci
+          path: release-ci
+          if-no-files-found: error
+          retention-days: 30
