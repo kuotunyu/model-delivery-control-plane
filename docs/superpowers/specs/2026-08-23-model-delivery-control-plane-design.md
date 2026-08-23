@@ -2,6 +2,7 @@
 
 - Status: approved for implementation planning
 - Date: 2026-08-23
+- Owner amendment: 2026-08-24 conservative cgroup peak evidence modes
 - Local repository: `C:\Users\3Hml\Desktop\CC_github部隊\model-delivery-control-plane`
 - Intended public repository: `https://github.com/kuotunyu/model-delivery-control-plane`
 - Primary implementation profile: Docker Compose on Windows 11 / Docker Desktop
@@ -1103,9 +1104,9 @@ All authoritative natural and synthetic canary performance claims use this one p
 - each request is exactly one row of the frozen Bike Sharing v0.1 input schema;
 - the replay harness admits `80 requests/second` with at most `32` total in-flight requests;
 - before a measured scenario, stable and candidate each receive at least 200 warm-up requests;
-  warm-up events carry a warm-up flag and are excluded from all evidence windows and SLO metrics;
-  immediately afterward the harness must verifiably reset the candidate cgroup v2 `memory.peak`
-  before opening the first window, otherwise memory evidence is `UNKNOWN`;
+  warm-up events carry a warm-up flag and are excluded from latency, error, quality, and admission
+  evidence windows, but warm-up memory is included when the selected measurement mode is
+  `WHOLE_LIFETIME_PEAK_UPPER_BOUND`;
 - candidate latency is measured in the router with its monotonic clock: start immediately before
   enqueueing/dispatching the predictor RPC and stop only after the full response has been received.
   It therefore includes router queueing, request serialization, Compose networking, predictor
@@ -1113,16 +1114,50 @@ All authoritative natural and synthetic canary performance claims use this one p
 - elapsed nanoseconds are converted to integer microseconds with ceiling division. For `n`
   successful schema-valid samples sorted ascending, p95 is the nearest-rank value at one-based index
   `ceil(0.95 * n)`; interpolation and platform-library default quantiles are forbidden;
-- memory is the maximum Linux cgroup v2 `memory.peak` observed after the verified post-warm-up reset
-  for the candidate container. If `memory.peak` is unavailable, unreadable, cannot be reset, or
-  cannot be bound to that container, the entire canary window is `UNKNOWN`; process RSS, Docker UI
-  values, and host-level estimates MUST NOT be substituted;
+- candidate memory uses exactly one of the two evidence modes in Section 14.4.1, selected and
+  recorded before the measured scenario. The authoritative peak remains subject to the 256 MiB
+  policy threshold and the candidate remains subject to the 384 MiB hard container limit;
 - natural runs and injected-failure runs use distinct predictor container lifetimes, route
   revisions, windows, and receipts. Their latency or memory samples are never pooled.
 
 Docker Desktop must expose the Linux cgroup v2 measurement contract to qualify the host for the
 authoritative performance path. A host that cannot do so may inspect the demo but cannot produce a
 PASS canary receipt.
+
+#### 14.4.1 Candidate cgroup peak evidence modes
+
+Every authoritative candidate-memory receipt, report, and dashboard MUST expose a
+`measurement_mode` field with one of these exact values:
+
+- `FD_LOCAL_POST_WARMUP_PEAK` is permitted only when a capability probe proves writable reset
+  semantics. The proof and measurement MUST use one `O_RDWR` descriptor for the exact candidate
+  `memory.peak`: read the previous peak, write a non-empty kernel-supported reset value, seek and
+  read the reset value, perform a bounded allocation, then seek and read a strictly increased value.
+  Reopening the path between write and read, including `Path.write_text()` followed by
+  `Path.read_text()`, is not proof and MUST yield `UNKNOWN` if this mode is claimed. After the proof,
+  the measured candidate receives its warm-ups, the same-descriptor reset is repeated, and the
+  scenario-end value is the authoritative post-warm-up peak.
+- `WHOLE_LIFETIME_PEAK_UPPER_BOUND` is required when the exact candidate `memory.peak` is readable
+  but reset capability is unsupported. Each natural or injected scenario MUST use a fresh candidate
+  container and fresh cgroup that exist for that scenario only. Evidence binds the peak from
+  container creation/start through model load, all warm-ups, the measured scenario, and scenario-end
+  capture. The scenario-end `memory.peak` is a conservative whole-lifetime upper bound; the system
+  never calls it a post-warm-up reset measurement and never attempts a reset in this mode.
+
+Memory evidence is `UNKNOWN` only when at least one of these conditions holds:
+
+- `memory.peak` is missing or unreadable;
+- the observer cannot bind the files to the exact candidate cgroup;
+- observed `memory.max` or `cpu.max` does not match the frozen 384 MiB / 1.0 CPU profile;
+- a claimed reset does not have the same-`O_RDWR`-descriptor proof above;
+- whole-lifetime evidence does not come from a fresh candidate container/cgroup for that scenario;
+- evidence identity is not bound to the candidate container, release, route revision, and scenario
+  window.
+
+An unsupported reset is not itself `UNKNOWN` when all
+`WHOLE_LIFETIME_PEAK_UPPER_BOUND` requirements pass. Process RSS, `psutil`, Docker Desktop UI,
+authoritative use of `docker stats`, host estimates, and threshold relaxation are forbidden in both
+modes. A mode cannot be downgraded or switched after a measured scenario starts.
 
 ### 14.5 Drift and traffic-comparability monitor
 
@@ -1378,6 +1413,8 @@ The final machine-readable decision receipt includes:
 - OCI, ONNX, SBOM, provenance, and attestation digests;
 - policy and routing-seed digests;
 - all sealed windows used by the decision;
+- candidate memory `measurement_mode`, cgroup identity digest, resource-limit observations, peak
+  evidence digest, and the bound container/release/revision/window identity;
 - every lifecycle transition and route revision;
 - signed route-plan payload/digest/signature references, rollback, frozen
   `required_convergence_set`, per-router acknowledgement, and restart evidence when applicable;
@@ -1402,7 +1439,7 @@ Prometheus receives bounded-label metrics for:
 - current release state and route revision;
 - intended and observed route weights;
 - route-plan age and router acknowledgement lag;
-- candidate errors, timeouts, restarts, and cgroup memory;
+- candidate errors, timeouts, restarts, cgroup memory, and the selected memory measurement mode;
 - window progress, label completeness, subgroup denominators, and terminal verdict;
 - transition, pause, rollback, and recovery counts/durations;
 - validator results by fixed reason code.
@@ -1421,7 +1458,8 @@ Grafana contains exactly three version-controlled dashboards:
 1. **Release Overview**: current release, state, policy, route revision, gate status, evidence age,
    and supply-chain class.
 2. **Canary Comparison**: stable/candidate operational distributions, route/accounting
-   completeness, memory, errors, and clearly labeled measured versus injected evidence.
+   completeness, memory value and measurement mode, errors, and clearly labeled measured versus
+   injected evidence.
 3. **Decision Timeline**: transitions, sealed windows, pause/rollback reason, router convergence,
    and recovery.
 
@@ -1527,9 +1565,14 @@ be reduced to make the timing claim pass.
 - The control-service signing private key is mounted as a Compose secret only into control service;
   it is never stored in PostgreSQL, included in an image/evidence bundle, exposed to router, or
   emitted in logs. The pinned public-key fingerprint is non-secret bootstrap evidence.
-- The review replay/measurement role may read and reset only the candidate container's cgroup v2
-  `memory.peak` for the declared profile. It receives neither the Docker socket nor permission to
-  change `memory.max`, CPU limits, another cgroup, or host settings.
+- In whole-lifetime mode, the review measurement role receives exact read-only mounts of only the
+  candidate cgroup's `memory.peak`, `memory.current`, `memory.max`, and `cpu.max`. In FD-local mode,
+  only the exact candidate `memory.peak` mount may be writable, while the other three files remain
+  exact read-only mounts. Failure to provide those exact scoped mounts is `UNKNOWN` and stops the
+  scenario. The role is never privileged and never receives the Docker socket or authority over a
+  parent/peer cgroup, resource limit, container, or host setting. Host PowerShell MAY use the Docker
+  CLI to locate and bind the candidate cgroup, but it MUST NOT pass Docker authority into the
+  measurement container.
 - Grafana and MLflow bind only to the local Compose network/loopback exposure documented for the
   reviewer.
 - Runtime databases, secrets, raw UCI data, request payloads, model-build caches, and generated
@@ -1635,6 +1678,9 @@ portfolio claim has executable evidence.
 - MLflow, Prometheus, or Grafana outage behavior;
 - PostgreSQL outage and router stable-only lease expiry.
 - Linux cgroup v2 `memory.peak` capture and `UNKNOWN` when unavailable, with no RSS fallback.
+- both `FD_LOCAL_POST_WARMUP_PEAK` same-descriptor proof and
+  `WHOLE_LIFETIME_PEAK_UPPER_BOUND` fresh-container evidence, including every enumerated `UNKNOWN`
+  identity/resource/mount condition;
 
 #### Deterministic failure-injection tests
 
@@ -1671,6 +1717,9 @@ portfolio claim has executable evidence.
 - source install and unit tests use locked dependencies;
 - no local path, credential, runtime database, raw data, or unapproved generated artifact is
   tracked.
+- public reports and receipts contain no username, absolute local path, raw container ID, hostname,
+  secret, or raw environment dump; stable public-safe digests and declared logical identities replace
+  those values.
 
 #### Release and publication tests
 
@@ -1766,7 +1815,8 @@ Acceptance:
 - warm-image reviewer scenario completes within five minutes on the stated profile;
 - measured wall time honors the 212.5-second request schedule and 87.5-second overhead budget
   without reducing any denominator;
-- `memory.peak` and cross-platform nearest-rank latency measurement comply with the frozen profile;
+- `memory.peak`, its explicit `measurement_mode`, candidate identity/resource binding, and
+  cross-platform nearest-rank latency measurement comply with the frozen profile;
 - cold image pull/extraction time is reported separately;
 - MLflow, Grafana, and the receipt clearly label evidence classes;
 - reviewer needs no GPU, UCI, GitHub CLI, Kubernetes, or paid API.
@@ -1822,7 +1872,8 @@ an inefficient reviewer path.
 | Canary cohorts are treated as paired quality evidence | Paired quality is completed in shadow; canary quality is secondary and labeled |
 | Router convergence is overstated | 500-ms poll/RPC deadline, 1.5-second lease, frozen router set, acknowledgements, stable-only expiry, and precise claim language |
 | Release identity creates a self-reference cycle | Image descriptor precedes OCI; final manifest follows OCI/supply-chain evidence and is never baked back |
-| Reviewer host lacks authoritative memory telemetry | Linux cgroup v2 `memory.peak` is mandatory; absence is `UNKNOWN`, never an RSS substitute |
+| Reviewer host cannot reset `memory.peak` after warm-up | Use a fresh candidate and `WHOLE_LIFETIME_PEAK_UPPER_BOUND`; include model load and warm-up memory, retain the 256 MiB threshold and 384 MiB hard limit, and never claim reset semantics |
+| Reviewer host lacks exact authoritative memory telemetry or resource/identity binding | The enumerated condition is `UNKNOWN`; exact scoped cgroup files are mandatory and RSS, `psutil`, Docker UI/authoritative `docker stats`, host estimates, and threshold substitution remain forbidden |
 | Natural model timing varies across reviewer hosts | Deterministic fault profiles prove rollback; natural timing is reported honestly |
 | Label loss is non-random | Overall and subgroup completeness gates both fail closed |
 | Duplicate/out-of-order events advance state twice | Unique event identity, conflict semantics, optimistic concurrency, and idempotency |
@@ -1861,7 +1912,9 @@ written:
 4. Canary windows count candidate admissions; error/accounting/schema/latency use their explicitly
    different frozen denominators.
 5. The performance profile fixes 1.0 CPU, 384 MiB hard memory, 256 MiB policy threshold, 80 rps,
-   32 in-flight, 200 warm-ups per predictor, nearest-rank p95, and cgroup v2 `memory.peak`.
+   32 in-flight, 200 warm-ups per predictor, nearest-rank p95, and one explicitly labeled cgroup v2
+   `memory.peak` mode: same-descriptor post-warm-up reset when proven, otherwise a fresh-container
+   whole-lifetime upper bound that includes model load and warm-up.
 6. Router snapshots use Ed25519 signatures, 500-ms poll/RPC deadlines, 1.5-second leases, a frozen
    convergence set, and stable-only expiry to support the 2-second claim.
 7. `PAUSED` resumes only to `VALIDATING`, `SHADOW`, or its originating canary with revalidation, a
