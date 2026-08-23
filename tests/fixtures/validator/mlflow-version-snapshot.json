@@ -1,0 +1,10 @@
+{
+  "model_name": "bike-demand",
+  "version": 1,
+  "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "artifact_uri": "file:///staged/mlruns/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/artifacts/model/model.onnx",
+  "onnx_sha256": "44ce1b241b037afbfdf4c360d6fc5bd0a5712fd6d545cf7096e23d7a06addfdf",
+  "training_rows_sha256": "440fc86610054fc04c612183047e182d629a8d08573b98d18fddb5788e94bd0e",
+  "config_sha256": "7d0ca4846110b893d6154a84c6ced73401f687ca4d4f6fc791b893e0398c41dd",
+  "h1_report_sha256": "54e38ea273ab477539e072369b6bb102b0e4173a73716fc5ecd492f89b0a2a91"
+}

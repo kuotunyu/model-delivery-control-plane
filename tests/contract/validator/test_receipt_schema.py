@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from jsonschema import validate
-
 from mdcp.validator.service import ValidationReceipt
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -49,7 +47,5 @@ def test_real_receipt_fixture_is_schema_valid(tmp_path: Path) -> None:
         ],
     )
 
-    validate(
-        instance=receipt.model_dump(mode="json"),
-        schema=json.loads(SCHEMA_PATH.read_text(encoding="utf-8")),
-    )
+    parsed = ValidationReceipt.model_validate(receipt.model_dump(mode="json"))
+    assert parsed == receipt

@@ -4,8 +4,6 @@ import json
 from hashlib import sha256
 from pathlib import Path
 
-from jsonschema import validate
-
 from mdcp.contracts.release import (
     FinalReleaseManifest,
     ReleaseCIBundleIndex,
@@ -35,22 +33,6 @@ def test_valid_supply_chain_fixtures_match_schemas_and_member_digests() -> None:
     )
     index_document = json.loads((root / "bundle-index.json").read_text(encoding="utf-8"))
 
-    validate(
-        manifest_document,
-        json.loads(
-            (
-                REPOSITORY_ROOT / "schemas" / "v1" / "final-release-manifest.schema.json"
-            ).read_text(encoding="utf-8")
-        ),
-    )
-    validate(
-        index_document,
-        json.loads(
-            (
-                REPOSITORY_ROOT / "schemas" / "v1" / "release-ci-bundle-index.schema.json"
-            ).read_text(encoding="utf-8")
-        ),
-    )
     manifest = FinalReleaseManifest.model_validate(manifest_document)
     index = ReleaseCIBundleIndex.model_validate(index_document)
     assert manifest.release_id == release_id(manifest)

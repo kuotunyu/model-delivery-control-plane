@@ -473,6 +473,45 @@ services:
     networks: ["stack"]
     healthcheck: *stack-probe-health
 
+  validator:
+    image: mdcp-wave2-validator:local
+    build:
+      context: .
+      dockerfile: docker/validator.Dockerfile
+      args:
+        MDCP_PYTHON_IMAGE: ${MDCP_PYTHON_IMAGE}
+    profiles: ["validator"]
+    user: "10001:10001"
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 384m
+    pids_limit: 128
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ${MDCP_VALIDATOR_INPUT_DIR:-/__mdcp_validator_input_unbound__}
+        target: /input
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_VALIDATOR_SNAPSHOT_DIR:-/__mdcp_validator_snapshot_unbound__}
+        target: /snapshot
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_VALIDATOR_OUTPUT_DIR:-/__mdcp_validator_output_unbound__}
+        target: /output
+        bind:
+          create_host_path: false
+    stop_grace_period: 2s
+
 networks:
   probe:
     internal: true

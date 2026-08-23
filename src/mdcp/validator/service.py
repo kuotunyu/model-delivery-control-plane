@@ -34,6 +34,7 @@ class ReasonCode(StrEnum):
     VAL_SCAN_EXPIRED = "VAL_SCAN_EXPIRED"
     VAL_RECEIPT_INVALID = "VAL_RECEIPT_INVALID"
     VAL_BUNDLE_TAMPER = "VAL_BUNDLE_TAMPER"
+    VAL_MLFLOW_LINEAGE = "VAL_MLFLOW_LINEAGE"
 
 
 FIXED_EXPLANATIONS: dict[ReasonCode, str] = {
@@ -53,6 +54,7 @@ FIXED_EXPLANATIONS: dict[ReasonCode, str] = {
     ReasonCode.VAL_SCAN_EXPIRED: "vulnerability evidence is outside its validity window",
     ReasonCode.VAL_RECEIPT_INVALID: "validation receipt identity is invalid",
     ReasonCode.VAL_BUNDLE_TAMPER: "sealed bundle inventory does not match its members",
+    ReasonCode.VAL_MLFLOW_LINEAGE: "MLflow numeric lineage does not match the staged artifact",
 }
 CHECK_ORDER = {code: index for index, code in enumerate(ReasonCode)}
 VERDICT_PRECEDENCE = {
@@ -209,8 +211,11 @@ class ValidatorService:
         request: ValidationRequest,
         *,
         checks: Sequence[ValidationCheck] | None = None,
+        extra_checks: Sequence[ValidationCheck] = (),
     ) -> ValidationReceipt:
-        selected = tuple(checks) if checks is not None else self._run_policy_checks(request)
+        selected = (
+            tuple(checks) if checks is not None else self._run_policy_checks(request)
+        ) + tuple(extra_checks)
         codes = [check.code for check in selected]
         if len(codes) != len(set(codes)):
             raise ValueError("duplicate validation check code")

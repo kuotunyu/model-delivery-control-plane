@@ -29,7 +29,8 @@
         "VAL_VULNERABILITY",
         "VAL_SCAN_EXPIRED",
         "VAL_RECEIPT_INVALID",
-        "VAL_BUNDLE_TAMPER"
+        "VAL_BUNDLE_TAMPER",
+        "VAL_MLFLOW_LINEAGE"
       ],
       "title": "ReasonCode",
       "type": "string"

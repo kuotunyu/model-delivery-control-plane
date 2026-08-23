@@ -9,8 +9,10 @@ from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import EvidenceClass, ValidationVerdict
 from mdcp.contracts.release import ArtifactDescriptor, artifact_descriptor_digest
 from mdcp.validator.isolation import ValidatorResourceLimits
+from mdcp.validator.mlflow_snapshot import validate_snapshot_against_descriptor
 from mdcp.validator.policy import load_validation_policy
 from mdcp.validator.service import ValidationRequest, ValidatorService
+from mdcp.workload.mlflow_lineage import MLflowVersionSnapshot
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 DEFAULT_VALIDATION_POLICY = REPOSITORY_ROOT / "configs" / "policy" / "validation-v1.json"
@@ -35,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--staged-root", required=True, type=Path)
     validate.add_argument("--manifest", required=True, type=Path)
     validate.add_argument("--output", required=True, type=Path)
+    validate.add_argument("--mlflow-snapshot", required=True, type=Path)
     validate.add_argument("--policy", type=Path, default=DEFAULT_VALIDATION_POLICY)
     validate.add_argument(
         "--operator-policy",
@@ -49,6 +52,9 @@ def _validate(args: argparse.Namespace) -> int:
         args.manifest.read_text(encoding="utf-8")
     )
     policy = load_validation_policy(args.policy, args.operator_policy)
+    snapshot = MLflowVersionSnapshot.model_validate_json(
+        args.mlflow_snapshot.read_text(encoding="utf-8")
+    )
     policy_digest = sha256_hex(
         json.dumps(
             policy.model_dump(mode="json"),
@@ -65,7 +71,10 @@ def _validate(args: argparse.Namespace) -> int:
         resource_limits=ValidatorResourceLimits(),
         descriptor=descriptor,
     )
-    receipt = ValidatorService(policy=policy).validate(request)
+    receipt = ValidatorService(policy=policy).validate(
+        request,
+        extra_checks=(validate_snapshot_against_descriptor(snapshot, descriptor),),
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(receipt.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
