@@ -1,0 +1,17 @@
+{
+  "schema_version": "mdcp.quality-policy.v1",
+  "overall_max_ratio": 0.97,
+  "subgroup_max_ratio": 1.05,
+  "minimum_subgroup_rows": 100,
+  "resamples": 2000,
+  "seed": 2026,
+  "subgroup_names": [
+    "weather_clear",
+    "weather_mist",
+    "weather_adverse",
+    "day_non_working",
+    "day_working",
+    "demand_peak",
+    "demand_off_peak"
+  ]
+}

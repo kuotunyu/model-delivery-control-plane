@@ -1,0 +1,16 @@
+{
+  "schema_version": "mdcp.bootstrap-vector.v1",
+  "groups": ["weather_clear", "demand_off_peak"],
+  "expected_overall_ucb95": 0.9,
+  "expected_subgroup_ucb95": 0.9,
+  "rows": [
+    {"request_id": "v-1", "calendar_day": "2012-01-01", "stable_prediction": 90.0, "candidate_prediction": 91.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]},
+    {"request_id": "v-2", "calendar_day": "2012-01-01", "stable_prediction": 110.0, "candidate_prediction": 109.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]},
+    {"request_id": "v-3", "calendar_day": "2012-01-02", "stable_prediction": 90.0, "candidate_prediction": 91.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]},
+    {"request_id": "v-4", "calendar_day": "2012-01-02", "stable_prediction": 110.0, "candidate_prediction": 109.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]},
+    {"request_id": "v-5", "calendar_day": "2012-01-03", "stable_prediction": 90.0, "candidate_prediction": 91.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]},
+    {"request_id": "v-6", "calendar_day": "2012-01-03", "stable_prediction": 110.0, "candidate_prediction": 109.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]},
+    {"request_id": "v-7", "calendar_day": "2012-01-04", "stable_prediction": 90.0, "candidate_prediction": 91.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]},
+    {"request_id": "v-8", "calendar_day": "2012-01-04", "stable_prediction": 110.0, "candidate_prediction": 109.0, "label": 100.0, "groups": ["weather_clear", "demand_off_peak"]}
+  ]
+}
