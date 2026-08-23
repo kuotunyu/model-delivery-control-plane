@@ -10,6 +10,9 @@
 # Runtime state and private evidence live outside Git.
 /runtime/
 /evidence/private/
+/data/raw/
+/data/derived/
+/data/**/*.zip
 *.log
 .env
 .env.*
