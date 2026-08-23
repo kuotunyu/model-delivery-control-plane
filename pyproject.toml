@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "model-delivery-control-plane"
+version = "0.1.0"
+description = "Evidence-gated model delivery control plane reference implementation"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+runtime = [
+  "cryptography==45.0.6",
+  "fastapi==0.116.1",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.2.9",
+  "pydantic==2.11.7",
+  "pydantic-settings==2.10.1",
+  "rfc8785==0.1.4",
+  "uvicorn==0.35.0",
+]
+ml = [
+  "mlflow-skinny==3.3.2",
+  "numpy==2.2.6",
+  "onnx==1.18.0",
+  "onnxruntime==1.22.1",
+  "pandas==2.3.1",
+  "scikit-learn==1.7.1",
+  "skl2onnx==1.19.1",
+]
+observability = [
+  "prometheus-client==0.22.1",
+]
+dev = [
+  "hypothesis==6.138.2",
+  "pytest==8.4.1",
+  "pytest-asyncio==1.1.0",
+  "ruff==0.12.9",
+]
+
+[tool.uv]
+default-groups = ["runtime", "dev"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mdcp"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
