@@ -157,8 +157,49 @@ function Invoke-LoadHarnessGate {
     }
 }
 
+function Invoke-AtomicTransactionGate {
+    $atomicProject = 'mdcpwave0atomic'
+    $existing = docker ps -a --filter "label=com.docker.compose.project=$atomicProject" --format '{{.ID}}'
+    if ($existing) { throw 'FEAS-TX-DIRTY: disposable project already exists' }
+    $versions = Get-VersionMap
+    $env:MDCP_PYTHON_IMAGE = $versions['PYTHON_IMAGE']
+    $env:POSTGRES_IMAGE = $versions['POSTGRES_IMAGE']
+    $runStamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+    $runDirectory = Join-Path $RuntimeRoot "atomic-$runStamp"
+    New-Item -ItemType Directory -Path $runDirectory | Out-Null
+    $resultPath = Join-Path $runDirectory 'atomic-transition.json'
+    $env:MDCP_ATOMIC_EVIDENCE_DIR = $runDirectory
+
+    try {
+        docker compose --project-name $atomicProject --file $composeFile --profile atomic `
+            build atomic-probe
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-TX-BUILD' }
+        docker compose --project-name $atomicProject --file $composeFile --profile atomic `
+            up --detach --wait postgres-atomic
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-TX-POSTGRES' }
+        docker compose --project-name $atomicProject --file $composeFile --profile atomic `
+            run --rm --no-TTY --entrypoint python atomic-probe `
+            -m pytest /app/tests/feasibility/test_atomic_transaction.py -q `
+            -p no:cacheprovider -k 'not compose'
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-TX-TEST' }
+        docker compose --project-name $atomicProject --file $composeFile --profile atomic `
+            run --rm --no-TTY atomic-probe
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-TX-FAIL' }
+        if (-not (Test-Path -LiteralPath $resultPath)) { throw 'FEAS-TX-EVIDENCE-MISSING' }
+        $document = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -AsHashtable
+        if ($document['gate']['verdict'] -ne 'PASS') { throw 'FEAS-TX-FAIL' }
+        "EVIDENCE_ID=atomic-$runStamp/atomic-transition.json"
+    }
+    finally {
+        docker compose --project-name $atomicProject --file $composeFile --profile atomic `
+            down --volumes --remove-orphans 2>$null | Out-Null
+        Remove-Item Env:MDCP_ATOMIC_EVIDENCE_DIR -ErrorAction SilentlyContinue
+    }
+}
+
 switch ($Gate) {
     'CgroupResource' { Invoke-CgroupResourceGate }
     'LoadHarness' { Invoke-LoadHarnessGate }
+    'AtomicTransaction' { Invoke-AtomicTransactionGate }
     default { throw "FEAS-GATE-UNIMPLEMENTED:$Gate" }
 }

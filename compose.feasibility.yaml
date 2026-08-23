@@ -189,8 +189,87 @@ services:
         bind:
           create_host_path: false
 
+  postgres-atomic:
+    image: ${POSTGRES_IMAGE}
+    profiles: ["atomic"]
+    user: "999:999"
+    environment:
+      POSTGRES_DB: mdcp
+      POSTGRES_USER: mdcp
+      POSTGRES_PASSWORD: wave0-disposable
+      PGDATA: /var/lib/postgresql/data/pgdata
+    read_only: true
+    tmpfs:
+      - /var/lib/postgresql/data:rw,nosuid,size=256m,uid=999,gid=999,mode=0700
+      - /run/postgresql:rw,nosuid,size=16m,uid=999,gid=999,mode=0755
+      - /tmp:rw,noexec,nosuid,size=16m,uid=999,gid=999,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 128
+    networks: ["atomic"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mdcp -d mdcp"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    stop_grace_period: 3s
+
+  atomic-probe:
+    image: mdcp-wave0-atomic-probe:local
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ${MDCP_PYTHON_IMAGE}
+        RUN python -m pip install --no-cache-dir cryptography==45.0.6 "psycopg[binary]==3.2.9" pydantic==2.11.7 pytest==8.4.1 rfc8785==0.1.4
+        WORKDIR /app
+        COPY src/mdcp /app/src/mdcp
+        COPY tests/fixtures/crypto /app/tests/fixtures/crypto
+        COPY tests/feasibility/test_atomic_transaction.py /app/tests/feasibility/test_atomic_transaction.py
+        COPY tests/feasibility/sql /app/tests/feasibility/sql
+        ENV PYTHONPATH=/app/src \
+            PYTHONDONTWRITEBYTECODE=1
+        USER 65534:65534
+    profiles: ["atomic"]
+    user: "65534:65534"
+    entrypoint: ["python", "-m", "mdcp.feasibility.transaction_probe"]
+    command:
+      - --out
+      - /evidence/atomic-transition.json
+      - --fixture-root
+      - /app/tests/fixtures/crypto
+      - --sql
+      - /app/tests/feasibility/sql/atomic_transition_probe.sql
+    environment:
+      MDCP_ATOMIC_DSN: postgresql://mdcp:wave0-disposable@postgres-atomic:5432/mdcp
+      MDCP_CRYPTO_FIXTURE_ROOT: /app/tests/fixtures/crypto
+      MDCP_ATOMIC_SQL_PATH: /app/tests/feasibility/sql/atomic_transition_probe.sql
+    depends_on:
+      postgres-atomic:
+        condition: service_healthy
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 64
+    networks: ["atomic"]
+    volumes:
+      - type: bind
+        source: ${MDCP_ATOMIC_EVIDENCE_DIR:-/__mdcp_atomic_evidence_unbound__}
+        target: /evidence
+        bind:
+          create_host_path: false
+
 networks:
   probe:
     internal: true
   load:
+    internal: true
+  atomic:
     internal: true
