@@ -1,0 +1,46 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "prediction": {
+      "minimum": 0.0,
+      "title": "Prediction",
+      "type": "number"
+    },
+    "release_id": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Release Id",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "route_revision": {
+      "exclusiveMinimum": 0,
+      "title": "Route Revision",
+      "type": "integer"
+    },
+    "traceparent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Traceparent"
+    }
+  },
+  "required": [
+    "request_id",
+    "release_id",
+    "prediction",
+    "route_revision"
+  ],
+  "title": "PredictionResponse",
+  "type": "object"
+}

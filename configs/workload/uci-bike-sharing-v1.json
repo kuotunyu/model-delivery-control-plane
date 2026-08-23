@@ -1,0 +1,14 @@
+{
+  "schema_version": "mdcp.dataset.uci-bike-sharing.v1",
+  "dataset_id": 275,
+  "doi": "10.24432/C5W894",
+  "source_url": "https://archive.ics.uci.edu/static/public/275/bike%2Bsharing%2Bdataset.zip",
+  "retrieved_date": "2026-08-24",
+  "archive_sha256": "b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401",
+  "archive_size_bytes": 279992,
+  "expected_members": ["Readme.txt", "day.csv", "hour.csv"],
+  "hourly_instances": 17389,
+  "license": "CC BY 4.0",
+  "attribution": "Fanaee-T, H. (2013). Bike Sharing. UCI Machine Learning Repository.",
+  "prediction_target": "cnt"
+}

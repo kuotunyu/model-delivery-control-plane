@@ -1,0 +1,14 @@
+{
+  "request_id": "review-row-1",
+  "season": 1,
+  "mnth": 1,
+  "hr": 0,
+  "holiday": 0,
+  "weekday": 6,
+  "workingday": 0,
+  "weathersit": 1,
+  "temp": 0.24,
+  "atemp": 0.2879,
+  "hum": 0.81,
+  "windspeed": 0.0
+}
