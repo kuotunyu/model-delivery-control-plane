@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import EvidenceClass, ValidationVerdict
+from mdcp.contracts.release import ArtifactDescriptor, artifact_descriptor_digest
 from mdcp.validator.isolation import ValidatorResourceLimits
+from mdcp.validator.policy import ValidationPolicy
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -85,6 +87,7 @@ class ValidationRequest(BaseModel):
     policy_sha256: Sha256
     evidence_class: EvidenceClass
     resource_limits: ValidatorResourceLimits
+    descriptor: ArtifactDescriptor | None = Field(default=None, exclude=True)
 
 
 class ValidationReceipt(BaseModel):
@@ -136,23 +139,78 @@ def aggregate_checks(checks: Sequence[ValidationCheck]) -> ValidationVerdict:
 
 
 class ValidatorService:
-    def validate(
-        self,
-        request: ValidationRequest,
-        *,
-        checks: Sequence[ValidationCheck] | None = None,
-    ) -> ValidationReceipt:
-        selected = tuple(
-            checks
-            if checks is not None
-            else (
+    def __init__(self, *, policy: ValidationPolicy | None = None) -> None:
+        self.policy = policy
+
+    @staticmethod
+    def _coalesce_checks(checks: Sequence[ValidationCheck]) -> tuple[ValidationCheck, ...]:
+        grouped: dict[ReasonCode, list[ValidationCheck]] = {}
+        for check in checks:
+            grouped.setdefault(check.code, []).append(check)
+        coalesced: list[ValidationCheck] = []
+        for code, same_code in grouped.items():
+            verdict = max(
+                (check.verdict for check in same_code),
+                key=VERDICT_PRECEDENCE.__getitem__,
+            )
+            evidence_digest = sha256_hex(
+                canonicalize_json(sorted(check.evidence_digest for check in same_code))
+            )
+            coalesced.append(
+                make_check(code, verdict, evidence_digest=evidence_digest)
+            )
+        return tuple(coalesced)
+
+    def _run_policy_checks(self, request: ValidationRequest) -> tuple[ValidationCheck, ...]:
+        if self.policy is None or request.descriptor is None:
+            return (
                 make_check(
                     ReasonCode.VAL_EVIDENCE_MISSING,
                     ValidationVerdict.UNKNOWN,
                     evidence_digest=sha256_hex(b"missing-validator-checks"),
                 ),
             )
+        from mdcp.validator.identity_checks import validate_identity
+        from mdcp.validator.onnx_checks import validate_onnx
+
+        checks = list(
+            validate_identity(request.staged_root, request.descriptor, self.policy)
         )
+        descriptor_matches = (
+            artifact_descriptor_digest(request.descriptor)
+            == request.artifact_descriptor_digest
+        )
+        checks.append(
+            make_check(
+                ReasonCode.VAL_IDENTITY_INVALID,
+                ValidationVerdict.PASS
+                if descriptor_matches
+                else ValidationVerdict.FAIL,
+                evidence_digest=sha256_hex(
+                    canonicalize_json({"descriptor_matches": descriptor_matches})
+                ),
+            )
+        )
+        onnx_files = tuple(request.staged_root.glob("*.onnx"))
+        if len(onnx_files) == 1:
+            checks.extend(validate_onnx(onnx_files[0], self.policy).checks)
+        else:
+            checks.append(
+                make_check(
+                    ReasonCode.VAL_EVIDENCE_MISSING,
+                    ValidationVerdict.UNKNOWN,
+                    evidence_digest=sha256_hex(b"missing-single-onnx"),
+                )
+            )
+        return self._coalesce_checks(checks)
+
+    def validate(
+        self,
+        request: ValidationRequest,
+        *,
+        checks: Sequence[ValidationCheck] | None = None,
+    ) -> ValidationReceipt:
+        selected = tuple(checks) if checks is not None else self._run_policy_checks(request)
         codes = [check.code for check in selected]
         if len(codes) != len(set(codes)):
             raise ValueError("duplicate validation check code")

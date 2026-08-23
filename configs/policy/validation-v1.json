@@ -1,0 +1,41 @@
+{
+  "schema_version": "mdcp.validation-policy.v1",
+  "max_file_count": 32,
+  "max_total_bytes": 67108864,
+  "max_single_file_bytes": 67108864,
+  "max_onnx_bytes": 67108864,
+  "max_graph_nodes": 4096,
+  "minimum_opset": 13,
+  "maximum_opset": 18,
+  "allowed_operators": [
+    "Add",
+    "Concat",
+    "Identity",
+    "MatMul",
+    "Relu",
+    "TreeEnsembleRegressor"
+  ],
+  "forbidden_suffixes": [
+    ".dll",
+    ".exe",
+    ".joblib",
+    ".marshal",
+    ".pickle",
+    ".pkl",
+    ".pyc",
+    ".so"
+  ],
+  "smoke_input": {
+    "season": 1.0,
+    "mnth": 1.0,
+    "hr": 8.0,
+    "holiday": 0.0,
+    "weekday": 1.0,
+    "workingday": 1.0,
+    "weathersit": 1.0,
+    "temp": 0.24,
+    "atemp": 0.2879,
+    "hum": 0.81,
+    "windspeed": 0.0
+  }
+}

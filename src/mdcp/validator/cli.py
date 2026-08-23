@@ -9,7 +9,12 @@ from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import EvidenceClass, ValidationVerdict
 from mdcp.contracts.release import ArtifactDescriptor, artifact_descriptor_digest
 from mdcp.validator.isolation import ValidatorResourceLimits
+from mdcp.validator.policy import load_validation_policy
 from mdcp.validator.service import ValidationRequest, ValidatorService
+
+REPOSITORY_ROOT = Path(__file__).parents[3]
+DEFAULT_VALIDATION_POLICY = REPOSITORY_ROOT / "configs" / "policy" / "validation-v1.json"
+DEFAULT_OPERATOR_POLICY = REPOSITORY_ROOT / "configs" / "policy" / "onnx-operators-v1.json"
 
 EXIT_CODES = {
     ValidationVerdict.PASS: 0,
@@ -30,7 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--staged-root", required=True, type=Path)
     validate.add_argument("--manifest", required=True, type=Path)
     validate.add_argument("--output", required=True, type=Path)
-    validate.add_argument("--policy", type=Path)
+    validate.add_argument("--policy", type=Path, default=DEFAULT_VALIDATION_POLICY)
+    validate.add_argument(
+        "--operator-policy",
+        type=Path,
+        default=DEFAULT_OPERATOR_POLICY,
+    )
     return parser
 
 
@@ -38,10 +48,13 @@ def _validate(args: argparse.Namespace) -> int:
     descriptor = ArtifactDescriptor.model_validate_json(
         args.manifest.read_text(encoding="utf-8")
     )
-    policy_digest = (
-        sha256_hex(args.policy.read_bytes())
-        if args.policy is not None and args.policy.is_file()
-        else sha256_hex(b"missing-validation-policy")
+    policy = load_validation_policy(args.policy, args.operator_policy)
+    policy_digest = sha256_hex(
+        json.dumps(
+            policy.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     )
     request = ValidationRequest(
         request_id="validator-cli",
@@ -50,8 +63,9 @@ def _validate(args: argparse.Namespace) -> int:
         policy_sha256=policy_digest,
         evidence_class=EvidenceClass.SYNTHETIC_TEST,
         resource_limits=ValidatorResourceLimits(),
+        descriptor=descriptor,
     )
-    receipt = ValidatorService().validate(request)
+    receipt = ValidatorService(policy=policy).validate(request)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(receipt.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",

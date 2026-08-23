@@ -1,0 +1,14 @@
+{
+  "schema_version": "mdcp.adversarial-artifact-index.v1",
+  "fixtures": [
+    {"fixture": "pickle.bin", "code": "VAL_FORBIDDEN_FORMAT"},
+    {"fixture": "traversal.zip", "code": "VAL_PATH_ESCAPE"},
+    {"fixture": "duplicate.zip", "code": "VAL_PATH_ESCAPE"},
+    {"fixture": "symlink.zip", "code": "VAL_PATH_ESCAPE"},
+    {"fixture": "oversized.zip", "code": "VAL_RESOURCE_LIMIT"},
+    {"fixture": "external-parent.onnx", "code": "VAL_PATH_ESCAPE"},
+    {"fixture": "unsupported-op.onnx", "code": "VAL_ONNX_OPERATOR"},
+    {"fixture": "nan-output.onnx", "code": "VAL_ONNX_INVALID"},
+    {"fixture": "negative-output.onnx", "code": "VAL_ONNX_INVALID"}
+  ]
+}
