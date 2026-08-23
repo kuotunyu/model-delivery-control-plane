@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "EvidenceClass": {
+      "enum": [
+        "bootstrap_baseline",
+        "measured_workload",
+        "injected_test",
+        "release_ci_verified",
+        "reviewer_locally_recomputed",
+        "synthetic_test"
+      ],
+      "title": "EvidenceClass",
+      "type": "string"
+    },
+    "OnnxMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "input_names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Names",
+          "type": "array"
+        },
+        "operators": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Operators",
+          "type": "array"
+        },
+        "opset": {
+          "exclusiveMinimum": 0,
+          "title": "Opset",
+          "type": "integer"
+        },
+        "output_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Output Name",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sha256",
+        "size_bytes",
+        "opset",
+        "operators",
+        "input_names",
+        "output_name"
+      ],
+      "title": "OnnxMetadata",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "dependency_lock_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Dependency Lock Sha256",
+      "type": "string"
+    },
+    "evidence_class": {
+      "$ref": "#/$defs/EvidenceClass"
+    },
+    "feature_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Feature Manifest Sha256",
+      "type": "string"
+    },
+    "git_source_sha": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Git Source Sha",
+      "type": "string"
+    },
+    "h1_report_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "H1 Report Sha256",
+      "type": "string"
+    },
+    "model_name": {
+      "enum": [
+        "stable",
+        "candidate"
+      ],
+      "title": "Model Name",
+      "type": "string"
+    },
+    "model_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Model Sha256",
+      "type": "string"
+    },
+    "onnx": {
+      "$ref": "#/$defs/OnnxMetadata"
+    },
+    "schema_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Schema Digest",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "artifact-descriptor/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "serving_code_config_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Serving Code Config Id",
+      "type": "string"
+    },
+    "split_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Split Manifest Sha256",
+      "type": "string"
+    },
+    "training_data_kind": {
+      "enum": [
+        "deterministic_generated",
+        "uci_bike_sharing_2011"
+      ],
+      "title": "Training Data Kind",
+      "type": "string"
+    },
+    "training_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Training Receipt Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "model_name",
+    "evidence_class",
+    "training_data_kind",
+    "git_source_sha",
+    "model_sha256",
+    "schema_digest",
+    "serving_code_config_id",
+    "feature_manifest_sha256",
+    "dependency_lock_sha256",
+    "split_manifest_sha256",
+    "training_receipt_sha256",
+    "h1_report_sha256",
+    "onnx"
+  ],
+  "title": "ArtifactDescriptor",
+  "type": "object"
+}

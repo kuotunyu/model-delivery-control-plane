@@ -9,6 +9,7 @@ import joblib
 
 from mdcp.workload.dataset import load_uci_archive
 from mdcp.workload.evaluation import QualityPolicy, evaluate_h1, paired_rows_from_frame
+from mdcp.workload.reviewer_fixtures import verify_reviewer_fixtures
 from mdcp.workload.splits import split_rows
 from mdcp.workload.training import (
     create_training_receipt,
@@ -35,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--policy", type=Path, required=True)
     evaluate.add_argument("--output", type=Path, required=True)
     evaluate.add_argument("--dataset-contract", type=Path, default=DEFAULT_DATASET_CONTRACT)
+    verify = subparsers.add_parser("verify-fixtures")
+    verify.add_argument("--root", type=Path, required=True)
     return parser
 
 
@@ -79,6 +82,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _train(args)
     if args.command == "evaluate-h1":
         return _evaluate_h1(args)
+    if args.command == "verify-fixtures":
+        receipt = verify_reviewer_fixtures(args.root)
+        print(
+            "FIXTURES PASS "
+            f"stable={receipt.stable} candidate={receipt.candidate} uci_rows={receipt.uci_rows}"
+        )
+        return 0
     raise AssertionError("unreachable command")
 
 

@@ -1,0 +1,25 @@
+{
+  "schema_version": "mdcp.freeze-manifest.v1",
+  "git_source_sha": "3208dcbdab498cf7995c566872f2ad720242e4bb",
+  "dataset": {
+    "dataset_id": 275,
+    "archive_sha256": "b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401",
+    "license": "CC BY 4.0"
+  },
+  "split": {
+    "train": "2011-01-01T00:00:00Z/2011-12-31T23:00:00Z",
+    "h1": "2012-01-01T00:00:00Z/2012-06-30T23:00:00Z",
+    "h2": "2012-07-01T00:00:00Z/2012-12-31T23:00:00Z"
+  },
+  "h2_status": "SEALED_NOT_OPENED",
+  "quality_policy_sha256": "3d84bf29f205587f92d079111485bc6b492d290f152bd0bcd60254e1c7e8fc31",
+  "feature_manifest_sha256": "7d0ca4846110b893d6154a84c6ced73401f687ca4d4f6fc791b893e0398c41dd",
+  "stable_config_sha256": "ece4b3fe40754b247e9dcd2dac3bcbd6081a669d7dafabee127c2e92a7042078",
+  "candidate_config_sha256": "f1740146d625a10cf79e3f7e9b1854a35ca7758797571976f382181aa29c58f4",
+  "stable_onnx_sha256": "49d8375e37c1652a417d646b0af53abf4a9252a6e06019addce619a6838e2866",
+  "candidate_onnx_sha256": "4949f32717c4fcc0e053b8df6bc5338a87f49e8761a3a1c003c665a305389db6",
+  "natural_h1_report_sha256": "ff94bdeb9b5cfdbaf89c0f537a61889c3ca6ffb38d27d91ce85d4884cfa6c2b5",
+  "h1_verdict": "FAIL",
+  "candidate_selection": "INELIGIBLE_H1_FAIL",
+  "selection_rule": "candidate requires natural H1 PASS; synthetic evidence cannot substitute"
+}

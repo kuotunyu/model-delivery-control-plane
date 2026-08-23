@@ -1,0 +1,53 @@
+{
+  "bootstrap": {
+    "replicate_index": 1899,
+    "resamples": 2000,
+    "seed": 2026
+  },
+  "evidence_class": "synthetic_test",
+  "overall": {
+    "point_ratio": 0.9,
+    "row_count": 2400,
+    "ucb95": 0.95
+  },
+  "paired_row_count": 2400,
+  "schema_version": "mdcp.synthetic-h1-report.v1",
+  "subgroups": {
+    "day_non_working": {
+      "point_ratio": 0.9,
+      "row_count": 2400,
+      "ucb95": 0.95
+    },
+    "day_working": {
+      "point_ratio": 0.9,
+      "row_count": 2400,
+      "ucb95": 0.95
+    },
+    "demand_off_peak": {
+      "point_ratio": 0.9,
+      "row_count": 2400,
+      "ucb95": 0.95
+    },
+    "demand_peak": {
+      "point_ratio": 0.9,
+      "row_count": 2400,
+      "ucb95": 0.95
+    },
+    "weather_adverse": {
+      "point_ratio": 0.9,
+      "row_count": 2400,
+      "ucb95": 0.95
+    },
+    "weather_clear": {
+      "point_ratio": 0.9,
+      "row_count": 2400,
+      "ucb95": 0.95
+    },
+    "weather_mist": {
+      "point_ratio": 0.9,
+      "row_count": 2400,
+      "ucb95": 0.95
+    }
+  },
+  "verdict": "PASS"
+}

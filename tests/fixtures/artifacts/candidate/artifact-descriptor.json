@@ -1,0 +1,40 @@
+{
+  "dependency_lock_sha256": "781845de1b742769bbc446906425dcd9f74358ec457bdb1d28b63699ec1277ae",
+  "evidence_class": "synthetic_test",
+  "feature_manifest_sha256": "7d0ca4846110b893d6154a84c6ced73401f687ca4d4f6fc791b893e0398c41dd",
+  "git_source_sha": "3208dcbdab498cf7995c566872f2ad720242e4bb",
+  "h1_report_sha256": "54e38ea273ab477539e072369b6bb102b0e4173a73716fc5ecd492f89b0a2a91",
+  "model_name": "candidate",
+  "model_sha256": "3099b354885967e920378a04d24c1292bc2329bcff40aef57b986bc69799909d",
+  "onnx": {
+    "input_names": [
+      "season",
+      "mnth",
+      "hr",
+      "holiday",
+      "weekday",
+      "workingday",
+      "weathersit",
+      "temp",
+      "atemp",
+      "hum",
+      "windspeed"
+    ],
+    "operators": [
+      "Add",
+      "Concat",
+      "MatMul",
+      "Relu"
+    ],
+    "opset": 18,
+    "output_name": "prediction",
+    "sha256": "3099b354885967e920378a04d24c1292bc2329bcff40aef57b986bc69799909d",
+    "size_bytes": 707
+  },
+  "schema_digest": "47e23ce0b7983396f8d69334e81d3f8409601e3447892547a8bce27ef5de9508",
+  "schema_version": "artifact-descriptor/v1",
+  "serving_code_config_id": "d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209",
+  "split_manifest_sha256": "440fc86610054fc04c612183047e182d629a8d08573b98d18fddb5788e94bd0e",
+  "training_data_kind": "deterministic_generated",
+  "training_receipt_sha256": "400bc739bcb8d4bf686cc37c95b25eec6e0f07c78e0f5f000642a3aee1a7c367"
+}
