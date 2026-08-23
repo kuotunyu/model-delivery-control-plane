@@ -34,6 +34,16 @@ function Get-JsonLine([object[]]$Lines, [string]$Label) {
     return $jsonLine
 }
 
+function Get-LatestEvidencePath([string]$DirectoryPattern, [string]$FileName) {
+    $directory = Get-ChildItem -LiteralPath $RuntimeRoot -Directory -Filter $DirectoryPattern |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    if (-not $directory) { throw "FEAS-EVIDENCE-MISSING:$DirectoryPattern" }
+    $path = Join-Path $directory.FullName $FileName
+    if (-not (Test-Path -LiteralPath $path)) { throw "FEAS-EVIDENCE-MISSING:$FileName" }
+    return $path
+}
+
 function Invoke-CgroupResourceGate {
     $existing = docker ps -a --filter "label=com.docker.compose.project=$projectName" --format '{{.ID}}'
     if ($existing) { throw 'FEAS-CGROUP-DIRTY: disposable project already exists' }
@@ -289,10 +299,40 @@ function Invoke-StackBudgetGate {
     }
 }
 
+function Invoke-AllGates {
+    Invoke-CgroupResourceGate
+    $cgroupPath = Get-LatestEvidencePath 'cgroup-*' 'cgroup-resource.json'
+    Invoke-LoadHarnessGate
+    $loadPath = Get-LatestEvidencePath 'load-*' 'load-harness.json'
+    uv run pytest tests/unit/common/test_canonical_vectors.py `
+        tests/feasibility/test_crypto_subprocess.py -q
+    if ($LASTEXITCODE -ne 0) { throw 'FEAS-CRYPTO-FAIL' }
+    Invoke-AtomicTransactionGate
+    $atomicPath = Get-LatestEvidencePath 'atomic-*' 'atomic-transition.json'
+    Invoke-StackBudgetGate
+    $stackPath = Get-LatestEvidencePath 'stack-*' 'stack-budget.json'
+    uv run pytest tests/feasibility/test_github_research.py -q
+    if ($LASTEXITCODE -ne 0) { throw 'FEAS-GITHUB-RESEARCH-FAIL' }
+
+    $reportPath = Join-Path $PSScriptRoot '..\evidence\public\feasibility\wave0-report.json'
+    $cryptoRoot = Join-Path $PSScriptRoot '..\tests\fixtures\crypto'
+    $researchPath = Join-Path $PSScriptRoot `
+        '..\docs\research\github-supply-chain-capability.md'
+    uv run python -m mdcp.feasibility.gate --assemble `
+        --cgroup $cgroupPath `
+        --load $loadPath `
+        --crypto-root $cryptoRoot `
+        --atomic $atomicPath `
+        --stack $stackPath `
+        --research $researchPath `
+        --report $reportPath
+    if ($LASTEXITCODE -ne 0) { throw 'WAVE0-AGGREGATE-FAIL' }
+}
+
 switch ($Gate) {
     'CgroupResource' { Invoke-CgroupResourceGate }
     'LoadHarness' { Invoke-LoadHarnessGate }
     'AtomicTransaction' { Invoke-AtomicTransactionGate }
     'StackBudget' { Invoke-StackBudgetGate }
-    default { throw "FEAS-GATE-UNIMPLEMENTED:$Gate" }
+    'All' { Invoke-AllGates }
 }

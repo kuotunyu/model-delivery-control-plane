@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/mdcp/wave0-report.schema.json",
+  "title": "MDCP Wave 0 feasibility report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_class",
+    "generated_at",
+    "verdict",
+    "next_wave_allowed",
+    "results",
+    "report_digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "mdcp.feasibility.wave0.v1" },
+    "evidence_class": { "const": "FEASIBILITY" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "verdict": { "enum": ["PASS", "FAIL"] },
+    "next_wave_allowed": { "type": "boolean" },
+    "report_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "results": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "verdict", "evidence_digest", "evidence_identity", "summary"],
+        "properties": {
+          "name": { "type": "string" },
+          "verdict": { "enum": ["PASS", "FAIL", "UNKNOWN"] },
+          "evidence_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "evidence_identity": { "type": "string", "minLength": 1 },
+          "summary": { "type": "object" }
+        }
+      }
+    }
+  }
+}

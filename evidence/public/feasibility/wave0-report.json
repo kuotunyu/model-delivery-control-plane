@@ -1,0 +1,217 @@
+{
+  "evidence_class": "FEASIBILITY",
+  "generated_at": "2026-08-23T19:11:14.036736Z",
+  "next_wave_allowed": true,
+  "report_digest": "c393bbe3fb403dbddec8bc963de6a821581704847a2477fcd1923bdf2079c6eb",
+  "results": [
+    {
+      "evidence_digest": "cf6138138fb704dbc33c7a2378e5ab8cd6ccf7e6f9d5d6a361f08b94dc91d3ac",
+      "evidence_identity": "wave0/cgroup-resource@sha256:c8f3a9465c01b1ac7f6690ee69611447c1ff0e97d8888be2fc62b56f9ed57460",
+      "name": "cgroup_v2",
+      "summary": {
+        "candidate_cgroup_identity_digest": "53aaaf09563c23f49f0fb75fb34daed57883dbe2ae74438fa7eef404147ff93d",
+        "cgroup_version": 2,
+        "cpu_max": "100000 100000",
+        "fresh_candidate": true,
+        "kernel": "6.6.114.1-microsoft-standard-WSL2",
+        "measurement_mode": "WHOLE_LIFETIME_PEAK_UPPER_BOUND",
+        "memory_current_bytes": 80441344,
+        "memory_max_bytes": 402653184,
+        "memory_peak_bytes": 83611648,
+        "reset_capability_verdict": "UNSUPPORTED_READ_ONLY"
+      },
+      "verdict": "PASS"
+    },
+    {
+      "evidence_digest": "03be0f7fe91e5cc669591afda34c317edfd09ab1e9f668a67644a4ee936e3733",
+      "evidence_identity": "wave0/cgroup-resource@sha256:c8f3a9465c01b1ac7f6690ee69611447c1ff0e97d8888be2fc62b56f9ed57460",
+      "name": "scoped_memory_peak",
+      "summary": {
+        "candidate_cgroup_identity_digest": "53aaaf09563c23f49f0fb75fb34daed57883dbe2ae74438fa7eef404147ff93d",
+        "cgroup_version": 2,
+        "cpu_max": "100000 100000",
+        "fresh_candidate": true,
+        "kernel": "6.6.114.1-microsoft-standard-WSL2",
+        "measurement_mode": "WHOLE_LIFETIME_PEAK_UPPER_BOUND",
+        "memory_current_bytes": 80441344,
+        "memory_max_bytes": 402653184,
+        "memory_peak_bytes": 83611648,
+        "reset_capability_verdict": "UNSUPPORTED_READ_ONLY"
+      },
+      "verdict": "PASS"
+    },
+    {
+      "evidence_digest": "f239ad749f1d8649d466f733ac05c957462f345d7f491baf20dc9d486eb0a3af",
+      "evidence_identity": "wave0/cgroup-resource@sha256:c8f3a9465c01b1ac7f6690ee69611447c1ff0e97d8888be2fc62b56f9ed57460",
+      "name": "compose_resource_limits",
+      "summary": {
+        "candidate_cgroup_identity_digest": "53aaaf09563c23f49f0fb75fb34daed57883dbe2ae74438fa7eef404147ff93d",
+        "cgroup_version": 2,
+        "cpu_max": "100000 100000",
+        "fresh_candidate": true,
+        "kernel": "6.6.114.1-microsoft-standard-WSL2",
+        "measurement_mode": "WHOLE_LIFETIME_PEAK_UPPER_BOUND",
+        "memory_current_bytes": 80441344,
+        "memory_max_bytes": 402653184,
+        "memory_peak_bytes": 83611648,
+        "reset_capability_verdict": "UNSUPPORTED_READ_ONLY"
+      },
+      "verdict": "PASS"
+    },
+    {
+      "evidence_digest": "28d93ba10337f168b870e191b738ec2edcf523bc06b7c2887f2b2c775584e984",
+      "evidence_identity": "wave0/load-harness@sha256:ff6eb8a571cc5eeaf145e3709ca871cbcbca21144b5092eb465781bcb1f2c062",
+      "name": "load_harness",
+      "summary": {
+        "achieved_rps": 80.013,
+        "admitted": 2000,
+        "completed": 2000,
+        "error_class_counts": {
+          "ConnectError": 0,
+          "ConnectTimeout": 0,
+          "InvalidResponse": 0,
+          "Other": 0,
+          "ProtocolError": 0,
+          "ReadTimeout": 0
+        },
+        "errors": 0,
+        "max_in_flight": 2,
+        "p95_us": 2723,
+        "wall_time_ms": 24990
+      },
+      "verdict": "PASS"
+    },
+    {
+      "evidence_digest": "552d1f8daf12e1dbd01554cf589ab9a5358410280c6a216c44a1639527b52041",
+      "evidence_identity": "fixtures/route-plan-v1@sha256:552d1f8daf12e1dbd01554cf589ab9a5358410280c6a216c44a1639527b52041",
+      "name": "rfc8785_ed25519_vectors",
+      "summary": {
+        "canonical_sha256": "03a17e22b7b64db833cca8a9397cc120f61b0077c27a2e7a5ebc89b5da88b997",
+        "public_key_fingerprint": "21fe31dfa154a261626bf854046fd2271b7bed4b6abe45aa58877ef47f9721b9",
+        "signature_sha256": "027f230c74725a787c46eca6d4ddcdfe82e5076c2eca6da66e8ca19ad4ca8f31"
+      },
+      "verdict": "PASS"
+    },
+    {
+      "evidence_digest": "7a3f076040b7d47e07a4d9892791778a4a66e69de69335b6a697bb6c2ebb7b05",
+      "evidence_identity": "wave0/atomic-transition@sha256:c5f6b1cf2d707eebfeb98355fdb138e7c65946c8947b99900f483e4377846585",
+      "name": "postgres_atomic_transition",
+      "summary": {
+        "rollback_cases": {
+          "before_commit": {
+            "injected_failure": "before_commit",
+            "payload_digest": "03a17e22b7b64db833cca8a9397cc120f61b0077c27a2e7a5ebc89b5da88b997",
+            "revisions": {},
+            "split_state": 0,
+            "visible_row_counts": {
+              "audit": 0,
+              "environment": 0,
+              "release": 0,
+              "route_plan": 0
+            }
+          },
+          "route_plan_insert": {
+            "injected_failure": "route_plan_insert",
+            "payload_digest": "03a17e22b7b64db833cca8a9397cc120f61b0077c27a2e7a5ebc89b5da88b997",
+            "revisions": {},
+            "split_state": 0,
+            "visible_row_counts": {
+              "audit": 0,
+              "environment": 0,
+              "release": 0,
+              "route_plan": 0
+            }
+          }
+        },
+        "success": {
+          "injected_failure": null,
+          "payload_digest": "03a17e22b7b64db833cca8a9397cc120f61b0077c27a2e7a5ebc89b5da88b997",
+          "revisions": {
+            "audit": 1,
+            "environment": 1,
+            "release": 1,
+            "route_plan": 1
+          },
+          "split_state": 0,
+          "visible_row_counts": {
+            "audit": 1,
+            "environment": 1,
+            "release": 1,
+            "route_plan": 1
+          }
+        }
+      },
+      "verdict": "PASS"
+    },
+    {
+      "evidence_digest": "578026548963ad316d356f6e9baa95872d4a2438d463e1ae0d8533d854643d29",
+      "evidence_identity": "wave0/stack-budget@sha256:e2a93adc06f613db3b9d568a090114f001cd3201c1b0889d0746420ada5ca4aa",
+      "name": "reviewer_stack_budget",
+      "summary": {
+        "disk_bytes": 800464244,
+        "image_virtual_size_upper_bound_bytes": 800464244,
+        "measurement_mode": "CGROUP_V2_MEMORY_PEAK_SUM",
+        "peak_bytes": 942493696,
+        "ready": [
+          "postgres",
+          "mlflow",
+          "prometheus",
+          "grafana",
+          "control-probe",
+          "router-probe",
+          "stable",
+          "candidate"
+        ],
+        "services": {
+          "candidate": {
+            "memory_max_bytes": 402653184,
+            "memory_peak_bytes": 43950080
+          },
+          "control-probe": {
+            "memory_max_bytes": 268435456,
+            "memory_peak_bytes": 44134400
+          },
+          "grafana": {
+            "memory_max_bytes": 402653184,
+            "memory_peak_bytes": 85229568
+          },
+          "mlflow": {
+            "memory_max_bytes": 805306368,
+            "memory_peak_bytes": 571506688
+          },
+          "postgres": {
+            "memory_max_bytes": 536870912,
+            "memory_peak_bytes": 86093824
+          },
+          "prometheus": {
+            "memory_max_bytes": 402653184,
+            "memory_peak_bytes": 23044096
+          },
+          "router-probe": {
+            "memory_max_bytes": 268435456,
+            "memory_peak_bytes": 44331008
+          },
+          "stable": {
+            "memory_max_bytes": 402653184,
+            "memory_peak_bytes": 44204032
+          }
+        },
+        "volume_bytes": 0
+      },
+      "verdict": "PASS"
+    },
+    {
+      "evidence_digest": "69ebfc169a9ec0f1660ff9e14381fdabb647662f7b7b76f57438d6b9203fccb0",
+      "evidence_identity": "docs/research/github-supply-chain-capability.md@sha256:69ebfc169a9ec0f1660ff9e14381fdabb647662f7b7b76f57438d6b9203fccb0",
+      "name": "github_supply_chain_research",
+      "summary": {
+        "official_source_count": 5,
+        "remote_mutation_performed": false,
+        "retrieved": "2026-08-24"
+      },
+      "verdict": "PASS"
+    }
+  ],
+  "schema_version": "mdcp.feasibility.wave0.v1",
+  "verdict": "PASS"
+}
