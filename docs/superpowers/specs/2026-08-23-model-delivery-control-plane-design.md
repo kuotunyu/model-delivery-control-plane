@@ -1,6 +1,6 @@
 # Model Delivery Control Plane v0.1 Design Specification
 
-- Status: proposed written specification; approved direction, pending owner review
+- Status: conditional direction approved; review invariants revised, pending final owner approval
 - Date: 2026-08-23
 - Local repository: `C:\Users\3Hml\Desktop\CC_github部隊\model-delivery-control-plane`
 - Intended public repository: `https://github.com/kuotunyu/model-delivery-control-plane`
@@ -154,17 +154,20 @@ a v0.1 completion gate before v0.1 reaches Portfolio Complete at M7.
 ```mermaid
 flowchart LR
     Train["Training / evaluation workflow"] --> MLflow["MLflow Tracking + Registry"]
-    Train --> Manifest["Canonical release manifest"]
+    Train --> Descriptor["Image artifact descriptor\nsource + ONNX + schema + serving config"]
 
-    CI["GitHub Actions release workflow"] --> OCI["GHCR image by digest\nONNX + predictor code"]
-    CI --> Supply["SBOM + provenance\nGitHub attestation"]
+    Descriptor --> CI["GitHub Actions release workflow"]
+    CI --> OCI["GHCR image by digest\nONNX + predictor code + descriptor"]
+    OCI --> Supply["SBOM + provenance\nGitHub attestation"]
+    Supply --> Manifest["Final canonical release manifest\nand release_id"]
 
     MLflow --> Validator["Ephemeral validator"]
     Manifest --> Validator
     OCI --> Validator
     Supply --> Validator
+    Validator --> Bundle["Sealed release-CI evidence bundle"]
 
-    Validator --> Control["Control service\nstate machine + window evaluator"]
+    Bundle --> Control["Control service\nstate machine + window evaluator"]
     Control <--> DB[("PostgreSQL\nstate + request evidence + audit")]
     Control --> RoutePlan["Immutable route-plan snapshots"]
 
@@ -174,10 +177,10 @@ flowchart LR
     Router -. "shadow" .-> Candidate["Candidate predictor"]
     Router --> Candidate
 
-    Router --> EventIngest["Idempotent evidence ingest"]
+    Router --> EventIngest["Control-service endpoint/module\nidempotent evidence ingest"]
     Stable --> EventIngest
     Candidate --> EventIngest
-    EventIngest --> DB
+    EventIngest --> Control
 
     Router --> Metrics["Prometheus"]
     Stable --> Metrics
@@ -197,7 +200,8 @@ v0.1 has four custom deployable roles:
 
 PostgreSQL, MLflow, Prometheus, and Grafana are infrastructure services. Controller and window
 evaluation MUST be separate modules in the control-service codebase but MUST NOT be split into
-separate network services for v0.1.
+separate network services for v0.1. `EventIngest` in the diagram is an endpoint and module inside
+the control-service deployable, not a fifth custom deployable or a direct database writer.
 
 ### 6.2 Control service
 
@@ -206,7 +210,7 @@ The control service owns:
 - release-state transitions;
 - optimistic concurrency and idempotency;
 - versioned policy evaluation;
-- evidence ingestion and sealed windows;
+- an idempotent evidence-ingest endpoint/module and sealed windows;
 - generation of immutable route-plan snapshots;
 - promotion, rollback, and recovery decisions;
 - reconciliation after restart or partial failure;
@@ -242,7 +246,7 @@ artifact into one immutable image digest.
 The predictor:
 
 - accepts only the Bike Sharing v0.1 inference schema;
-- loads only the manifest-bound ONNX artifact;
+- loads only the image-artifact-descriptor-bound ONNX artifact;
 - rejects pickle, joblib, arbitrary Python import paths, and runtime model downloads;
 - emits finite, non-negative demand estimates or a stable safe error envelope;
 - exposes bounded operational metrics without payloads or unbounded labels;
@@ -277,19 +281,28 @@ named fault profiles. It MUST NOT write labels into predictor requests.
 Release flow is:
 
 1. Training/evaluation logs a run and numeric model version to MLflow and emits the frozen model,
-   split, preprocessing, evaluation, and policy evidence.
-2. Release CI builds an image containing serving code and ONNX, pushes it by digest, and creates
-   SBOM, provenance, attestation, scan, and release-manifest evidence.
-3. The isolated validator recomputes identity and contract checks. Only a PASS receipt permits
-   `VALIDATING -> VALIDATED`.
-4. The control service commits a shadow route plan. Router snapshots the plan without per-request
+   split, preprocessing, evaluation, and policy evidence. Release CI creates a canonical **image
+   artifact descriptor** that binds Git source SHA, ONNX digest, input/output-schema digest, and
+   serving-code/configuration identifier, then bakes that descriptor, ONNX, and serving code into
+   the image.
+2. Release CI pushes the image, resolves its immutable OCI digest, and only then generates the SPDX
+   SBOM, BuildKit provenance, GitHub artifact attestation, and dated scan evidence for that OCI
+   subject.
+3. After those subjects and digests exist, CI creates the **final canonical release manifest** and
+   derives `release_id`. Neither the manifest nor `release_id` is baked back into the image.
+4. The isolated validator recomputes identity and contract checks and emits a validation receipt.
+   Release CI then seals the **release-CI evidence bundle** containing the final manifest, supply-chain
+   objects/verification results, and that receipt. The control service verifies bundle integrity;
+   only an included PASS validation receipt permits `VALIDATING -> VALIDATED`.
+5. The control service commits a shadow route plan. Router snapshots the plan without per-request
    database access.
-5. Shadow generates paired predictions; delayed labels join outside the predictor; the control
+6. Shadow generates paired predictions; delayed labels join outside the predictor; the control
    service seals and evaluates the quality window.
-6. Passing shadow opens successive canary route plans. Canary request events supply operational
+7. Passing shadow opens successive canary route plans. Canary request events supply operational
    evidence, while Prometheus mirrors bounded aggregates for Grafana.
-7. A gate PASS advances one stage. FAIL commits rollback; UNKNOWN commits pause. Every decision
-   references immutable evidence and a monotonic route revision.
+8. A gate PASS advances one stage. FAIL commits rollback; UNKNOWN commits pause. The runtime
+   **decision receipt** references the final release identity, immutable evidence, and monotonic
+   route revisions; it is distinct from release-CI evidence.
 
 Shadow request and label flow is:
 
@@ -433,37 +446,62 @@ manufacture a more dramatic result.
 
 ## 9. Immutable release identity and MLflow boundary
 
-### 9.1 Canonical release ID
+### 9.1 Four distinct identity/evidence objects
 
-Every release has:
+v0.1 deliberately separates four objects whose creation times and claims differ:
+
+| Object | Created when | Required binding | Claim boundary |
+|---|---|---|---|
+| **Image artifact descriptor** | Before image build | Git source SHA, ONNX SHA-256, input/output-schema digest, serving-code/configuration identifier | Identifies the executable payload baked inside the image; it does not know the future OCI digest or `release_id` |
+| **Final canonical release manifest** | After OCI push and supply-chain evidence creation | Descriptor digest, immutable OCI reference, lineage/evaluation/policy digests, and supply-chain evidence digests | Defines the immutable release and is the only input to `release_id` |
+| **Release-CI evidence bundle** | After online release verification | Canonically indexed final manifest plus GitHub/registry verification records, SBOM, provenance, attestation, scan, and validator receipts | Shows what trusted release CI verified; it is not runtime rollout evidence |
+| **Decision receipt** | During/after release-control decisions | Final release ID plus windows, transitions, route plans, rollback, convergence, and recovery evidence | Makes the runtime decision recomputable within the stated audit boundary |
+
+The image artifact descriptor is RFC-8785 canonical JSON. Its serving-code/configuration identifier
+MUST be a digest of the predictor source subset, locked runtime dependencies, entry point, and frozen
+serving configuration. The descriptor is included in the OCI image beside the declared ONNX and
+schema files; validator recomputation MUST show that all four bindings match the image contents and
+source evidence.
+
+### 9.2 Final canonical release ID
+
+Only after the image has been pushed by digest and its supply-chain subjects exist does release CI
+construct:
 
 ```text
-release_id = sha256(RFC-8785-canonical-release-manifest-without-release_id)
+release_id = sha256(RFC-8785-canonical-final-release-manifest-without-release_id)
 ```
 
-The manifest MUST bind:
+The final canonical release manifest MUST bind:
 
-- registered model name and MLflow numeric model version;
-- MLflow source run ID;
+- image-artifact-descriptor digest and schema version;
+- registered model name, MLflow numeric model version, and MLflow source run ID;
 - ONNX SHA-256, byte size, opset, and operator inventory;
 - input- and output-schema digests;
-- Git source SHA;
+- Git source SHA and serving-code/configuration identifier;
 - training-configuration digest;
 - UCI DOI, source checksum, and attribution digest;
 - dataset and chronological-split manifest digests;
 - preprocessing and leakage-test receipt digests;
 - H1 evaluation-report digest;
 - OCI fully qualified repository and image digest;
-- SBOM digest;
-- build-provenance and GitHub-attestation bundle digests;
+- SPDX SBOM digest;
+- BuildKit provenance, GitHub-attestation bundle, and dated scan-receipt digests;
 - rollout-policy digest;
-- manifest schema version and canonicalization version.
+- manifest schema version and RFC-8785 canonicalization version.
 
 The self-referential `release_id` field is excluded from canonicalization. Human descriptions,
 mutable aliases, local paths, and timestamps that do not affect execution MUST NOT be included in
-the identity material.
+the identity material. The final manifest and `release_id` MUST NOT be baked back into the image or
+made subjects that the already-bound OCI attestation must attest. Any such bake-back would create a
+new OCI digest and is forbidden. GitHub attestation names the OCI subject; the final manifest binds
+that attestation evidence in one direction, so no self-attestation cycle exists.
 
-### 9.2 MLflow role
+At runtime, control service supplies the validated final `release_id` as read-only deployment
+metadata; it is not an image layer. Predictor echoes it in evidence, while router/control cross-check
+it against the signed plan and descriptor digest. A runtime value cannot redefine image identity.
+
+### 9.3 MLflow role
 
 MLflow stores experiments, runs, metrics, signatures, artifacts, model versions, and reviewer-facing
 lineage. It MUST use a database-backed registry. The deployment controller resolves the numeric
@@ -473,12 +511,13 @@ MLflow aliases MAY mirror `candidate` or `champion` for human navigation after a
 transaction. Predictors and routers MUST NOT load by alias. Reassigning an MLflow alias MUST NOT
 change active traffic.
 
-### 9.3 Active deployment identity
+### 9.4 Active deployment identity
 
-The environment has one singleton active-production pointer in PostgreSQL. Historical releases may
-retain lifecycle state `PRODUCTION` to record that they reached production, but exactly one release
-is active for current production traffic. Previous production releases remain immutable rollback
-targets until retention policy removes their runnable image outside v0.1.
+The environment has one singleton active-production pointer in PostgreSQL, nullable only before the
+one-time bootstrap in Section 10.5. Historical releases may retain lifecycle state `PRODUCTION` to
+record that they reached production, but exactly one release is active for current production
+traffic after initialization. Previous production releases remain immutable rollback targets until
+retention policy removes their runnable image outside v0.1.
 
 ## 10. Release state machine
 
@@ -508,9 +547,12 @@ Exception states are:
 
 `REJECTED`, `ROLLED_BACK`, and `QUARANTINED` are terminal for that `release_id`. Correcting the
 artifact, policy, or evidence creates a new manifest and release ID. `PAUSED` is resumable only to
-the stage captured in its `resume_state`. Entering `PAUSED` commits a new route revision with stable
-at 100% and candidate/shadow at 0%; pause preserves the candidate for a new comparable evidence
-window but does not continue experimental traffic.
+the stage captured in its `resume_state`, which MUST be `VALIDATING`, `SHADOW`, or the originating
+canary stage. Entering `PAUSED` from shadow/canary commits a new signed route revision with stable at
+100% and candidate/shadow at 0%; a validation pause has no candidate route to remove but still
+records the state transition. Pause preserves the candidate for a new comparable evidence window
+but does not continue experimental traffic. `PRODUCTION` cannot enter a temporary pause: a safety
+decision there is rollback or quarantine.
 
 ### 10.2 Allowed transitions
 
@@ -519,6 +561,7 @@ window but does not continue experimental traffic.
 | none | `SUBMITTED` | Unique release ID and idempotent submission |
 | `SUBMITTED` | `VALIDATING` | Validator job accepted |
 | `VALIDATING` | `VALIDATED` | Artifact, offline eligibility, and supply-chain gates PASS |
+| `VALIDATING` | `PAUSED` | Required validation evidence is missing, stale, incomplete, or otherwise `UNKNOWN` |
 | `VALIDATING` | `REJECTED` | Non-security validation or offline eligibility FAIL |
 | `VALIDATING` | `QUARANTINED` | Digest, signature, provenance, forbidden format, or trust failure |
 | `VALIDATED` | `SHADOW` | Stable release healthy; shadow route plan committed |
@@ -532,9 +575,11 @@ window but does not continue experimental traffic.
 | any canary state | `PAUSED` | Required evidence UNKNOWN |
 | any canary state | `ROLLED_BACK` | Operational gate FAIL or safe manual rollback |
 | any canary state | `QUARANTINED` | Integrity or supply-chain failure |
-| `PAUSED` | recorded `resume_state` | Cause resolved; a new evidence window is opened |
-| `PAUSED` | `REJECTED` | Safe termination when `resume_state` is `VALIDATED` or `SHADOW` |
-| `PAUSED` | `ROLLED_BACK` | Safe termination when `resume_state` is a canary or `PRODUCTION` |
+| `PAUSED` | `VALIDATING` | `resume_state=VALIDATING`; prerequisites rechecked and a fresh validation attempt opened |
+| `PAUSED` | `SHADOW` | `resume_state=SHADOW`; prerequisites rechecked and a fresh paired window plus signed route revision opened |
+| `PAUSED` | originating canary state | `resume_state` is that canary; prerequisites rechecked and a fresh operational window plus signed route revision opened |
+| `PAUSED` | `REJECTED` | Safe termination when `resume_state` is `VALIDATING` or `SHADOW` |
+| `PAUSED` | `ROLLED_BACK` | Safe termination when `resume_state` is a canary state |
 | `PAUSED` | `QUARANTINED` | Integrity or trust failure discovered |
 | `PRODUCTION` | `ROLLED_BACK` | Post-promotion rollback-window gate FAIL or safe manual rollback |
 | `PRODUCTION` | `QUARANTINED` | Critical integrity or trust failure |
@@ -556,28 +601,74 @@ Every transition command MUST include:
 - reason code.
 
 The PostgreSQL transaction MUST lock the environment and release rows, verify the expected state
-and revision, apply the state/weight change, increment route revision, append the decision event,
-and store the receipt reference. A unique idempotency constraint MUST return the original result for
-an exact retry and MUST reject a reused key with different content.
+and revision, construct and sign the next route-plan payload for every committed lifecycle
+transition (even when the safe weights are unchanged), apply the state/weight/pointer change,
+increment route revision, persist the signed route plan, append the
+decision event, and store the receipt reference. If signing or any persistence step fails, the whole
+transaction aborts. The API can serve only a committed route-plan row. A unique idempotency
+constraint MUST return the original result for an exact retry and MUST reject a reused key with
+different content.
 
-A database uniqueness constraint on the singleton environment row MUST ensure exactly one active
-production pointer. Duplicate evaluator results MUST resolve to the previously committed transition
-or a no-op stale-result event; they MUST NOT advance two stages.
+A database constraint on the singleton environment row MUST allow a null active pointer only while
+`initialized=false`, and require exactly one non-null active pointer after initialization. Duplicate
+evaluator results MUST resolve to the previously committed transition or a no-op stale-result event;
+they MUST NOT advance two stages.
 
 ### 10.4 Manual override
 
-v0.1 has no RBAC system. A local operator MAY issue a safety-reducing override only:
+v0.1 has no RBAC system. A local operator MAY issue only these safety actions:
 
-- pause a release;
-- reduce candidate weight;
-- terminate a pre-canary release as rejected or initiate rollback after client-visible candidate
-  traffic.
+- `PAUSE` while a release is in `VALIDATING`, `SHADOW`, or a canary state;
+- `ROLLBACK` after a release has received client-visible traffic in a canary state or
+  `PRODUCTION`.
 
-An override MUST record actor, reason, creation time, expiry time, previous route revision, and
-resulting route revision. Maximum duration for a temporary pause or weight reduction is 24 hours.
-An expired temporary override is reconciled to the latest policy-safe state. A rollback override is
-terminal for that release; its expiry equals its commit time and never schedules restoration.
-v0.1 manual override MUST NOT promote, bypass `UNKNOWN`, or release a quarantined artifact.
+An override MUST record actor, reason, creation time, expiry/review time, previous route revision,
+and resulting route revision. A `PAUSE` expiry never auto-resumes traffic: the release remains
+`PAUSED` and stable-only. Explicit `RESUME` must prove the recorded cause resolved, revalidate all
+current prerequisites, commit a new signed route revision, and open a new window; the old window can
+never continue. A rollback override is terminal for that release and never schedules restoration.
+v0.1 has no arbitrary manual weight reduction. Manual action MUST NOT promote, bypass `UNKNOWN`,
+reuse stale evidence, or recover/release a quarantined artifact.
+
+### 10.5 Environment bootstrap and active-pointer invariant
+
+Before the first normal candidate, a one-time audited `BOOTSTRAP_ENVIRONMENT` operation establishes
+the baseline stable release. The baseline MUST pass the same artifact-descriptor, final-manifest,
+schema, runtime-smoke, and supply-chain validation required for later candidates. Its evidence class
+is `bootstrap_baseline`: it claims initial trusted/runnable eligibility only and MUST NOT claim that
+the baseline passed paired shadow or canary promotion.
+
+The initialization transaction verifies the environment has never been initialized, locks its
+singleton row, sets the baseline lifecycle state to `PRODUCTION`, sets the singleton active-production
+pointer to that release, creates the first signed stable-only route plan, and appends the bootstrap
+audit event. Before this transaction, a zero active pointer is allowed; routers are not ready and
+return a controlled 503. After it, the active pointer is never inferred from lifecycle state.
+
+Every later release follows the complete normal state machine. Multiple historical releases may
+therefore retain lifecycle state `PRODUCTION`, but exactly one singleton pointer defines current
+traffic. API, router, dashboard, rollback, recovery, and reconciliation queries MUST resolve active
+production through that pointer and MUST NOT use `WHERE state = 'PRODUCTION'` as an active-release
+lookup. Promotion additionally requires the current active release to remain retained, runnable,
+validated, and healthy as the previous-stable rollback target.
+
+### 10.6 Quarantine routing semantics
+
+An integrity or supply-chain trust failure is never audit-only:
+
+- from `SHADOW` or any canary state, one transaction sets candidate/shadow weight to zero, stable to
+  100%, marks the candidate `QUARANTINED`, increments revision, and stores the signed stable-only
+  route plan plus audit evidence;
+- from `PRODUCTION`, one transaction moves the singleton active pointer back to the retained
+  previous stable, marks the affected release `QUARANTINED`, increments revision, and stores the
+  signed previous-stable-only plan plus audit evidence;
+- from pre-routing states, quarantine changes state and records evidence while committing a new
+  signed stable-only revision; the candidate already has zero route weight, but the integrity
+  decision is still visible in state and routing history.
+
+If the required retained previous stable is unexpectedly not runnable at production quarantine,
+the compromised release still receives zero new admissions and the environment becomes not ready
+with controlled 503 responses; it MUST NOT continue serving the quarantined artifact or silently
+select a different release. This is an incident that violates the promotion/retention invariant.
 
 ## 11. Routing contract
 
@@ -615,35 +706,94 @@ selected client-visible release, optional shadow release, and disposition.
 Exactly one predictor response may become client-visible. Shadow output is never eligible to replace
 a stable error or timeout.
 
-### 11.3 Route-plan cache and convergence
+### 11.3 Signed route-plan transaction
 
-The router polls the control service for a new route plan every 500 ms. It never queries PostgreSQL
-directly. A successful fetch installs a fully validated immutable snapshot and starts a 2-second
-monotonic lease. PostgreSQL `LISTEN/NOTIFY` MAY later reduce typical propagation time, but bounded
-polling and the lease are the v0.1 contract and require no additional infrastructure.
+The route-plan payload is RFC-8785 canonical JSON and contains exactly the routing authority needed
+by a router:
+
+- environment ID and monotonic route revision;
+- rollout-policy digest;
+- stable and optional candidate final `release_id` values;
+- exact stable/candidate/shadow bucket weights;
+- UTC creation time for audit display;
+- lease contract version, poll interval, RPC deadline, and maximum lease duration.
+
+`stable release_id` always names the retained validated fallback. During canary, `candidate
+release_id` names the release under evaluation. Immediately after promotion it remains the active
+100%-weighted release while the stable field continues to name the retained previous stable; this
+lets an expired old plan fail stable-only without selecting the just-quarantined active release. On
+the next candidate submission, the current active pointer becomes that new plan's stable field and
+the submitted release becomes its zero-weight candidate. The bootstrap plan is the sole special
+case: it names the baseline in the stable field and has no candidate.
+
+The control service alone holds the Ed25519 private key as a Compose secret. Routers contain only a
+pinned Ed25519 public key. Its SHA-256 fingerprint is bound into the environment record and
+`bootstrap_baseline` evidence. v0.1 has no online key rotation: changing the key requires an audited
+environment rebootstrap procedure outside normal release transitions; silent dual-key acceptance is
+forbidden.
+
+While the transition transaction is open and after expected state/revision checks pass, the control
+service constructs the next payload, RFC-8785 canonicalizes it to bytes, computes those bytes'
+SHA-256 digest, signs the canonical bytes with Ed25519, and inserts payload, digest, and signature
+together with the state, active-pointer/weight, revision, and audit changes. The row is not
+externally visible before commit;
+an aborted transaction discards the proposed payload/signature. The route-plan API serves only the
+single current committed row and sets `Cache-Control: no-store`; it has no application/proxy cache
+of an older active revision.
+
+### 11.4 Route-plan cache, lease, and convergence
+
+The router starts one poll every 500 ms and gives each control-API RPC a hard 500 ms monotonic
+deadline. It never queries PostgreSQL directly. A within-deadline response may install or refresh a
+fully validated immutable snapshot and gives that exact revision a maximum 1.5-second monotonic
+lease. A response completing after its RPC deadline is discarded. PostgreSQL `LISTEN/NOTIFY` MAY
+later reduce typical propagation time, but polling, deadline, and lease are the v0.1 contract.
+
+A repeated response for the same revision may extend its lease only when it came from a new live,
+within-deadline API response that passes digest/signature validation. A cached response, local replay,
+late RPC, or already-consumed response cannot renew a lease. After a rollback commit, the control API
+begins reads from the new committed current row and never initiates a response containing the old
+active revision. A response whose database read completed before commit may still arrive at most
+500 ms after commit; its last possible 1.5-second lease therefore expires no later than 2 seconds
+after commit. The old revision cannot be refreshed indefinitely.
 
 If the router cannot refresh before lease expiry, it MUST enter stable-only safe mode: new requests
-use the last known active stable release and no candidate or shadow traffic is emitted. A router
-without any previously validated stable release is not ready and rejects requests with a controlled
-503 response.
+use the last locally validated stable release from the signed plan and no candidate or shadow traffic
+is emitted. A router without any previously validated stable release is not ready and rejects
+requests with a controlled 503 response. A restarted router starts with no lease and admits no
+candidate until it obtains the current valid signed plan.
 
-For healthy local services, any request admitted more than 2 seconds after a committed rollback MUST
-not be routed to the candidate. This is the **router convergence SLA**. The controller exposes
-acknowledged route revisions for every router instance; recovery is not confirmed until all healthy
-routers acknowledge the rollback revision.
+For every route-changing commit, including rollback/quarantine, the control service snapshots a
+`required_convergence_set` containing every router `(instance_id, boot_id)` that was registered,
+reported ready, and sent a heartbeat within the preceding fixed 1-second pre-commit interval. The
+set is immutable after commit. Passing the **router convergence SLA** requires every member to remain
+ready continuously through the 2-second deadline and acknowledge the committed revision, and
+requires zero candidate admissions after that deadline.
 
-### 11.4 In-flight requests
+For a transition that enables or increases candidate traffic, an empty
+`required_convergence_set` is `UNKNOWN` and cannot advance the release. Safety-reducing rollback or
+quarantine still commits when the set is empty, but incident recovery remains pending until a router
+starts stable-only and adopts the current signed revision.
+
+A crash, readiness loss, or new `boot_id` during the deadline is recorded separately and never
+removes/reclassifies the original member to make the SLA pass. Convergence remains pending/failing
+until the restarted process proves stable-only startup and adopts the current signed plan; the new
+boot identity is additional recovery evidence, not a replacement in the frozen set. The 2-second
+claim applies only to processes that remain ready for the whole deadline, while restart safety is a
+separate invariant. Dashboards and receipts expose both results.
+
+### 11.5 In-flight requests
 
 A request admitted before rollback continues under its bound snapshot. It is not cancelled or
 rerouted. Its completion event retains the old revision and MAY arrive after rollback. Such a result
 is valid historical evidence but cannot reopen or alter a sealed decision window.
 
-### 11.5 Stale-plan and reconciliation behavior
+### 11.6 Stale-plan and reconciliation behavior
 
 The router rejects route plans with:
 
 - a lower revision than currently cached;
-- an invalid signature/digest;
+- an invalid Ed25519 signature, digest, pinned-key fingerprint, or RFC-8785 payload;
 - an unknown release;
 - weights that do not sum to 10,000 buckets;
 - multiple client-visible routes for one bucket;
@@ -653,7 +803,7 @@ The control-service reconciliation loop runs every 5 seconds. It compares releas
 production pointer, route plan, transition event, and router acknowledgements. It republishes an
 equivalent plan idempotently or initiates safe rollback when state cannot be reconciled. Controller
 restart reconstructs state from PostgreSQL; router restart begins stable-only until it obtains a
-valid leased snapshot.
+valid signed leased snapshot.
 
 ## 12. Artifact and supply-chain validation
 
@@ -675,8 +825,10 @@ execution remain isolated and resource bounded.
 
 The validator MUST:
 
-1. validate manifest schema and RFC 8785 canonicalization;
-2. recompute the release ID and all referenced SHA-256 digests;
+1. validate the image artifact descriptor and final release manifest schemas and RFC 8785
+   canonicalization;
+2. recompute the descriptor digest, final release ID, and all referenced SHA-256 digests, and prove
+   that the descriptor inside the OCI image matches its ONNX, schemas, and serving code/config;
 3. reject any OCI reference that lacks a digest or relies on a mutable tag;
 4. reject pickle, joblib, Python marshal, executable archives, and arbitrary Python model loaders;
 5. validate ONNX byte size, opset, graph inputs/outputs, tensor shapes, and operator allowlist;
@@ -686,7 +838,8 @@ The validator MUST:
 8. run deterministic smoke fixtures under resource and time limits;
 9. verify model output is schema-valid, finite, and non-negative;
 10. verify the MLflow numeric version snapshot and artifact digest;
-11. verify Git source, training config, dataset, split, leakage, evaluation, and policy digests;
+11. verify Git source, serving-code/configuration, training config, dataset, split, leakage,
+    evaluation, and policy digests;
 12. verify the GitHub attestation repository, workflow identity, commit SHA, subject name, and OCI
     digest;
 13. verify BuildKit provenance and an SPDX SBOM are attached to the same OCI subject;
@@ -719,14 +872,24 @@ An unexpired scan is part of the release manifest.
 
 ### 12.5 Release CI verification
 
-The authoritative release-CI evidence is produced by a trusted GitHub Actions workflow and includes:
+The authoritative release-CI evidence bundle is produced by a trusted GitHub Actions workflow only
+after the OCI digest and supply-chain subjects exist. It includes:
 
 - the real GHCR subject name and digest;
 - GitHub artifact attestation bound to repository, workflow, triggering commit, and image digest;
 - BuildKit provenance;
 - an attached SPDX SBOM;
 - vulnerability and license scan receipts;
-- release manifest and validator receipt.
+- final canonical release manifest, release ID, and validator receipt.
+
+The bundle has an RFC-8785 canonical inventory of member path, media type, byte size, and SHA-256;
+the SHA-256 of that inventory is the bundle digest used by control-plane and decision receipts. The
+inventory does not contain its own digest.
+
+The workflow ordering is descriptor -> image build/push -> OCI digest -> SBOM/provenance/GitHub
+attestation/scan -> final manifest/release ID -> validation -> sealed release-CI evidence bundle.
+No later step mutates or rebuilds the OCI subject. A changed descriptor, image, supply-chain object,
+or final manifest creates a different digest and requires a new candidate submission.
 
 Actions MUST be pinned to full commit SHAs. Secrets MUST use secret mounts or GitHub credential
 mechanisms and MUST NOT be passed as Docker build arguments. A local developer image is eligible only
@@ -738,7 +901,7 @@ The reviewer fast path does not require GitHub CLI, GHCR identity lookup, networ
 online attestation check. It verifies:
 
 - local bundle inventory and digests;
-- release-manifest canonicalization and release ID;
+- image-descriptor and final-release-manifest canonicalization and release ID;
 - ONNX and fixture hashes;
 - the included SBOM/provenance/attestation evidence bundle digests;
 - the recorded release-CI verification receipt;
@@ -784,35 +947,69 @@ prediction participates in group membership.
 
 ### 13.4 Paired quality metrics and gates
 
-For each paired labeled request `i`:
+For each schema-valid, paired, labeled request `i` in group `g` (where `overall` is also a group):
 
 ```text
 stable_error_i    = abs(stable_prediction_i - label_i)
 candidate_error_i = abs(candidate_prediction_i - label_i)
-paired_delta_i    = candidate_error_i - stable_error_i
+R_g               = mean(candidate_error_i in g) / mean(stable_error_i in g)
 ```
 
-The H1 offline eligibility gate requires:
+The H1 offline eligibility gate and H2 paired-shadow quality gate use the same frozen ratio method:
 
-- candidate overall MAE no greater than `0.97 * stable overall MAE`;
-- each eligible subgroup candidate MAE no greater than `1.05 * stable subgroup MAE`;
-- 100% finite, non-negative predictions;
-- each subgroup denominator at least 100; a smaller denominator is `UNKNOWN`, not omitted.
+- overall point ratio `R_overall <= 0.97` **and** its one-sided 95% bootstrap upper confidence
+  bound `UCB95_overall <= 0.97`;
+- for every subgroup declared in Section 13.3, point ratio `R_g <= 1.05` **and**
+  `UCB95_g <= 1.05`;
+- 100% finite, non-negative predictions for successful outputs;
+- at least 100 paired labeled rows in every predeclared subgroup. If any one subgroup has fewer than
+  100, the entire quality gate is `UNKNOWN`; that subgroup cannot be called ineligible, omitted, or
+  hidden behind an overall result;
+- a positive stable-error mean for overall and every subgroup in every point/bootstrap calculation.
+  A zero or non-finite ratio denominator makes the entire quality gate `UNKNOWN` rather than
+  receiving a special favorable interpretation.
 
-The H2 paired-shadow promotion gate requires:
+H1 applies this protocol to the frozen chronological H1 evaluation rows. H2 independently applies
+it to the sealed paired-shadow rows; passing H1 does not waive any H2 requirement. H2 additionally
+requires:
 
 - at least 2,000 valid paired predictions overall;
 - overall label completeness at least 99.5%;
-- label completeness at least 99.0% within every subgroup having at least 100 expected requests;
-- candidate overall MAE no greater than `0.97 * stable overall MAE`;
-- the one-sided 95% paired-bootstrap upper bound for mean `paired_delta` no greater than zero;
-- each eligible subgroup candidate MAE no greater than `1.05 * stable subgroup MAE`;
-- no subgroup with an expected denominator of at least 100 may have a final denominator below 100;
+- label completeness at least 99.0% within every predeclared subgroup;
+- at least 100 final paired labeled rows in every predeclared subgroup regardless of its expected
+  denominator;
 - schema-valid, finite, non-negative candidate output for every candidate success.
 
-The paired bootstrap uses 2,000 resamples and RNG seed 2026, samples paired request rows with
-replacement, and is defined in the policy manifest before H2 access. These criteria are a release
-policy for this fixture, not a general claim of statistical or operational optimality.
+### 13.5 Frozen paired calendar-day cluster bootstrap
+
+Row-IID resampling is forbidden because adjacent hourly Bike Sharing observations are temporally
+correlated. Stable prediction, candidate prediction, label, source `calendar_day`, and fixed subgroup
+memberships are first joined for the identical request ID. `calendar_day` is evaluator-side source
+metadata derived from the frozen split, never a predictor input. The bootstrap then:
+
+1. forms the sorted set of distinct source calendar days in the sealed evidence set;
+2. uses `numpy.random.Generator(PCG64(2026))` to sample that many calendar-day indices with
+   replacement for each replicate;
+3. retains **all** joined hourly pairs belonging to every sampled day occurrence; if a day is drawn
+   twice, all of its rows contribute twice;
+4. calculates the overall ratio from all sampled rows and each subgroup ratio by filtering those
+   same sampled day clusters to that fixed subgroup;
+5. repeats exactly 2,000 times and sorts each set of replicate ratios ascending;
+6. defines the one-sided 95% upper bound as nearest rank
+   `UCB95_g = sorted_ratios_g[ceil(0.95 * 2000) - 1]`, zero-based element 1,899.
+
+The point ratio always uses the original unresampled rows. The resampling unit, RNG algorithm, seed,
+replicate count, ratio statistic, nearest-rank quantile, subgroup filtering, and zero/non-finite
+rules are identical for overall and subgroup calculations and are bound into the rollout-policy
+digest before H1 or H2 results are read. A bootstrap replicate with no rows for any fixed subgroup,
+or with a zero/non-finite stable mean, makes the entire quality gate `UNKNOWN`.
+
+The synthetic reviewer fixture contains at least 2,000 paired labeled observations, valid source
+calendar-day clusters, and at least 100 rows in every predeclared subgroup. Its frozen stable and
+candidate outputs are constructed so both point ratios and both one-sided UCB thresholds explicitly
+PASS. That deterministic fixture proves the gate machinery; it is labeled synthetic and does not
+substitute for natural H1/H2 evidence. These criteria are a release policy for this workload, not a
+general claim of statistical or operational optimality.
 
 If overall or subgroup label missingness violates these limits, quality is `UNKNOWN` and the release
 enters `PAUSED`. Non-random label loss MUST NOT be hidden by reporting only overall completeness.
@@ -838,18 +1035,36 @@ promotion gate.
 
 Each stage seals two consecutive passing operational windows before progression:
 
-| Stage | Candidate weight | Candidate responses required per window | Maximum window duration |
+| Stage | Candidate weight | Candidate admissions required per window | Maximum window duration |
 |---|---:|---:|---:|
 | `CANARY_10` | 10% | 300 | 15 minutes |
 | `CANARY_25` | 25% | 500 | 15 minutes |
 | `CANARY_50` | 50% | 1,000 | 15 minutes |
 
-A window seals when its candidate-response count is reached or its maximum duration elapses. A
-duration-expired window with insufficient sample is `UNKNOWN`. Natural full-workload and synthetic
-review scenarios use the same gate semantics; the synthetic scenario is labeled test evidence and
-cannot replace natural workload release evidence.
+A candidate admission is the router's durable decision to dispatch an accepted request to candidate
+as its client-visible execution role. The admission is counted once by
+`(request_id, release_id, route_revision)` even if the terminal event is retried or duplicated. A
+window seals when its unique candidate-admission count is reached or its maximum duration elapses.
+A duration-expired window with insufficient admissions is `UNKNOWN`. Natural full-workload and
+synthetic review scenarios use the same gate semantics; the synthetic scenario is labeled test
+evidence and cannot replace natural workload release evidence.
 
 ### 14.3 Operational SLO
+
+For one sealed canary window, denominators are frozen as follows:
+
+| Metric | Numerator / sample | Denominator |
+|---|---|---|
+| Application error rate | Unique admissions ending in timeout, 5xx, predictor crash/disconnect, or other declared application/transport failure | All unique candidate admissions |
+| Event-accounting completeness | Unique candidate admissions with exactly one terminal event by the lateness deadline | All unique candidate admissions |
+| Output-schema validity | Schema-valid candidate 2xx responses | All candidate 2xx responses |
+| Candidate latency p95 | Router-measured latency samples for successful, schema-valid candidate terminal responses | That same successful, schema-valid response set only |
+
+A timeout, 5xx, crash, disconnect, or invalid output never becomes a latency sample, but remains in
+the candidate-admission denominator and its applicable error/schema/accounting evidence. A missing
+terminal event reduces accounting completeness. An exact duplicate terminal event does not add an
+admission, response, or latency sample; a conflicting duplicate follows Section 15.2. Thus failures
+cannot disappear merely because no usable response was returned.
 
 Every canary window MUST satisfy:
 
@@ -861,7 +1076,8 @@ Every canary window MUST satisfy:
 - routed-request to terminal-event accounting completeness: at least 99.9%;
 - zero conflicting duplicate terminal events;
 - zero request IDs with more than one client-visible response source;
-- no healthy router more than one route revision behind for longer than 2 seconds.
+- every member of the route transition's frozen `required_convergence_set` satisfies the 2-second
+  convergence contract, with restart evidence evaluated separately.
 
 Stable/candidate p95 ratio and stable memory are displayed as diagnostics. A ratio gate is not
 authoritative because the two canary populations are not paired. The absolute candidate SLO is the
@@ -872,12 +1088,43 @@ occurs:
 
 - one OOM or unexpected candidate process restart;
 - one request receives conflicting client-visible responses;
-- candidate error rate exceeds 5% after at least 50 candidate requests;
+- candidate error rate exceeds 5% after at least 50 unique candidate admissions;
 - a validated artifact or attestation is later found inconsistent.
 
 The resulting partial window remains in the audit receipt and is marked `FAIL`, not discarded.
 
-### 14.4 Drift and traffic-comparability monitor
+### 14.4 Frozen reviewer/load performance profile
+
+All authoritative natural and synthetic canary performance claims use this one profile:
+
+- each predictor container receives exactly `1.0` CPU and a hard memory limit of `384 MiB`;
+- the policy memory threshold is `256 MiB`, deliberately below the container limit so a measured
+  breach can roll back before OOM;
+- each request is exactly one row of the frozen Bike Sharing v0.1 input schema;
+- the replay harness admits `80 requests/second` with at most `32` total in-flight requests;
+- before a measured scenario, stable and candidate each receive at least 200 warm-up requests;
+  warm-up events carry a warm-up flag and are excluded from all evidence windows and SLO metrics;
+  immediately afterward the harness must verifiably reset the candidate cgroup v2 `memory.peak`
+  before opening the first window, otherwise memory evidence is `UNKNOWN`;
+- candidate latency is measured in the router with its monotonic clock: start immediately before
+  enqueueing/dispatching the predictor RPC and stop only after the full response has been received.
+  It therefore includes router queueing, request serialization, Compose networking, predictor
+  execution, response serialization, and return transport;
+- elapsed nanoseconds are converted to integer microseconds with ceiling division. For `n`
+  successful schema-valid samples sorted ascending, p95 is the nearest-rank value at one-based index
+  `ceil(0.95 * n)`; interpolation and platform-library default quantiles are forbidden;
+- memory is the maximum Linux cgroup v2 `memory.peak` observed after the verified post-warm-up reset
+  for the candidate container. If `memory.peak` is unavailable, unreadable, cannot be reset, or
+  cannot be bound to that container, the entire canary window is `UNKNOWN`; process RSS, Docker UI
+  values, and host-level estimates MUST NOT be substituted;
+- natural runs and injected-failure runs use distinct predictor container lifetimes, route
+  revisions, windows, and receipts. Their latency or memory samples are never pooled.
+
+Docker Desktop must expose the Linux cgroup v2 measurement contract to qualify the host for the
+authoritative performance path. A host that cannot do so may inspect the demo but cannot produce a
+PASS canary receipt.
+
+### 14.5 Drift and traffic-comparability monitor
 
 Drift is monitored but is not treated as proof of quality degradation. The frozen input reference
 uses 2011 training rows from the same calendar month as the current replay request, so expected
@@ -924,7 +1171,10 @@ Every sealed window includes:
 - route revision and policy digest;
 - UTC start/end times and monotonic duration;
 - expected and observed routed requests;
-- accepted, completed, errored, and timed-out counts;
+- accepted requests, unique candidate/stable admissions, completed, 2xx, schema-valid, errored,
+  timed-out, crash/disconnect, and missing-terminal counts;
+- explicit application-error, output-schema-validity, event-accounting, and latency-sample
+  numerators/denominators;
 - exact duplicate count and conflicting duplicate count;
 - missing, late, and out-of-order event counts;
 - stable/candidate paired denominator;
@@ -950,8 +1200,8 @@ mutate the sealed window.
 
 ### 15.3 Fail-closed rules
 
-Any of the following produces `UNKNOWN` and `PAUSED`, unless a stricter integrity rule requires
-`QUARANTINED`:
+During `VALIDATING`, `SHADOW`, or canary, any of the following produces `UNKNOWN` and `PAUSED`,
+unless a stricter integrity rule requires `QUARANTINED`:
 
 - missing telemetry beyond the stage completeness threshold;
 - conflicting duplicate evidence;
@@ -963,7 +1213,9 @@ Any of the following produces `UNKNOWN` and `PAUSED`, unless a stricter integrit
 - unrecognized metric or receipt schema version.
 
 `UNKNOWN` MUST never satisfy a promotion precondition. A new window opened after remediation gets a
-new ID and cannot overwrite the unknown window.
+new ID and cannot overwrite the unknown window. `PRODUCTION` never transitions to `PAUSED`: unknown
+post-promotion evidence creates an unresolved incident/alert and blocks any new automatic release
+progression, but only a policy FAIL may roll back and a trust failure may quarantine.
 
 ### 15.4 Decision source versus observability source
 
@@ -985,10 +1237,11 @@ A release may progress only when all cumulative prerequisites are PASS:
 - current canary-stage operational SLO;
 - evidence completeness;
 - current policy and route revision;
-- healthy stable rollback target.
+- retained previous stable rollback target that is still validated, runnable, and healthy.
 
 Promotion to `PRODUCTION` atomically updates the candidate state, active-production pointer, route
-weights, route revision, audit event, and receipt reference. MLflow alias synchronization occurs
+weights, route revision, signed route plan, audit event, and receipt reference. It also stores the
+retained previous-stable pointer used by rollback/quarantine. MLflow alias synchronization occurs
 after commit and is non-authoritative; alias failure cannot roll back a valid database transaction
 or change traffic.
 
@@ -1001,23 +1254,27 @@ One PostgreSQL transaction atomically:
 - restores the previous active stable release to 100% client-visible traffic;
 - sets candidate state to `ROLLED_BACK`;
 - increments route revision;
+- creates and persists the RFC-8785 payload, digest, and Ed25519 signature for the new stable-only
+  route plan;
 - appends the rollback decision event;
 - stores the rollback-receipt reference.
 
 This transaction does not switch every router at the same instant. Routers converge under the
-2-second route-plan lease. Documentation and dashboards MUST use the phrase **atomic control-plane
-rollback with bounded data-plane convergence**, not instantaneous global rollback.
+500-ms polling/deadline plus 1.5-second maximum route-plan lease. Documentation and dashboards MUST
+use the phrase **atomic control-plane rollback with bounded data-plane convergence**, not
+instantaneous global rollback.
 
 ### 16.3 Recovery verification
 
 Rollback is followed by two consecutive recovery windows. Each recovery window requires:
 
-- at least 300 stable responses;
+- at least 300 unique stable admissions and their denominator-preserving terminal accounting;
 - stable error rate at most 1.0%;
 - stable p95 latency at most 25 ms under the frozen profile;
 - 100% schema-valid stable responses;
 - at least 99.9% request-event accounting completeness;
-- all healthy routers acknowledging the rollback revision;
+- every member of the frozen `required_convergence_set` satisfying Section 11.4, plus separate safe
+  evidence for any restart;
 - zero new candidate admissions after the 2-second convergence deadline.
 
 Rollback is recorded immediately, but incident status remains `RECOVERY_PENDING` until both windows
@@ -1034,7 +1291,7 @@ between candidate and stable.
   implicit failover.
 - MLflow outage blocks new validation and lineage operations but does not change an active route.
 - Prometheus or Grafana outage removes dashboards but does not alter durable gate evaluation.
-- PostgreSQL outage stops transitions. Routers use the current plan only until its 2-second lease
+- PostgreSQL outage stops transitions. Routers use the current plan only until its 1.5-second lease
   expires, then enter stable-only safe mode.
 - Replay-harness interruption leaves the current window open until its duration and lateness
   allowance end; insufficient evidence becomes `UNKNOWN`.
@@ -1044,7 +1301,7 @@ between candidate and stable.
 ### 17.1 Natural workload evidence
 
 Natural evidence uses the actual stable/candidate ONNX models and frozen UCI splits. It records
-quality, subgroup quality, latency, RSS/cgroup memory, artifact size, and image size. No natural
+quality, subgroup quality, latency, Linux cgroup v2 `memory.peak`, artifact size, and image size. No natural
 outcome is predeclared. A natural candidate that passes all gates is promoted in the controlled
 local experiment; a candidate that fails is rejected or rolled back according to the evidence.
 
@@ -1070,17 +1327,24 @@ claim.
 The reviewer scenario is:
 
 1. load prebuilt synthetic stable/candidate release fixtures;
-2. validate manifest, local digests, and recorded release-CI evidence;
-3. run paired shadow and pass its synthetic quality fixture;
+2. validate the image artifact descriptor, final manifest, local digests, and recorded release-CI
+   evidence;
+3. recompute a deliberately better candidate offline result (frozen fixture point overall MAE ratio
+   `0.90`, one-sided UCB `0.95`, all subgroup point/UCB ratios at most `1.05`) and then run paired
+   shadow, where all quality and subgroup gates explicitly PASS;
 4. enter `CANARY_10` with `latency_plus_30ms` enabled for candidate;
-5. seal a candidate window whose p95 exceeds 25 ms;
-6. commit atomic control-plane rollback;
-7. observe every healthy router converge within 2 seconds;
+5. seal the first 300-candidate-admission window; because every eligible candidate latency sample
+   receives at least 30 ms injected delay, its nearest-rank p95 exceeds the 25 ms SLO;
+6. automatically reject promotion and commit atomic control-plane rollback to the retained stable;
+7. observe every continuously ready member of the frozen convergence set acknowledge within 2
+   seconds, with no member removed after commit;
 8. pass two stable recovery windows;
 9. export and locally verify the decision receipt.
 
 The dashboard and README MUST label this as `INJECTED FAILURE — EXPECTED TEST OUTCOME`. It MUST NOT
-be described as measured natural model latency or a production incident.
+be described as measured natural model latency or a production incident. Its persuasive point is
+the causal ordering: a candidate with better frozen offline/paired quality still cannot advance when
+the independent client-visible operational gate fails.
 
 ## 18. Decision receipt and audit trail
 
@@ -1109,16 +1373,17 @@ boundary.
 The final machine-readable decision receipt includes:
 
 - receipt and schema version;
-- release and stable manifests or their digests;
+- candidate/stable final release manifests or their digests and image-artifact-descriptor digests;
 - MLflow numeric-version references;
 - OCI, ONNX, SBOM, provenance, and attestation digests;
 - policy and routing-seed digests;
 - all sealed windows used by the decision;
 - every lifecycle transition and route revision;
-- rollback and router-convergence evidence when applicable;
+- signed route-plan payload/digest/signature references, rollback, frozen
+  `required_convergence_set`, per-router acknowledgement, and restart evidence when applicable;
 - recovery-window evidence;
-- evidence-class labels: measured workload, injected test, release-CI verified, or locally
-  recomputed;
+- evidence-class labels: `bootstrap_baseline`, measured workload, injected test, release-CI
+  verified, or locally recomputed;
 - canonical receipt digest.
 
 An offline verifier recomputes manifest/window/receipt digests, applies the versioned policy to the
@@ -1208,6 +1473,34 @@ pull and first-time extraction are excluded from that target and MUST be measure
 separately after implementation. The documentation MUST not silently combine or omit cold-start
 time.
 
+### 20.3 Frozen five-minute request budget
+
+The synthetic harness uses a published deterministic request-ID schedule whose HMAC buckets produce
+the exact stage weights and admission counts below. It does not bypass the router or manufacture
+terminal responses. At the fixed 80 requests/second profile, the conservative full-path request
+schedule is:
+
+| Segment | Arithmetic | Scheduled time |
+|---|---:|---:|
+| Warm-up, worst case sequential | `400 / 80` (200 per predictor) | 5.0 s |
+| Paired shadow | `2,000 / 80` accepted requests, each duplicated | 25.0 s |
+| Two `CANARY_10` windows | `2 * (300 / 0.10) / 80` total admissions | 75.0 s |
+| Two `CANARY_25` windows | `2 * (500 / 0.25) / 80` total admissions | 50.0 s |
+| Two `CANARY_50` windows | `2 * (1,000 / 0.50) / 80` total admissions | 50.0 s |
+| Two rollback-recovery windows | `(2 * 300) / 80` stable admissions | 7.5 s |
+| **Conservative scheduled total** | `5 + 25 + 75 + 50 + 50 + 7.5` | **212.5 s** |
+
+This deliberately reserves both the full successful canary progression and recovery traffic in one
+upper-bound acceptance budget even though a single state path would not normally need both. The
+remaining `300 - 212.5 = 87.5 seconds` covers validation, state transitions, bootstrap/load of warm
+fixtures, route convergence, window evaluation, and receipt export/verification.
+
+The golden rollback path stops on the first failing `CANARY_10` window, so its request schedule is
+`5 + 25 + 37.5 + 7.5 = 75 seconds`, plus the same bounded control/evidence overhead. Actual warm-path
+wall time is measured end to end. If either required reviewer scenario exceeds 300 seconds on the
+stated profile, M6 fails; stage denominators, resample counts, warm-ups, or recovery windows MUST NOT
+be reduced to make the timing claim pass.
+
 ## 21. Security boundary
 
 ### 21.1 Trust zones
@@ -1215,7 +1508,8 @@ time.
 - **Trusted build identity**: reviewed GitHub Actions workflow and repository identity.
 - **Untrusted release input**: model, manifest, MLflow artifact, OCI image, SBOM, provenance,
   attestation bundle, and scan receipts until validation passes.
-- **Promotion authority**: control-service database role and local operator safety commands.
+- **Promotion authority**: control-service database role, its Ed25519 route-plan signing key, and
+  local operator safety commands.
 - **Data plane**: router and predictors with no promotion credential.
 - **Observability plane**: Prometheus and Grafana, which can observe but cannot mutate releases.
 - **Administrative boundary**: host administrator and PostgreSQL superuser are trusted and outside
@@ -1229,7 +1523,13 @@ time.
 - Predictor may receive traffic only from router and emit telemetry only to allowed internal
   endpoints. It cannot access MLflow, PostgreSQL, Docker, or the Internet.
 - Router can read route plans from control service and call predictors. It has no MLflow or
-  PostgreSQL credential.
+  PostgreSQL credential and receives only the pinned route-plan public key.
+- The control-service signing private key is mounted as a Compose secret only into control service;
+  it is never stored in PostgreSQL, included in an image/evidence bundle, exposed to router, or
+  emitted in logs. The pinned public-key fingerprint is non-secret bootstrap evidence.
+- The review replay/measurement role may read and reset only the candidate container's cgroup v2
+  `memory.peak` for the declared profile. It receives neither the Docker socket nor permission to
+  change `memory.max`, CPU limits, another cgroup, or host settings.
 - Grafana and MLflow bind only to the local Compose network/loopback exposure documented for the
   reviewer.
 - Runtime databases, secrets, raw UCI data, request payloads, model-build caches, and generated
@@ -1270,21 +1570,31 @@ portfolio claim has executable evidence.
 
 #### Unit tests
 
-- canonical manifest and receipt hashing;
+- image-artifact-descriptor, final-release-manifest, release-CI-bundle, and decision-receipt hashing,
+  including a negative test that forbids bake-back/self-reference cycles;
 - feature allowlist and chronological split;
-- paired metrics, bootstrap, subgroup completeness, and drift calculations;
+- paired MAE ratios, PCG64 calendar-day cluster bootstrap, nearest-rank UCB, subgroup completeness,
+  and drift calculations using frozen cross-platform vectors;
+- canary admission/error/accounting/schema/latency denominators and nearest-rank p95 vectors;
 - policy gate truth table, including `UNKNOWN`;
-- route bucket calculation and snapshot validation;
+- route bucket calculation, RFC-8785 route payload, Ed25519 signature, pinned-key, and snapshot
+  validation;
 - state-transition and reason-code validation.
 
 #### Property and state-machine tests
 
 - validation can never be bypassed;
-- exactly one active production pointer exists;
+- before bootstrap the active pointer is zero and router is not ready; after one successful
+  bootstrap exactly one active production pointer exists;
+- no active-release resolver selects a release by lifecycle state;
 - rollback is idempotent;
 - duplicate evaluator results cannot produce duplicate transitions;
 - route revision is strictly monotonic;
 - `UNKNOWN` can never promote;
+- `PRODUCTION` can never pause, pause expiry can never auto-resume, and resume always opens a new
+  window/revision after prerequisite revalidation;
+- quarantine always changes lifecycle state and, when routed, removes candidate traffic in the same
+  transition;
 - a request has exactly one client-visible response source;
 - receipt or event tampering fails closed;
 - all generated valid transition sequences preserve invariants;
@@ -1293,7 +1603,9 @@ portfolio claim has executable evidence.
 #### Contract tests
 
 - router request/predictor response schemas;
-- route-plan schema, digest, lease, and revision behavior;
+- route-plan schema, RFC-8785 digest, Ed25519 signature, 500-ms RPC deadline, 1.5-second lease,
+  no-store response, and monotonic revision behavior;
+- old same-revision responses cannot refresh a lease without a fresh within-deadline live response;
 - predictor model signature and stable error envelope;
 - evidence-ingest idempotency and duplicate-conflict semantics;
 - MLflow numeric-version snapshot behavior;
@@ -1305,19 +1617,24 @@ portfolio claim has executable evidence.
 - stale expected state or route revision;
 - duplicate idempotency key with equal and unequal payload;
 - rollback during evaluator retry;
-- singleton active-production constraint;
+- concurrent one-time bootstrap and singleton active-production constraints;
+- signed route payload/digest/signature are atomic with state, pointer, weight, revision, and event;
+- shadow/canary and production quarantine route/pointer transactions;
 - audit append-only application permissions;
-- control restart between transaction commit and route-plan publication.
+- control restart before/after signed-plan transaction commit, with no split publication state.
 
 #### Compose integration tests
 
 - complete submit-to-production success path using synthetic fixtures;
+- pre-bootstrap controlled 503 followed by audited baseline initialization;
 - paired shadow with non-blocking candidate timeout;
 - each canary stage and route distribution;
 - rollback plus bounded router convergence;
+- a frozen convergence-set member restart that cannot be dropped to manufacture SLA PASS;
 - two-window recovery;
 - MLflow, Prometheus, or Grafana outage behavior;
 - PostgreSQL outage and router stable-only lease expiry.
+- Linux cgroup v2 `memory.peak` capture and `UNKNOWN` when unavailable, with no RSS fallback.
 
 #### Deterministic failure-injection tests
 
@@ -1325,6 +1642,7 @@ portfolio claim has executable evidence.
 - missing, duplicate, conflicting, out-of-order, and late events;
 - insufficient labels and subgroup-selective label loss;
 - stale route plan and router restart;
+- delayed pre-commit route response, repeated old revision, invalid signature, and wrong pinned key;
 - candidate crash and validator timeout.
 
 #### Restart and recovery tests
@@ -1357,7 +1675,8 @@ portfolio claim has executable evidence.
 #### Release and publication tests
 
 - approved Git identity and no unexpected contributor trailers;
-- exact source SHA, OCI digest, SBOM, provenance, attestation, and receipt linkage;
+- exact descriptor -> OCI digest -> SBOM/provenance/attestation -> final manifest/release ID ->
+  release-CI bundle -> decision receipt ordering and linkage;
 - public claims are supported by the correct evidence class;
 - natural and injected evidence labels cannot be confused;
 - v0.1 documents contain no Kubernetes completion claim;
@@ -1384,7 +1703,8 @@ Acceptance:
 - UCI attribution, checksum, chronological split, and feature allowlist pass;
 - leakage tests pass;
 - stable/candidate ONNX artifacts are reproducible from 2011/H1-only workflows;
-- release-manifest canonicalization and immutable release ID pass tamper tests;
+- image-artifact-descriptor canonicalization binds source, ONNX, schemas, and serving code/config
+  without depending on a future OCI digest;
 - natural evidence is recorded without a forced verdict.
 
 ### M2 — Validator and supply chain
@@ -1394,6 +1714,8 @@ Acceptance:
 - untrusted artifacts are validated in the declared isolation boundary;
 - forbidden model formats, operators, paths, sizes, and mutable OCI references fail closed;
 - real GHCR digest, BuildKit SBOM/provenance, and GitHub attestation are verified in release CI;
+- final-manifest canonicalization and immutable release ID are created only after the OCI/supply-chain
+  subjects exist and pass tamper/no-cycle tests;
 - offline reviewer evidence is correctly labeled and recomputable without claiming a new online
   identity verification.
 
@@ -1402,7 +1724,9 @@ Acceptance:
 Acceptance:
 
 - cross-platform HMAC bucket vectors pass;
-- route snapshots are cached, leased, monotonic, and sticky;
+- route snapshots are RFC-8785 canonical, Ed25519-signed, cached, leased, monotonic, and sticky;
+- one-time baseline bootstrap and zero-pointer controlled-503 behavior pass;
+- delayed/repeated old route responses cannot extend candidate eligibility past the 2-second bound;
 - shadow duplicates identical requests and never delays or replaces stable responses;
 - delayed-label paired quality and subgroup completeness gates pass their tests;
 - missing labels produce `UNKNOWN/PAUSED`.
@@ -1412,7 +1736,9 @@ Acceptance:
 Acceptance:
 
 - request events are idempotent;
-- duplicate conflicts, late evidence, sample limits, and policy mismatch follow this specification;
+- duplicate conflicts, late evidence, admission-based denominators, sample limits, and policy
+  mismatch follow this specification;
+- calendar-day cluster-bootstrap/UCB and all-subgroup `n >= 100` rules pass frozen vectors;
 - windows seal immutably with recomputable digests;
 - all promotion prerequisites are traceable from requirement to artifact;
 - property tests prove `UNKNOWN` cannot promote.
@@ -1424,7 +1750,9 @@ Acceptance:
 - three canary stages use exact routing weights and stage windows;
 - deterministic latency injection triggers rollback without relying on natural hardware timing;
 - control-plane rollback is one transaction;
-- every healthy router converges within 2 seconds or enters stable-only safe mode;
+- signed stable-only route plan and quarantine routing changes share the state transaction;
+- every member of the frozen convergence set meets the 2-second contract or is recorded as
+  pending/failing; restart cannot shrink the set;
 - in-flight requests retain their original revision;
 - two recovery windows pass before incident closure;
 - retries and restarts do not duplicate progression.
@@ -1436,6 +1764,9 @@ Acceptance:
 - the three dashboards are provisioned and low-cardinality;
 - decision metrics come from durable evidence rather than Grafana;
 - warm-image reviewer scenario completes within five minutes on the stated profile;
+- measured wall time honors the 212.5-second request schedule and 87.5-second overhead budget
+  without reducing any denominator;
+- `memory.peak` and cross-platform nearest-rank latency measurement comply with the frozen profile;
 - cold image pull/extraction time is reported separately;
 - MLflow, Grafana, and the receipt clearly label evidence classes;
 - reviewer needs no GPU, UCI, GitHub CLI, Kubernetes, or paid API.
@@ -1446,8 +1777,8 @@ Acceptance:
 
 - full unit, property, contract, transaction, Compose, failure, recovery, security, clean-clone,
   and publication gates pass;
-- the release manifest, OCI digest, supply-chain evidence, dashboards, and decision receipts point
-  to the same source release;
+- the descriptor, OCI digest, supply-chain evidence, final release manifest, release-CI bundle,
+  dashboards, and decision receipts point through the same acyclic source release chain;
 - public claims stay within Section 2;
 - source repository and release contain no private/runtime data;
 - `v0.1.0` is declared Portfolio Complete only after all preceding evidence is reviewed.
@@ -1489,7 +1820,9 @@ an inefficient reviewer path.
 | MLflow alias mutation changes traffic | Numeric version and content digest are snapshotted; aliases are non-authoritative |
 | Dashboard gaps create unsafe decisions | Durable events and sealed PostgreSQL windows are the decision source |
 | Canary cohorts are treated as paired quality evidence | Paired quality is completed in shadow; canary quality is secondary and labeled |
-| Router convergence is overstated | 2-second lease, acknowledgements, stable-only expiry, and precise claim language |
+| Router convergence is overstated | 500-ms poll/RPC deadline, 1.5-second lease, frozen router set, acknowledgements, stable-only expiry, and precise claim language |
+| Release identity creates a self-reference cycle | Image descriptor precedes OCI; final manifest follows OCI/supply-chain evidence and is never baked back |
+| Reviewer host lacks authoritative memory telemetry | Linux cgroup v2 `memory.peak` is mandatory; absence is `UNKNOWN`, never an RSS substitute |
 | Natural model timing varies across reviewer hosts | Deterministic fault profiles prove rollback; natural timing is reported honestly |
 | Label loss is non-random | Overall and subgroup completeness gates both fail closed |
 | Duplicate/out-of-order events advance state twice | Unique event identity, conflict semantics, optimistic concurrency, and idempotency |
@@ -1519,20 +1852,30 @@ an inefficient reviewer path.
 Owner review should explicitly confirm these locked design choices before an implementation plan is
 written:
 
-1. `yr` is excluded alongside target-derived and chronology-revealing fields.
-2. H1 offline policy calibration is frozen before any H2 result is loaded.
-3. Paired shadow quality, not canary cohort comparison, is the authoritative online quality gate.
-4. The initial quality policy uses 3% overall improvement, 5% subgroup non-regression, paired
-   bootstrap, and overall/subgroup label-completeness thresholds.
-5. The canary operational contract uses an absolute 25 ms p95 and 256 MiB memory cap under the
-   frozen 1-vCPU profile; stable ratios are diagnostic.
-6. Router snapshots poll every 500 ms, expire after 2 seconds, and fall back to stable-only.
-7. Historical `PRODUCTION` lifecycle state is distinct from the singleton active-production
-   pointer.
-8. Manual override can only pause, reduce traffic, or roll back; it cannot promote.
-9. Natural workload evidence is outcome-neutral; deterministic injected failure is the guaranteed
-   rollback acceptance path.
-10. k3d remains entirely outside v0.1 and is reconsidered only after M7.
+1. Release identity is the acyclic descriptor -> OCI/supply chain -> final manifest/release ID ->
+   release-CI bundle -> runtime decision-receipt chain.
+2. H1 and H2 use the frozen paired calendar-day cluster bootstrap: 2,000 PCG64(2026) resamples,
+   nearest-rank one-sided UCB, 3% overall improvement, and 5% subgroup non-regression.
+3. Every fixed subgroup needs at least 100 paired labeled rows; any deficient group makes the whole
+   quality gate `UNKNOWN` and cannot be omitted.
+4. Canary windows count candidate admissions; error/accounting/schema/latency use their explicitly
+   different frozen denominators.
+5. The performance profile fixes 1.0 CPU, 384 MiB hard memory, 256 MiB policy threshold, 80 rps,
+   32 in-flight, 200 warm-ups per predictor, nearest-rank p95, and cgroup v2 `memory.peak`.
+6. Router snapshots use Ed25519 signatures, 500-ms poll/RPC deadlines, 1.5-second leases, a frozen
+   convergence set, and stable-only expiry to support the 2-second claim.
+7. `PAUSED` resumes only to `VALIDATING`, `SHADOW`, or its originating canary with revalidation, a
+   new window, and a new route revision; `PRODUCTION` cannot pause.
+8. Quarantine always changes state and routing atomically; promotion retains a runnable prior stable
+   for production rollback/quarantine.
+9. A one-time audited baseline bootstrap creates the first `PRODUCTION` lifecycle state and singleton
+   active pointer; all active resolution uses only the pointer.
+10. Manual override permits only scoped pause or rollback, never arbitrary weights, auto-resume,
+    promotion, `UNKNOWN` bypass, or quarantine recovery.
+11. The reviewer request budget is 212.5 seconds plus at most 87.5 seconds overhead; M6 fails rather
+    than shrinking denominators if warm wall time exceeds five minutes.
+12. Natural workload evidence remains outcome-neutral; the better-offline-yet-slower injected
+    candidate is the guaranteed rollback acceptance path. k3d remains outside v0.1 until after M7.
 
 No implementation work or implementation plan is authorized by this specification commit. The next
 step is owner review of this written design.
