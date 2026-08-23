@@ -100,7 +100,65 @@ function Invoke-CgroupResourceGate {
     }
 }
 
+function Invoke-LoadHarnessGate {
+    $loadProject = 'mdcpwave0load'
+    $existing = docker ps -a --filter "label=com.docker.compose.project=$loadProject" --format '{{.ID}}'
+    if ($existing) { throw 'FEAS-LOAD-DIRTY: disposable project already exists' }
+    $versions = Get-VersionMap
+    $env:MDCP_PYTHON_IMAGE = $versions['PYTHON_IMAGE']
+    $runStamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+    $runDirectory = Join-Path $RuntimeRoot "load-$runStamp"
+    New-Item -ItemType Directory -Path $runDirectory | Out-Null
+    $resultPath = Join-Path $runDirectory 'load-harness.json'
+    $env:MDCP_LOAD_EVIDENCE_DIR = $runDirectory
+
+    try {
+        docker compose --project-name $loadProject --file $composeFile --profile load build load-predictor
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-LOAD-BUILD' }
+        docker compose --project-name $loadProject --file $composeFile --profile load `
+            up --detach --wait load-predictor
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-LOAD-PREDICTOR' }
+        docker compose --project-name $loadProject --file $composeFile --profile load `
+            run --rm --no-TTY load-generator
+        $loadExitCode = $LASTEXITCODE
+        if (-not (Test-Path -LiteralPath $resultPath)) { throw 'FEAS-LOAD-EVIDENCE-MISSING' }
+
+        $document = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -AsHashtable
+        $result = $document['result']
+        $expectedErrorClasses = @(
+            'ConnectError', 'ConnectTimeout', 'ReadTimeout',
+            'ProtocolError', 'InvalidResponse', 'Other'
+        )
+        $actualErrorClasses = @($result['error_class_counts'].Keys | Sort-Object)
+        if (Compare-Object ($expectedErrorClasses | Sort-Object) $actualErrorClasses) {
+            throw 'FEAS-LOAD-ERROR-CLASS-SCHEMA'
+        }
+        $nonzeroErrorClasses = @(
+            $result['error_class_counts'].Values | Where-Object { [int]$_ -ne 0 }
+        )
+        $passesFrozenProfile = (
+            $loadExitCode -eq 0 -and
+            $document['gate']['verdict'] -eq 'PASS' -and
+            [int]$result['admitted'] -eq 2000 -and
+            [int]$result['completed'] -eq 2000 -and
+            [int]$result['errors'] -eq 0 -and
+            [double]$result['achieved_rps'] -ge 80.0 -and
+            [int]$result['max_in_flight'] -le 32 -and
+            [int]$result['p95_us'] -le 25000 -and
+            $nonzeroErrorClasses.Count -eq 0
+        )
+        if (-not $passesFrozenProfile) { throw 'FEAS-LOAD-FAIL' }
+        "EVIDENCE_ID=load-$runStamp/load-harness.json"
+    }
+    finally {
+        docker compose --project-name $loadProject --file $composeFile --profile load `
+            down --volumes --remove-orphans 2>$null | Out-Null
+        Remove-Item Env:MDCP_LOAD_EVIDENCE_DIR -ErrorAction SilentlyContinue
+    }
+}
+
 switch ($Gate) {
     'CgroupResource' { Invoke-CgroupResourceGate }
+    'LoadHarness' { Invoke-LoadHarnessGate }
     default { throw "FEAS-GATE-UNIMPLEMENTED:$Gate" }
 }

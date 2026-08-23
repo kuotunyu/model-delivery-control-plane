@@ -113,6 +113,84 @@ services:
         bind:
           create_host_path: false
 
+  load-predictor:
+    image: mdcp-wave0-load-probe:local
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ${MDCP_PYTHON_IMAGE}
+        RUN python -m pip install --no-cache-dir fastapi==0.116.1 httpx==0.28.1 pydantic==2.11.7 uvicorn==0.35.0
+        WORKDIR /app
+        COPY src/mdcp /app/src/mdcp
+        ENV PYTHONPATH=/app/src \
+            PYTHONDONTWRITEBYTECODE=1
+        USER 65534:65534
+    user: "65534:65534"
+    entrypoint: ["python", "-m", "uvicorn", "mdcp.feasibility.synthetic_predictor:app"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    profiles: ["load"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 384m
+    pids_limit: 128
+    networks: ["load"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1)",
+        ]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+    stop_grace_period: 2s
+
+  load-generator:
+    image: mdcp-wave0-load-probe:local
+    pull_policy: never
+    profiles: ["load"]
+    user: "65534:65534"
+    entrypoint: ["python", "-m", "mdcp.feasibility.load_probe"]
+    command:
+      - --url
+      - http://load-predictor:8080/predict
+      - --count
+      - "2000"
+      - --rate
+      - "80"
+      - --max-in-flight
+      - "32"
+      - --out
+      - /evidence/load-harness.json
+    depends_on:
+      load-predictor:
+        condition: service_healthy
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 128m
+    pids_limit: 64
+    networks: ["load"]
+    volumes:
+      - type: bind
+        source: ${MDCP_LOAD_EVIDENCE_DIR:-/__mdcp_load_evidence_unbound__}
+        target: /evidence
+        bind:
+          create_host_path: false
+
 networks:
   probe:
+    internal: true
+  load:
     internal: true
