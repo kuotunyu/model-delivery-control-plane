@@ -1,0 +1,9 @@
+{
+  "schema_version": "mdcp.model-fixture.v1",
+  "name": "candidate-v1",
+  "n_estimators": 96,
+  "max_depth": 16,
+  "min_samples_leaf": 1,
+  "random_state": 2026,
+  "n_jobs": 1
+}

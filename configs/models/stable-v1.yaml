@@ -1,0 +1,9 @@
+{
+  "schema_version": "mdcp.model-fixture.v1",
+  "name": "stable-v1",
+  "n_estimators": 32,
+  "max_depth": 8,
+  "min_samples_leaf": 4,
+  "random_state": 2026,
+  "n_jobs": 1
+}
