@@ -1,0 +1,118 @@
+services:
+  candidate:
+    image: mdcp-wave0-cgroup-probe:local
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ${MDCP_PYTHON_IMAGE}
+        RUN mkdir --mode=0755 /probe /evidence
+        COPY tests/feasibility/cgroup_probe.py /probe/cgroup_probe.py
+        USER 65534:65534
+        ENTRYPOINT ["python", "/probe/cgroup_probe.py"]
+    command: ["candidate"]
+    profiles: ["cgroup"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 384m
+    pids_limit: 128
+    networks: ["probe"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1)",
+        ]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+    stop_grace_period: 2s
+
+  reset-probe:
+    image: mdcp-wave0-cgroup-probe:local
+    pull_policy: never
+    command: ["reset", "/evidence", "http://candidate:8080/allocate"]
+    profiles: ["cgroup"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.25
+    mem_limit: 64m
+    pids_limit: 32
+    networks: ["probe"]
+    volumes:
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/memory.peak
+        target: /evidence/memory.peak
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/memory.current
+        target: /evidence/memory.current
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/memory.max
+        target: /evidence/memory.max
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/cpu.max
+        target: /evidence/cpu.max
+        read_only: true
+        bind:
+          create_host_path: false
+
+  observer:
+    image: mdcp-wave0-cgroup-probe:local
+    pull_policy: never
+    command: ["observe", "/evidence"]
+    profiles: ["cgroup"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.25
+    mem_limit: 64m
+    pids_limit: 32
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/memory.peak
+        target: /evidence/memory.peak
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/memory.current
+        target: /evidence/memory.current
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/memory.max
+        target: /evidence/memory.max
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MDCP_CGROUP_PATH:-/sys/fs/cgroup/__unbound__}/cpu.max
+        target: /evidence/cpu.max
+        read_only: true
+        bind:
+          create_host_path: false
+
+networks:
+  probe:
+    internal: true
