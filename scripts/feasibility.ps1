@@ -20,6 +20,14 @@ function Get-VersionMap {
     return $versionMap
 }
 
+function Set-ComposeImageEnvironment([hashtable]$Versions) {
+    $env:MDCP_PYTHON_IMAGE = $Versions['PYTHON_IMAGE']
+    $env:POSTGRES_IMAGE = $Versions['POSTGRES_IMAGE']
+    $env:MLFLOW_IMAGE = $Versions['MLFLOW_IMAGE']
+    $env:PROMETHEUS_IMAGE = $Versions['PROMETHEUS_IMAGE']
+    $env:GRAFANA_IMAGE = $Versions['GRAFANA_IMAGE']
+}
+
 function Get-JsonLine([object[]]$Lines, [string]$Label) {
     $jsonLine = $Lines | Where-Object { $_ -match '^\{.*\}$' } | Select-Object -Last 1
     if (-not $jsonLine) { throw "$Label did not emit JSON" }
@@ -30,7 +38,7 @@ function Invoke-CgroupResourceGate {
     $existing = docker ps -a --filter "label=com.docker.compose.project=$projectName" --format '{{.ID}}'
     if ($existing) { throw 'FEAS-CGROUP-DIRTY: disposable project already exists' }
     $versions = Get-VersionMap
-    $env:MDCP_PYTHON_IMAGE = $versions['PYTHON_IMAGE']
+    Set-ComposeImageEnvironment $versions
     $runStamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
     $runDirectory = Join-Path $RuntimeRoot "cgroup-$runStamp"
     New-Item -ItemType Directory -Path $runDirectory | Out-Null
@@ -39,12 +47,15 @@ function Invoke-CgroupResourceGate {
     $resultPath = Join-Path $runDirectory 'cgroup-resource.json'
 
     try {
-        docker compose --project-name $projectName --file $composeFile --profile cgroup build candidate
+        docker compose --project-name $projectName --file $composeFile --profile cgroup `
+            build cgroup-candidate
         if ($LASTEXITCODE -ne 0) { throw 'FEAS-CGROUP-BUILD' }
-        docker compose --project-name $projectName --file $composeFile --profile cgroup up --detach --wait candidate
+        docker compose --project-name $projectName --file $composeFile --profile cgroup `
+            up --detach --wait cgroup-candidate
         if ($LASTEXITCODE -ne 0) { throw 'FEAS-CGROUP-CANDIDATE' }
 
-        $candidateId = docker compose --project-name $projectName --file $composeFile ps --quiet candidate
+        $candidateId = docker compose --project-name $projectName --file $composeFile `
+            ps --quiet cgroup-candidate
         $candidateProcessId = docker inspect --format '{{.State.Pid}}' $candidateId
         $locatorOutput = docker run --rm --pid host --cgroupns host --network none --read-only --cap-drop ALL `
             --security-opt no-new-privileges:true --user 65534:65534 --entrypoint sh `
@@ -55,7 +66,8 @@ function Invoke-CgroupResourceGate {
         if ($cgroupLeaf -ne $candidateId) { throw 'FEAS-CGROUP-IDENTITY-MISMATCH' }
         $env:MDCP_CGROUP_PATH = "/sys/fs/cgroup$($relativeCgroup.Trim())"
 
-        $candidateLogs = docker compose --project-name $projectName --file $composeFile logs --no-color candidate
+        $candidateLogs = docker compose --project-name $projectName --file $composeFile `
+            logs --no-color cgroup-candidate
         $requiredPhases = @('container_start', 'model_load', 'warmup', 'scenario_end')
         foreach ($phase in $requiredPhases) {
             if (-not ($candidateLogs -match ('"phase":"' + [regex]::Escape($phase) + '"'))) {
@@ -105,7 +117,7 @@ function Invoke-LoadHarnessGate {
     $existing = docker ps -a --filter "label=com.docker.compose.project=$loadProject" --format '{{.ID}}'
     if ($existing) { throw 'FEAS-LOAD-DIRTY: disposable project already exists' }
     $versions = Get-VersionMap
-    $env:MDCP_PYTHON_IMAGE = $versions['PYTHON_IMAGE']
+    Set-ComposeImageEnvironment $versions
     $runStamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
     $runDirectory = Join-Path $RuntimeRoot "load-$runStamp"
     New-Item -ItemType Directory -Path $runDirectory | Out-Null
@@ -162,8 +174,7 @@ function Invoke-AtomicTransactionGate {
     $existing = docker ps -a --filter "label=com.docker.compose.project=$atomicProject" --format '{{.ID}}'
     if ($existing) { throw 'FEAS-TX-DIRTY: disposable project already exists' }
     $versions = Get-VersionMap
-    $env:MDCP_PYTHON_IMAGE = $versions['PYTHON_IMAGE']
-    $env:POSTGRES_IMAGE = $versions['POSTGRES_IMAGE']
+    Set-ComposeImageEnvironment $versions
     $runStamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
     $runDirectory = Join-Path $RuntimeRoot "atomic-$runStamp"
     New-Item -ItemType Directory -Path $runDirectory | Out-Null
@@ -197,9 +208,91 @@ function Invoke-AtomicTransactionGate {
     }
 }
 
+function Invoke-StackBudgetGate {
+    $stackProject = 'mdcpwave0stack'
+    $existing = docker ps -a --filter "label=com.docker.compose.project=$stackProject" --format '{{.ID}}'
+    if ($existing) { throw 'FEAS-STACK-DIRTY: disposable project already exists' }
+    $versions = Get-VersionMap
+    Set-ComposeImageEnvironment $versions
+    $runStamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+    $runDirectory = Join-Path $RuntimeRoot "stack-$runStamp"
+    New-Item -ItemType Directory -Path $runDirectory | Out-Null
+    $observationPath = Join-Path $runDirectory 'stack-observation.json'
+    $resultPath = Join-Path $runDirectory 'stack-budget.json'
+    $services = @(
+        'postgres', 'mlflow', 'prometheus', 'grafana',
+        'control-probe', 'router-probe', 'stable', 'candidate'
+    )
+
+    try {
+        docker compose --project-name $stackProject --file $composeFile --profile stack `
+            build control-probe
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-STACK-BUILD' }
+        docker compose --project-name $stackProject --file $composeFile --profile stack `
+            up --detach --wait --wait-timeout 120 $services
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-STACK-READY' }
+
+        $measurements = @{}
+        $ready = @()
+        $imageSizes = @{}
+        foreach ($service in $services) {
+            $containerId = docker compose --project-name $stackProject --file $composeFile `
+                ps --quiet $service
+            if (-not $containerId) { throw "FEAS-STACK-MISSING:$service" }
+            $health = docker inspect --format '{{.State.Health.Status}}' $containerId
+            if ($health -eq 'healthy') { $ready += $service }
+            $memoryPeak = docker exec $containerId cat /sys/fs/cgroup/memory.peak
+            if ($LASTEXITCODE -ne 0 -or $memoryPeak -notmatch '^\d+$') {
+                throw "FEAS-STACK-CGROUP-PEAK:$service"
+            }
+            $memoryMax = docker exec $containerId cat /sys/fs/cgroup/memory.max
+            if ($LASTEXITCODE -ne 0 -or $memoryMax -notmatch '^\d+$') {
+                throw "FEAS-STACK-CGROUP-MAX:$service"
+            }
+            $measurements[$service] = @{
+                memory_peak_bytes = [Int64]$memoryPeak
+                memory_max_bytes = [Int64]$memoryMax
+            }
+            $volumeMount = docker inspect --format `
+                '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}' $containerId
+            if ($volumeMount) { throw "FEAS-STACK-NAMED-VOLUME:$service" }
+            $imageId = docker inspect --format '{{.Image}}' $containerId
+            if (-not $imageSizes.ContainsKey($imageId)) {
+                $imageSize = docker image inspect --format '{{.Size}}' $imageId
+                if ($LASTEXITCODE -ne 0 -or $imageSize -notmatch '^\d+$') {
+                    throw 'FEAS-STACK-IMAGE-SIZE'
+                }
+                $imageSizes[$imageId] = [Int64]$imageSize
+            }
+        }
+        $imageBytes = [Int64](($imageSizes.Values | Measure-Object -Sum).Sum)
+        $observation = @{
+            measurement_mode = 'CGROUP_V2_MEMORY_PEAK_SUM'
+            ready = $ready
+            services = $measurements
+            image_virtual_size_upper_bound_bytes = $imageBytes
+            volume_bytes = 0
+            disk_bytes = $imageBytes
+        }
+        [IO.File]::WriteAllText(
+            $observationPath,
+            ($observation | ConvertTo-Json -Depth 5) + [Environment]::NewLine
+        )
+        uv run python -m mdcp.feasibility.stack_probe `
+            --observation $observationPath --out $resultPath
+        if ($LASTEXITCODE -ne 0) { throw 'FEAS-STACK-FAIL' }
+        "EVIDENCE_ID=stack-$runStamp/stack-budget.json"
+    }
+    finally {
+        docker compose --project-name $stackProject --file $composeFile --profile stack `
+            down --volumes --remove-orphans 2>$null | Out-Null
+    }
+}
+
 switch ($Gate) {
     'CgroupResource' { Invoke-CgroupResourceGate }
     'LoadHarness' { Invoke-LoadHarnessGate }
     'AtomicTransaction' { Invoke-AtomicTransactionGate }
+    'StackBudget' { Invoke-StackBudgetGate }
     default { throw "FEAS-GATE-UNIMPLEMENTED:$Gate" }
 }

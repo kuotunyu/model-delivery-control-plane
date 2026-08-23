@@ -1,5 +1,5 @@
 services:
-  candidate:
+  cgroup-candidate:
     image: mdcp-wave0-cgroup-probe:local
     build:
       context: .
@@ -37,7 +37,7 @@ services:
   reset-probe:
     image: mdcp-wave0-cgroup-probe:local
     pull_policy: never
-    command: ["reset", "/evidence", "http://candidate:8080/allocate"]
+    command: ["reset", "/evidence", "http://cgroup-candidate:8080/allocate"]
     profiles: ["cgroup"]
     read_only: true
     tmpfs:
@@ -266,10 +266,219 @@ services:
         bind:
           create_host_path: false
 
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    profiles: ["stack"]
+    user: "999:999"
+    environment:
+      POSTGRES_DB: mdcp
+      POSTGRES_USER: mdcp
+      POSTGRES_PASSWORD: wave0-disposable
+      PGDATA: /var/lib/postgresql/data/pgdata
+    read_only: true
+    tmpfs:
+      - /var/lib/postgresql/data:rw,nosuid,size=256m,uid=999,gid=999,mode=0700
+      - /run/postgresql:rw,nosuid,size=16m,uid=999,gid=999,mode=0755
+      - /tmp:rw,noexec,nosuid,size=16m,uid=999,gid=999,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 128
+    networks: ["stack"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mdcp -d mdcp"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  mlflow:
+    image: ${MLFLOW_IMAGE}
+    profiles: ["stack"]
+    user: "65534:65534"
+    entrypoint: ["mlflow"]
+    command:
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - sqlite:////tmp/mlflow.db
+      - --default-artifact-root
+      - /tmp/artifacts
+    environment:
+      HOME: /tmp
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 768m
+    pids_limit: 128
+    networks: ["stack"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=1)",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+      start_period: 5s
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE}
+    profiles: ["stack"]
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=0.0.0.0:9090
+    read_only: true
+    tmpfs:
+      - /prometheus:rw,noexec,nosuid,size=128m,uid=65534,gid=65534,mode=0755
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 384m
+    pids_limit: 128
+    networks: ["stack"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 3s
+
+  grafana:
+    image: ${GRAFANA_IMAGE}
+    profiles: ["stack"]
+    user: "472:472"
+    environment:
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_SECURITY_ADMIN_USER: reviewer
+      GF_SECURITY_ADMIN_PASSWORD: wave0-disposable
+    read_only: true
+    tmpfs:
+      - /var/lib/grafana:rw,noexec,nosuid,size=128m,uid=472,gid=472,mode=0755
+      - /var/log/grafana:rw,noexec,nosuid,size=32m,uid=472,gid=472,mode=0755
+      - /tmp:rw,noexec,nosuid,size=16m,uid=472,gid=472,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 384m
+    pids_limit: 128
+    networks: ["stack"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/api/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+      start_period: 5s
+
+  control-probe:
+    image: mdcp-wave0-stack-probe:local
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ${MDCP_PYTHON_IMAGE}
+        RUN python -m pip install --no-cache-dir fastapi==0.116.1 pydantic==2.11.7 uvicorn==0.35.0
+        WORKDIR /app
+        COPY src/mdcp /app/src/mdcp
+        ENV PYTHONPATH=/app/src \
+            PYTHONDONTWRITEBYTECODE=1
+        USER 65534:65534
+    profiles: ["stack"]
+    user: "65534:65534"
+    entrypoint: ["python", "-m", "uvicorn", "mdcp.feasibility.synthetic_predictor:app"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 64
+    networks: ["stack"]
+    healthcheck: &stack-probe-health
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1)",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  router-probe:
+    image: mdcp-wave0-stack-probe:local
+    pull_policy: never
+    profiles: ["stack"]
+    user: "65534:65534"
+    entrypoint: ["python", "-m", "uvicorn", "mdcp.feasibility.synthetic_predictor:app"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 64
+    networks: ["stack"]
+    healthcheck: *stack-probe-health
+
+  stable:
+    image: mdcp-wave0-stack-probe:local
+    pull_policy: never
+    profiles: ["stack"]
+    user: "65534:65534"
+    entrypoint: ["python", "-m", "uvicorn", "mdcp.feasibility.synthetic_predictor:app"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 384m
+    pids_limit: 128
+    networks: ["stack"]
+    healthcheck: *stack-probe-health
+
+  candidate:
+    image: mdcp-wave0-stack-probe:local
+    pull_policy: never
+    profiles: ["stack"]
+    user: "65534:65534"
+    entrypoint: ["python", "-m", "uvicorn", "mdcp.feasibility.synthetic_predictor:app"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1.0
+    mem_limit: 384m
+    pids_limit: 128
+    networks: ["stack"]
+    healthcheck: *stack-probe-health
+
 networks:
   probe:
     internal: true
   load:
     internal: true
   atomic:
+    internal: true
+  stack:
     internal: true
