@@ -1,6 +1,6 @@
 # Model Delivery Control Plane v0.1 Design Specification
 
-- Status: conditional direction approved; review invariants revised, pending final owner approval
+- Status: approved for implementation planning
 - Date: 2026-08-23
 - Local repository: `C:\Users\3Hml\Desktop\CC_github部隊\model-delivery-control-plane`
 - Intended public repository: `https://github.com/kuotunyu/model-delivery-control-plane`
