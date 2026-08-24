@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import struct
 from pathlib import Path
 
 import pytest
 
+from mdcp.common.canonical import canonicalize_json
+from mdcp.common.digests import sha256_hex
+from mdcp.contracts.workload_v2 import BikeRequestV2
+from mdcp.temporal.adapter import adapt_v2
 from mdcp.temporal.golden_vectors import (
     GOLDEN_CASE_IDS,
     GoldenVectorManifestError,
@@ -14,6 +20,7 @@ from mdcp.temporal.golden_vectors import (
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 GOLDEN_VECTORS = REPOSITORY_ROOT / "tests/fixtures/temporal/adapter-golden-vectors.json"
+APPROVED_MANIFEST_SHA256 = "ddeb4c7d52223589828b927ce744f53c5ca6981ce303b853230976fb88dc9eae"
 EXPECTED_CASE_IDS = (
     "origin",
     "year_end_category_maxima",
@@ -53,7 +60,40 @@ def test_manifest_is_exact_ordered_inventory() -> None:
     assert result.case_ids == EXPECTED_CASE_IDS
     assert result.case_count == 14
     assert len(result.case_inventory_sha256) == 64
-    assert len(result.manifest_sha256) == 64
+    assert result.manifest_sha256 == APPROVED_MANIFEST_SHA256
+
+
+def test_coordinated_manifest_rewrite_cannot_replace_approved_identity(
+    tmp_path: Path,
+) -> None:
+    manifest = copy.deepcopy(_load_manifest())
+    vectors = manifest["vectors"]
+    assert isinstance(vectors, list)
+    case = vectors[0]
+    case["payload"]["temp"] = 0.25
+
+    request = BikeRequestV2.model_validate(case["payload"])
+    expected_float64 = list(adapt_v2(request).values)
+    case["expected_float64"] = expected_float64
+    case["float64_sha256"] = hashlib.sha256(
+        struct.pack(f"<{len(expected_float64)}d", *expected_float64)
+    ).hexdigest()
+    case["float32_sha256"] = hashlib.sha256(
+        struct.pack(f"<{len(expected_float64)}f", *expected_float64)
+    ).hexdigest()
+    case["case_sha256"] = sha256_hex(
+        canonicalize_json({key: value for key, value in case.items() if key != "case_sha256"})
+    )
+    manifest["case_inventory"] = [
+        {"id": vector["id"], "case_sha256": vector["case_sha256"]} for vector in vectors
+    ]
+    manifest["case_inventory_sha256"] = sha256_hex(canonicalize_json(manifest["case_inventory"]))
+
+    with pytest.raises(
+        GoldenVectorManifestError,
+        match="^GOLDEN_VECTOR_MANIFEST_INVALID$",
+    ):
+        verify_golden_vector_manifest(_write_manifest(tmp_path, manifest))
 
 
 @pytest.mark.parametrize(

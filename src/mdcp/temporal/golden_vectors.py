@@ -31,6 +31,7 @@ GOLDEN_CASE_IDS = (
     "last_accepted_hour",
     "exact_upper_bound",
 )
+APPROVED_GOLDEN_MANIFEST_SHA256 = "ddeb4c7d52223589828b927ce744f53c5ca6981ce303b853230976fb88dc9eae"
 
 _MANIFEST_KEYS = {
     "schema_version",
@@ -183,6 +184,8 @@ def _verify_manifest(raw: bytes) -> GoldenInventoryResult:
 def verify_golden_vector_manifest(path: Path) -> GoldenInventoryResult:
     try:
         raw = path.read_bytes()
+        if sha256_hex(raw) != APPROVED_GOLDEN_MANIFEST_SHA256:
+            _fail()
         return _verify_manifest(raw)
     except GoldenVectorManifestError:
         raise
