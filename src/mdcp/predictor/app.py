@@ -9,16 +9,19 @@ from typing import Protocol
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
-from mdcp.contracts.workload import BikeRequest, PredictionResponse, SafeErrorResponse
+from mdcp.common.enums import ExecutionRole
+from mdcp.contracts.workload import PredictionResponse, SafeErrorResponse
 from mdcp.predictor.runtime import OnnxPredictor, PredictionContractError
+from mdcp.temporal.routing import AdmissionKind, classify_envelope
 
 
 class PredictorRuntime(Protocol):
     release_id: str
     route_revision: int
 
-    def predict(self, request: BikeRequest) -> float: ...
+    def predict(self, request: object) -> float: ...
 
 
 def _error(
@@ -31,13 +34,16 @@ def _error(
     return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
 
 
-def create_app(runtime: PredictorRuntime) -> FastAPI:
+def create_app(
+    runtime: PredictorRuntime,
+    *,
+    admission_role: ExecutionRole = ExecutionRole.STABLE,
+) -> FastAPI:
     app = FastAPI(title="MDCP immutable ONNX predictor", docs_url=None, redoc_url=None)
+    app.state.admission_counts = {kind: 0 for kind in AdmissionKind}
 
     @app.exception_handler(RequestValidationError)
-    async def invalid_request(
-        request: Request, error: RequestValidationError
-    ) -> JSONResponse:
+    async def invalid_request(request: Request, error: RequestValidationError) -> JSONResponse:
         del request, error
         return _error(422, "INVALID_REQUEST")
 
@@ -55,15 +61,39 @@ def create_app(runtime: PredictorRuntime) -> FastAPI:
         response_model=PredictionResponse,
         responses={422: {"model": SafeErrorResponse}, 500: {"model": SafeErrorResponse}},
     )
-    async def predict(request: BikeRequest) -> PredictionResponse | JSONResponse:
+    async def predict(payload: dict[str, object]) -> PredictionResponse | JSONResponse:
         try:
-            value = runtime.predict(request)
+            decision = classify_envelope(payload)
+        except ValidationError:
+            return _error(422, "INVALID_REQUEST")
+
+        app.state.admission_counts[decision.kind] += 1
+        if decision.kind is AdmissionKind.INVALID_V2:
+            return _error(422, decision.reason_code or "INVALID_V2_ENVELOPE")
+
+        if decision.kind is AdmissionKind.LEGACY_STABLE_ONLY:
+            if admission_role is not ExecutionRole.STABLE:
+                return _error(422, AdmissionKind.LEGACY_STABLE_ONLY.value)
+            assert decision.legacy_request is not None
+            runtime_request = decision.legacy_request
+            request_id = decision.legacy_request.request_id
+        else:
+            assert decision.v2_request is not None
+            request_id = decision.v2_request.request_id
+            if admission_role is ExecutionRole.STABLE:
+                runtime_request = decision.v2_request.to_legacy()
+            else:
+                assert decision.feature_vector is not None
+                runtime_request = decision.feature_vector
+
+        try:
+            value = runtime.predict(runtime_request)
             if not math.isfinite(value) or value < 0:
                 raise PredictionContractError("invalid model output")
         except PredictionContractError:
-            return _error(500, "INVALID_MODEL_OUTPUT", request_id=request.request_id)
+            return _error(500, "INVALID_MODEL_OUTPUT", request_id=request_id)
         return PredictionResponse(
-            request_id=request.request_id,
+            request_id=request_id,
             release_id=runtime.release_id,
             prediction=value,
             route_revision=runtime.route_revision,
