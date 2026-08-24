@@ -30,6 +30,14 @@ _FORBIDDEN_MODULES = frozenset(
         "mdcp.workload.splits",
     }
 )
+_DYNAMIC_IMPORT_FUNCTIONS = frozenset(
+    {
+        "importlib.import_module",
+        "__import__",
+        "builtins.__import__",
+    }
+)
+_DYNAMIC_IMPORT_BINDABLES = _DYNAMIC_IMPORT_FUNCTIONS | {"importlib", "builtins"}
 _ALLOWED_DIRECT_IMPORTS = {
     "mdcp.workload.dataset": frozenset({"load_uci_development_archive"}),
     "mdcp.workload.splits": frozenset({"DevelopmentPartitions", "split_development_rows"}),
@@ -141,7 +149,17 @@ def _is_forbidden_module(qualified_name: str) -> bool:
 
 def _attribute_name(node: ast.expr, bindings: dict[str, str]) -> str | None:
     if isinstance(node, ast.Name):
-        return bindings.get(node.id, node.id)
+        qualified_name = node.id
+        seen: set[str] = set()
+        while qualified_name in bindings:
+            if qualified_name in seen:
+                return None
+            seen.add(qualified_name)
+            next_name = bindings[qualified_name]
+            if next_name == qualified_name:
+                return qualified_name
+            qualified_name = next_name
+        return qualified_name
     if isinstance(node, ast.Attribute):
         parent = _attribute_name(node.value, bindings)
         return None if parent is None else f"{parent}.{node.attr}"
@@ -162,6 +180,8 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
             module = node.module or ""
             if node.level:
                 _fail()
+            if any(alias.name == "*" for alias in node.names):
+                _fail()
             if module in _FORBIDDEN_MODULES:
                 allowed = _ALLOWED_DIRECT_IMPORTS[module]
                 if any(alias.name not in allowed for alias in node.names):
@@ -172,10 +192,32 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
             ) or _is_forbidden_module(module):
                 _fail()
             for alias in node.names:
-                if alias.name == "*":
-                    continue
                 local_name = alias.asname or alias.name
                 bindings[local_name] = f"{module}.{alias.name}" if module else alias.name
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            value = node.value
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign | ast.NamedExpr):
+            value = node.value
+            targets = (node.target,)
+        else:
+            continue
+        if value is None:
+            continue
+        qualified_name = _attribute_name(value, bindings)
+        if qualified_name not in _DYNAMIC_IMPORT_BINDABLES:
+            continue
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                if qualified_name in _DYNAMIC_IMPORT_FUNCTIONS:
+                    _fail()
+                continue
+            existing = bindings.get(target.id)
+            if existing is not None and existing != qualified_name:
+                _fail()
+            bindings[target.id] = qualified_name
     return bindings
 
 
@@ -189,11 +231,7 @@ def _audit_tree(tree: ast.AST) -> None:
         if not isinstance(node, ast.Call):
             continue
         function_name = _attribute_name(node.func, bindings)
-        if function_name not in {
-            "importlib.import_module",
-            "__import__",
-            "builtins.__import__",
-        }:
+        if function_name not in _DYNAMIC_IMPORT_FUNCTIONS:
             continue
         if not node.args or not isinstance(node.args[0], ast.Constant):
             _fail()

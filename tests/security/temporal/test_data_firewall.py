@@ -58,6 +58,19 @@ FORBIDDEN_MODULES = {
     "dunder_relative_qualified": (
         "import builtins\ntarget = builtins.__import__('.splits', globals(), locals(), (), 1)"
     ),
+    "dynamic_relative_rebound": (
+        "import importlib\n"
+        "loader = importlib.import_module\n"
+        "target = loader('.dataset', package='mdcp.workload')"
+    ),
+    "dunder_relative_rebound": (
+        "import builtins\n"
+        "loader = builtins.__import__\n"
+        "target = loader('dataset', globals(), locals(), (), 1)"
+    ),
+    "dynamic_relative_wildcard": (
+        "from importlib import *\ntarget = import_module('.dataset', package='mdcp.workload')"
+    ),
 }
 
 ALLOWED_NARROW_IMPORTS = (
