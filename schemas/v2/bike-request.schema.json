@@ -1,0 +1,118 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "atemp": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Atemp",
+      "type": "number"
+    },
+    "event_timestamp": {
+      "maxLength": 35,
+      "minLength": 25,
+      "title": "Event Timestamp",
+      "type": "string"
+    },
+    "holiday": {
+      "enum": [
+        0,
+        1
+      ],
+      "title": "Holiday",
+      "type": "integer"
+    },
+    "hr": {
+      "maximum": 23,
+      "minimum": 0,
+      "title": "Hr",
+      "type": "integer"
+    },
+    "hum": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Hum",
+      "type": "number"
+    },
+    "mnth": {
+      "maximum": 12,
+      "minimum": 1,
+      "title": "Mnth",
+      "type": "integer"
+    },
+    "request_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "mdcp.bike-request.v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "season": {
+      "enum": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "title": "Season",
+      "type": "integer"
+    },
+    "temp": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Temp",
+      "type": "number"
+    },
+    "weathersit": {
+      "enum": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "title": "Weathersit",
+      "type": "integer"
+    },
+    "weekday": {
+      "maximum": 6,
+      "minimum": 0,
+      "title": "Weekday",
+      "type": "integer"
+    },
+    "windspeed": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Windspeed",
+      "type": "number"
+    },
+    "workingday": {
+      "enum": [
+        0,
+        1
+      ],
+      "title": "Workingday",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "event_timestamp",
+    "season",
+    "mnth",
+    "hr",
+    "holiday",
+    "weekday",
+    "workingday",
+    "weathersit",
+    "temp",
+    "atemp",
+    "hum",
+    "windspeed"
+  ],
+  "title": "BikeRequestV2",
+  "type": "object"
+}
