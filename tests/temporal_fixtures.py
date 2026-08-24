@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from mdcp.temporal.constants import DOMAIN_START_LOCAL, TEMPORAL_FEATURE_COLUMNS
+from mdcp.temporal.constants import DOMAIN_START_LOCAL, TEMPORAL_FEATURE_COLUMNS, TIMEZONE_NAME
 
 SYNTHETIC_END_LOCAL = datetime(2012, 7, 1)
 SYNTHETIC_EVIDENCE_ATTRS = {
@@ -35,13 +36,7 @@ def _row_values(local: datetime) -> dict[str, int | float]:
     weathersit = (day_of_year + local.hour) % 4 + 1
     cnt = max(
         0,
-        round(
-            35
-            + 45 * temp
-            + 12 * workingday
-            + 18 * math.sin(daily_phase)
-            - 6 * (weathersit - 1)
-        ),
+        round(35 + 45 * temp + 12 * workingday + 18 * math.sin(daily_phase) - 6 * (weathersit - 1)),
     )
     return {
         "season": (local.month % 12) // 3 + 1,
@@ -70,21 +65,19 @@ def synthetic_development_frame() -> pd.DataFrame:
     return rows
 
 
-def _nth_sunday(year: int, month: int, occurrence: int) -> date:
-    first = date(year, month, 1)
-    first_sunday = 1 + (6 - first.weekday()) % 7
-    return date(year, month, first_sunday + 7 * (occurrence - 1))
+def _localize_new_york(local: datetime) -> datetime:
+    zone = ZoneInfo(TIMEZONE_NAME)
+    valid: dict[datetime, datetime] = {}
 
+    for fold in (0, 1):
+        candidate = local.replace(tzinfo=zone, fold=fold)
+        round_tripped = candidate.astimezone(UTC).astimezone(zone)
+        if round_tripped.replace(tzinfo=None) == local and round_tripped.fold == fold:
+            valid[candidate.astimezone(UTC)] = candidate
 
-def _new_york_offset(local: datetime) -> timezone:
-    dst_start = datetime.combine(_nth_sunday(local.year, 3, 2), datetime.min.time()).replace(
-        hour=2
-    )
-    dst_end = datetime.combine(_nth_sunday(local.year, 11, 1), datetime.min.time()).replace(
-        hour=2
-    )
-    offset_hours = -4 if dst_start <= local < dst_end else -5
-    return timezone(timedelta(hours=offset_hours))
+    if len(valid) != 1:
+        raise ValueError("synthetic timestamp is nonexistent or ambiguous in America/New_York")
+    return next(iter(valid.values()))
 
 
 def synthetic_v2_payload(timestamp: datetime, request_id: str) -> dict[str, object]:
@@ -100,7 +93,7 @@ def synthetic_v2_payload(timestamp: datetime, request_id: str) -> dict[str, obje
 
     values = _row_values(timestamp)
     values.pop("cnt")
-    localized = timestamp.replace(tzinfo=_new_york_offset(timestamp))
+    localized = _localize_new_york(timestamp)
     return {
         "schema_version": "mdcp.bike-request.v2",
         "request_id": request_id,

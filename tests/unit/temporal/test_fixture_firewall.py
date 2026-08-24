@@ -6,8 +6,9 @@ import random
 import socket
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -52,9 +53,44 @@ def test_synthetic_rows_and_payloads_are_reproducible() -> None:
         "event_timestamp": "2011-01-01T00:00:00-05:00",
         **first.iloc[0].drop(labels="cnt").to_dict(),
     }
-    assert synthetic_v2_payload(datetime(2011, 7, 1), "summer")[
-        "event_timestamp"
-    ] == "2011-07-01T00:00:00-04:00"
+    assert (
+        synthetic_v2_payload(datetime(2011, 7, 1), "summer")["event_timestamp"]
+        == "2011-07-01T00:00:00-04:00"
+    )
+
+
+@pytest.mark.parametrize(
+    ("local_time", "expected_offset"),
+    [
+        (datetime(2011, 3, 13, 1), "-05:00"),
+        (datetime(2011, 3, 13, 3), "-04:00"),
+        (datetime(2011, 7, 1, 12), "-04:00"),
+        (datetime(2011, 11, 6, 0), "-04:00"),
+        (datetime(2011, 11, 6, 2), "-05:00"),
+    ],
+)
+def test_synthetic_payload_uses_round_trip_safe_new_york_offsets(
+    local_time: datetime, expected_offset: str
+) -> None:
+    encoded = synthetic_v2_payload(local_time, "dst-vector")["event_timestamp"]
+    assert isinstance(encoded, str)
+    localized = datetime.fromisoformat(encoded)
+    round_tripped = localized.astimezone(UTC).astimezone(ZoneInfo("America/New_York"))
+
+    assert encoded.endswith(expected_offset)
+    assert round_tripped.replace(tzinfo=None) == local_time
+    assert round_tripped.utcoffset() == localized.utcoffset()
+
+
+@pytest.mark.parametrize(
+    "invalid_local_time",
+    [datetime(2011, 3, 13, 2), datetime(2011, 11, 6, 1)],
+)
+def test_synthetic_payload_rejects_nonexistent_or_ambiguous_new_york_time(
+    invalid_local_time: datetime,
+) -> None:
+    with pytest.raises(ValueError, match="synthetic timestamp is nonexistent or ambiguous"):
+        synthetic_v2_payload(invalid_local_time, "invalid-dst-vector")
 
 
 def test_generator_uses_no_external_or_nondeterministic_capability(
