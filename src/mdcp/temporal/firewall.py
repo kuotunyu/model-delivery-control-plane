@@ -146,7 +146,7 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if node.level:
-                continue
+                _fail()
             if module in _FORBIDDEN_MODULES:
                 allowed = _ALLOWED_DIRECT_IMPORTS[module]
                 if any(alias.name not in allowed for alias in node.names):
@@ -174,13 +174,34 @@ def _audit_tree(tree: ast.AST) -> None:
         if not isinstance(node, ast.Call):
             continue
         function_name = _attribute_name(node.func, bindings)
-        if function_name not in {"importlib.import_module", "__import__"}:
+        if function_name not in {
+            "importlib.import_module",
+            "__import__",
+            "builtins.__import__",
+        }:
             continue
         if not node.args or not isinstance(node.args[0], ast.Constant):
             _fail()
         module_name = node.args[0].value
-        if not isinstance(module_name, str) or _is_forbidden_module(module_name):
+        if (
+            not isinstance(module_name, str)
+            or module_name.startswith(".")
+            or _is_forbidden_module(module_name)
+        ):
             _fail()
+        if function_name in {"__import__", "builtins.__import__"}:
+            positional_level = node.args[4] if len(node.args) > 4 else None
+            keyword_level = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "level"),
+                None,
+            )
+            for level in (positional_level, keyword_level):
+                if not isinstance(level, ast.Constant) or not isinstance(level.value, int):
+                    if level is not None:
+                        _fail()
+                    continue
+                if level.value != 0:
+                    _fail()
 
 
 def _safe_logical_path(value: str) -> str:

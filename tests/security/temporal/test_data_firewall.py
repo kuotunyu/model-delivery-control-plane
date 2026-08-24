@@ -38,6 +38,26 @@ FORBIDDEN_MODULES = {
     ),
     "dunder_import": "target = __import__('mdcp.workload.splits')",
     "dynamic_unknown": ("import importlib\ntarget = importlib.import_module(module_name)"),
+    "relative_direct": (
+        "from ..workload.dataset import load_uci_archive\ntarget = load_uci_archive"
+    ),
+    "relative_alias": (
+        "from ..workload.dataset import load_uci_archive as loader\ntarget = loader"
+    ),
+    "relative_qualified": (
+        "from ..workload import dataset as source\ntarget = source.load_uci_archive"
+    ),
+    "dynamic_relative": (
+        "import importlib\ntarget = importlib.import_module('.dataset', package='mdcp.workload')"
+    ),
+    "dynamic_relative_alias": (
+        "import importlib as loader\n"
+        "target = loader.import_module('.splits', package='mdcp.workload')"
+    ),
+    "dunder_relative": ("target = __import__('.dataset', globals(), locals(), (), 1)"),
+    "dunder_relative_qualified": (
+        "import builtins\ntarget = builtins.__import__('.splits', globals(), locals(), (), 1)"
+    ),
 }
 
 ALLOWED_NARROW_IMPORTS = (
