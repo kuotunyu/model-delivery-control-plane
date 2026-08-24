@@ -39,17 +39,33 @@ _RAW_ENVIRONMENT_KEYS = frozenset(
     {"env", "environment", "environment_dump", "hostname", "raw_environment"}
 )
 _CONTAINER_ID_KEYS = frozenset({"container_id", "docker_container_id"})
-_OPAQUE_PAYLOAD_KEYS = frozenset(
-    {"evidence_payload", "opaque_payload", "payload", "raw_payload"}
-)
+_OPAQUE_PAYLOAD_KEYS = frozenset({"evidence_payload", "opaque_payload", "payload", "raw_payload"})
 _ABSOLUTE_PATH = re.compile(
-    r"^(?:[A-Za-z]:[\\/]|\\\\|/(?:Users|home|private|tmp|var/tmp|mnt|Volumes)(?:/|$))"
+    r"(?<![A-Za-z0-9])(?:"
+    r"[A-Za-z]:[\\/]"
+    r"|\\\\[^\\/\s]+[\\/][^\\/\s]+"
+    r"|/(?:root|home|Users|mnt|tmp|var/tmp|private|Volumes)(?=/|\s|$)"
+    r")"
 )
 _CREDENTIAL_VALUE = re.compile(
-    r"(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]+)",
+    r"(?:"
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+    r"|\bBearer[ \t]+[A-Za-z0-9._~+/=-]{16,}"
+    r"|\bgh[pousr]_[A-Za-z0-9]{20,255}\b"
+    r"|\bgithub_pat_[A-Za-z0-9_]{20,255}\b"
+    r"|\bhf_[A-Za-z0-9]{20,255}\b"
+    r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"
+    r")",
     re.IGNORECASE,
 )
-_RAW_ENVIRONMENT_VALUE = re.compile(r"(?:^|\n)[A-Za-z_][A-Za-z0-9_]*=[^\n]+")
+_RAW_EXCEPTION_VALUE = re.compile(
+    r"(?:"
+    r"Traceback\s+\(most recent call last\):"
+    r"|(?:^|[\s:;,])(?:[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)):\s+\S"
+    r")",
+    re.MULTILINE,
+)
+_ENVIRONMENT_ASSIGNMENT_LINE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=[^\r\n]*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -144,7 +160,9 @@ def public_evidence_violations(value: object) -> tuple[str, ...]:
                 violations.add("PRIVATE_PATH")
             if _CREDENTIAL_VALUE.search(current):
                 violations.add("CREDENTIAL")
-            if _RAW_ENVIRONMENT_VALUE.search(current):
+            if _RAW_EXCEPTION_VALUE.search(current):
+                violations.add("RAW_EXCEPTION")
+            if len(_ENVIRONMENT_ASSIGNMENT_LINE.findall(current)) >= 2:
                 violations.add("RAW_ENVIRONMENT")
             return
         if current is None or isinstance(current, bool | int | float):

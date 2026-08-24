@@ -42,11 +42,75 @@ def test_public_scan_is_recursive_sorted_unique_and_allows_sanitized_aggregates(
             ]
         }
     ) == ("PRIVATE_PATH", "RAW_EXCEPTION")
-    assert public_evidence_violations(
-        {
-            "evidence_class": "synthetic_test",
-            "inventory_sha256": "a" * 64,
-            "reason_codes": ["OVERALL_UCB95"],
-            "metrics": {"point_ratio": 0.97, "row_count": 2400},
-        }
-    ) == ()
+    assert (
+        public_evidence_violations(
+            {
+                "evidence_class": "synthetic_test",
+                "inventory_sha256": "a" * 64,
+                "reason_codes": ["OVERALL_UCB95"],
+                "metrics": {"point_ratio": 0.97, "row_count": 2400},
+            }
+        )
+        == ()
+    )
+
+
+@pytest.mark.parametrize(
+    "private_path",
+    [
+        r"prefix C:\Users\reviewer\private\model.onnx suffix",
+        "prefix C:/Users/reviewer/private/model.onnx suffix",
+        r"prefix \\private-host\share\model.onnx suffix",
+        "prefix /root/private/model.onnx suffix",
+        "prefix /home/reviewer/model.onnx suffix",
+        "prefix /Users/reviewer/model.onnx suffix",
+        "prefix /mnt/private/model.onnx suffix",
+        "prefix /tmp/private/model.onnx suffix",
+        "prefix /var/tmp/private/model.onnx suffix",
+        "prefix /private/model.onnx suffix",
+        "prefix /Volumes/private/model.onnx suffix",
+    ],
+)
+def test_public_scan_rejects_embedded_absolute_private_paths(private_path: str) -> None:
+    result = public_evidence_violations({"note": private_path})
+
+    assert result == ("PRIVATE_PATH",)
+    assert private_path not in repr(result)
+
+
+@pytest.mark.parametrize(
+    "raw_exception",
+    [
+        "Traceback (most recent call last):\n  synthetic frame\nValueError: redacted",
+        "request failed with InvalidResponseError: redacted",
+        "unhandled RuntimeException: redacted",
+    ],
+)
+def test_public_scan_rejects_raw_exceptions_under_arbitrary_keys(raw_exception: str) -> None:
+    result = public_evidence_violations({"message": raw_exception})
+
+    assert result == ("RAW_EXCEPTION",)
+    assert raw_exception not in repr(result)
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        "-----BEGIN PRIVATE KEY-----",
+        "Bearer " + "a" * 32,
+        "ghp_" + "A" * 36,
+        "github_pat_" + "A" * 22 + "_" + "B" * 59,
+        "hf_" + "a" * 34,
+        "AKIA" + "A1" * 8,
+    ],
+)
+def test_public_scan_rejects_common_credential_shapes(credential: str) -> None:
+    result = public_evidence_violations({"note": credential})
+
+    assert result == ("CREDENTIAL",)
+    assert credential not in repr(result)
+
+
+def test_public_scan_distinguishes_environment_dumps_from_research_assignments() -> None:
+    assert public_evidence_violations({"note": "MODEL=rf\nTHREADS=1"}) == ("RAW_ENVIRONMENT",)
+    assert public_evidence_violations({"note": "RATIO=0.97"}) == ()
