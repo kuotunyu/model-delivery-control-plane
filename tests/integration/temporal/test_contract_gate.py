@@ -254,6 +254,22 @@ def test_receipt_model_rejects_nonzero_forbidden_call_counter(
 
 
 @pytest.mark.parametrize(
+    "counter_name",
+    ("load_uci_archive", "split_rows", "DatasetPartitions.open_h2"),
+)
+def test_receipt_model_rejects_boolean_zero_forbidden_call_counter(
+    synthetic_archive: ArchiveFixture,
+    counter_name: str,
+) -> None:
+    document = _build_reviewer_receipt(synthetic_archive).model_dump(mode="json")
+    counters = document["behavioral_firewall"]["development_boundary"]["forbidden_call_counts"]
+    counters[counter_name] = False
+
+    with pytest.raises(ValidationError):
+        TemporalContractReceipt.model_validate(document)
+
+
+@pytest.mark.parametrize(
     "digest_path",
     (
         ("behavioral_firewall", "fixture_recipe_sha256"),

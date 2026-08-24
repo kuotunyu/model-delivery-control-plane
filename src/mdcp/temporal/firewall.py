@@ -9,7 +9,7 @@ from types import FrameType
 from typing import Annotated, Literal
 
 import pandas as pd
-from pydantic import ConfigDict, StringConstraints, with_config
+from pydantic import BeforeValidator, ConfigDict, StringConstraints, with_config
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from typing_extensions import TypedDict
 
@@ -63,13 +63,22 @@ _FORBIDDEN_CALL_CODES = {
 }
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+def _strict_zero(value: object) -> object:
+    if type(value) is not int or value != 0:
+        raise ValueError("forbidden call count must be integer zero")
+    return value
+
+
+StrictZero = Annotated[Literal[0], BeforeValidator(_strict_zero)]
 ForbiddenCallCounts = with_config(ConfigDict(extra="forbid"))(
     TypedDict(
         "ForbiddenCallCounts",
         {
-            "load_uci_archive": Literal[0],
-            "split_rows": Literal[0],
-            "DatasetPartitions.open_h2": Literal[0],
+            "load_uci_archive": StrictZero,
+            "split_rows": StrictZero,
+            "DatasetPartitions.open_h2": StrictZero,
         },
     )
 )
