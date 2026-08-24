@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mdcp.local/schemas/v2/temporal-development.schema.json",
+  "title": "MDCP v0.2 temporal development protocol",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "folds",
+    "trial_ids",
+    "model_feature_schema",
+    "families",
+    "quality",
+    "execution"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mdcp.temporal-development.v0.2",
+      "type": "string"
+    },
+    "folds": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "train_start",
+          "train_end",
+          "validation_start",
+          "validation_end"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": ["F1", "F2", "F3", "F4"]
+          },
+          "train_start": {
+            "type": "string",
+            "enum": ["2011-01-01T00:00:00"]
+          },
+          "train_end": {
+            "type": "string",
+            "enum": [
+              "2011-07-01T00:00:00",
+              "2011-10-01T00:00:00",
+              "2012-01-01T00:00:00",
+              "2012-04-01T00:00:00"
+            ]
+          },
+          "validation_start": {
+            "type": "string",
+            "enum": [
+              "2011-07-01T00:00:00",
+              "2011-10-01T00:00:00",
+              "2012-01-01T00:00:00",
+              "2012-04-01T00:00:00"
+            ]
+          },
+          "validation_end": {
+            "type": "string",
+            "enum": [
+              "2011-10-01T00:00:00",
+              "2012-01-01T00:00:00",
+              "2012-04-01T00:00:00",
+              "2012-07-01T00:00:00"
+            ]
+          }
+        }
+      }
+    },
+    "trial_ids": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "CTRL-01",
+          "REC-180-L4",
+          "REC-180-L12",
+          "REC-270-L4",
+          "REC-270-L12",
+          "REC-365-L4",
+          "REC-365-L12",
+          "STAT-A0.1",
+          "STAT-A1",
+          "STAT-A10",
+          "STAT-A100",
+          "STAT-A1000",
+          "NL-E64-R0.03-D2",
+          "NL-E64-R0.03-D3",
+          "NL-E64-R0.07-D2",
+          "NL-E64-R0.07-D3",
+          "NL-E128-R0.03-D2",
+          "NL-E128-R0.03-D3",
+          "NL-E128-R0.07-D2",
+          "NL-E128-R0.07-D3"
+        ]
+      }
+    },
+    "model_feature_schema": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "season",
+          "mnth",
+          "hr",
+          "holiday",
+          "weekday",
+          "workingday",
+          "weathersit",
+          "temp",
+          "atemp",
+          "hum",
+          "windspeed",
+          "elapsed_days",
+          "hour_sin",
+          "hour_cos",
+          "weekday_sin",
+          "weekday_cos",
+          "annual_sin",
+          "annual_cos"
+        ]
+      }
+    },
+    "families": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "family_id",
+          "trial_count",
+          "eligible_count",
+          "training_mode",
+          "recency_days",
+          "feature_positions",
+          "model_kind",
+          "parameters",
+          "preprocessing"
+        ],
+        "properties": {
+          "family_id": {
+            "type": "string",
+            "enum": ["CTRL", "REC", "STAT", "NL"]
+          },
+          "trial_count": {
+            "type": "integer",
+            "enum": [1, 5, 6, 8]
+          },
+          "eligible_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8
+          },
+          "training_mode": {
+            "type": "string",
+            "enum": ["full_expanding_fold", "trailing_complete_calendar_days"]
+          },
+          "recency_days": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "enum": [180, 270, 365]
+            }
+          },
+          "feature_positions": {
+            "type": "array",
+            "minItems": 11,
+            "maxItems": 18,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18
+            }
+          },
+          "model_kind": {
+            "type": "string",
+            "enum": [
+              "random_forest_regressor",
+              "ridge_regressor",
+              "gradient_boosting_regressor"
+            ]
+          },
+          "parameters": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bootstrap",
+                  "max_depth",
+                  "max_features",
+                  "min_samples_leaf",
+                  "n_estimators",
+                  "n_jobs",
+                  "random_state"
+                ],
+                "properties": {
+                  "bootstrap": {"const": [true]},
+                  "max_depth": {"const": [8]},
+                  "max_features": {"const": [1.0]},
+                  "min_samples_leaf": {"const": [4]},
+                  "n_estimators": {"const": [32]},
+                  "n_jobs": {"const": [1]},
+                  "random_state": {"const": [2026]}
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bootstrap",
+                  "max_depth",
+                  "max_features",
+                  "min_samples_leaf",
+                  "n_estimators",
+                  "n_jobs",
+                  "random_state"
+                ],
+                "properties": {
+                  "bootstrap": {"const": [true]},
+                  "max_depth": {"const": [8]},
+                  "max_features": {"const": [1.0]},
+                  "min_samples_leaf": {"const": [4, 12]},
+                  "n_estimators": {"const": [64]},
+                  "n_jobs": {"const": [1]},
+                  "random_state": {"const": [2026]}
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["alpha", "fit_intercept", "max_iter", "solver", "tol"],
+                "properties": {
+                  "alpha": {"const": [0.1, 1, 10, 100, 1000]},
+                  "fit_intercept": {"const": [true]},
+                  "max_iter": {"const": [10000]},
+                  "solver": {"const": ["lsqr"]},
+                  "tol": {"const": [1e-8]}
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "learning_rate",
+                  "loss",
+                  "max_depth",
+                  "max_features",
+                  "min_samples_leaf",
+                  "n_estimators",
+                  "random_state",
+                  "subsample"
+                ],
+                "properties": {
+                  "learning_rate": {"const": [0.03, 0.07]},
+                  "loss": {"const": ["squared_error"]},
+                  "max_depth": {"const": [2, 3]},
+                  "max_features": {"const": [null]},
+                  "min_samples_leaf": {"const": [8]},
+                  "n_estimators": {"const": [64, 128]},
+                  "random_state": {"const": [2026]},
+                  "subsample": {"const": [1.0]}
+                }
+              }
+            ]
+          },
+          "preprocessing": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "categorical_positions",
+              "fixed_categorical_domains",
+              "standardization_ddof",
+              "standardized_positions",
+              "zero_variance_policy"
+            ],
+            "properties": {
+              "categorical_positions": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 7,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 7
+                }
+              },
+              "fixed_categorical_domains": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 7,
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 24,
+                  "uniqueItems": true,
+                  "items": {"type": "integer"}
+                }
+              },
+              "standardization_ddof": {
+                "enum": [null, 0]
+              },
+              "standardized_positions": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 11,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 8,
+                  "maximum": 18
+                }
+              },
+              "zero_variance_policy": {
+                "enum": [null, "invalid"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "overall_max_ratio",
+        "subgroup_max_ratio",
+        "subgroup_names",
+        "min_subgroup_rows",
+        "bootstrap",
+        "completeness",
+        "cross_fold"
+      ],
+      "properties": {
+        "overall_max_ratio": {"const": 0.97, "type": "number"},
+        "subgroup_max_ratio": {"const": 1.05, "type": "number"},
+        "subgroup_names": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "weather_clear",
+              "weather_mist",
+              "weather_adverse",
+              "day_non_working",
+              "day_working",
+              "demand_peak",
+              "demand_off_peak"
+            ]
+          }
+        },
+        "min_subgroup_rows": {"const": 100, "type": "integer"},
+        "bootstrap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cluster", "index", "paired", "resamples", "rng", "seed"],
+          "properties": {
+            "cluster": {"const": "calendar_day", "type": "string"},
+            "index": {"const": 1899, "type": "integer"},
+            "paired": {"const": true, "type": "boolean"},
+            "resamples": {"const": 2000, "type": "integer"},
+            "rng": {"const": "PCG64", "type": "string"},
+            "seed": {"const": 2026, "type": "integer"}
+          }
+        },
+        "completeness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "adapter",
+            "candidate_prediction",
+            "development_label",
+            "stable_prediction"
+          ],
+          "properties": {
+            "adapter": {"const": 1.0, "type": "number"},
+            "candidate_prediction": {"const": 1.0, "type": "number"},
+            "development_label": {"const": 1.0, "type": "number"},
+            "stable_prediction": {"const": 1.0, "type": "number"}
+          }
+        },
+        "cross_fold": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fold_overall_max_ratio", "minimum_folds_at_or_below_one"],
+          "properties": {
+            "fold_overall_max_ratio": {"const": 1.05, "type": "number"},
+            "minimum_folds_at_or_below_one": {"const": 3, "type": "integer"}
+          }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seed",
+        "estimator_threads",
+        "selection_fits",
+        "replay_fits",
+        "final_fits",
+        "maximum_fits",
+        "peak_resident_memory_bytes",
+        "wall_clock_seconds"
+      ],
+      "properties": {
+        "seed": {"const": 2026, "type": "integer"},
+        "estimator_threads": {"const": 1, "type": "integer"},
+        "selection_fits": {"const": 80, "type": "integer"},
+        "replay_fits": {"const": 4, "type": "integer"},
+        "final_fits": {"const": 1, "type": "integer"},
+        "maximum_fits": {"const": 85, "type": "integer"},
+        "peak_resident_memory_bytes": {"const": 4294967296, "type": "integer"},
+        "wall_clock_seconds": {"const": 21600, "type": "integer"}
+      }
+    }
+  }
+}
