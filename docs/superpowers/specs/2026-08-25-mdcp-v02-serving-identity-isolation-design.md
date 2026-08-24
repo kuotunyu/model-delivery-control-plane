@@ -1,6 +1,6 @@
 # MDCP v0.2 Serving Identity Isolation Design Amendment
 
-- Status: `DRAFT / APPROACH_A_LOCKED / OWNER_SPEC_REVIEW_REQUIRED`
+- Status: `APPROVED / APPROACH_A_LOCKED / CORRECTIVE_IMPLEMENTATION_PLANNING_AUTHORIZED`
 - Date: 2026-08-25
 - Applies to: `2026-08-24-mdcp-v02-temporal-retraining-design.md`
 - Wave 1 entry commit: `f68ee1ddff91569311cc925c6b8bb0b180d016d0`
@@ -8,11 +8,14 @@
 - v0.1 serving identity: `d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209`
 - H2 status: `SEALED_NOT_LOADED`
 - H2 loaded rows: `0`
-- Scope of this commit: one additive design document only
+- Owner-approved content commit: `da2fd65619edd0b69df415f5c126364791e2ee03`
+- Owner-approved content SHA-256: `5fcbf1a8314f8e25cdbfd460f7ec202410a498deace6e853006250cb9509e33a`
+- Scope of this approval commit: approval metadata and corrective implementation planning only
 
 The terms **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. This amendment records the
-owner-locked version-separated v1/v2 serving-identity design. It authorizes no source, schema, test,
-plan, fixture, evidence, model, dataset, deployment, or external mutation.
+owner-locked version-separated v1/v2 serving-identity design. Its approval authorizes a corrective
+implementation plan only; it authorizes no source, schema, test, fixture, evidence, model, dataset,
+deployment, or external mutation.
 
 ## 1. Purpose and normative relationship
 
@@ -465,9 +468,9 @@ Rollback is forward-only. No reset, rebase, amend, history rewrite, evidence del
 deletion is permitted. A failed migration retains its commits and evidence, restores a valid state
 only through a separately reviewed append-only correction, and keeps H2 sealed.
 
-## 13. Amendment self-review and terminal state
+## 13. Amendment approval and terminal state
 
-This written amendment was checked for:
+This written amendment passed final owner written-spec review after it was checked for:
 
 - unresolved placeholders or open architecture choices: none;
 - identity cycles: none; source inputs are hashed before receipt serialization and the receipt does
@@ -476,11 +479,11 @@ This written amendment was checked for:
 - source-archive reproducibility: both identities use current relative files and require no Git;
 - H2 bypass: direct, aliased, qualified, dynamic, and behavioral capability paths are covered;
 - golden-case completeness: exact 14 IDs, count, ordering, content, and digests are closed;
-- scope drift: this amendment authorizes only its own docs-only commit.
+- scope drift: approval authorizes only docs-only corrective implementation planning.
 
-The terminal state for this amendment commit is:
+The terminal state for this approval commit is:
 
-`DESIGN_AMENDMENT_COMMITTED / V01_IDENTITY_PRESERVED / H2_SEALED / OWNER_SPEC_REVIEW_REQUIRED`
+`DESIGN_AMENDMENT_APPROVED / V01_IDENTITY_PRESERVED / H2_SEALED / CORRECTIVE_IMPLEMENTATION_PLANNING_AUTHORIZED`
 
-No implementation-plan edit or implementation may begin until the owner reviews and approves this
-written amendment in a later authorization.
+Corrective implementation planning is authorized. Implementation, model execution, H2 access,
+Docker/GPU actions, Wave 2, and external publication remain forbidden until separately authorized.
