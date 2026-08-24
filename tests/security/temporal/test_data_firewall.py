@@ -71,6 +71,15 @@ FORBIDDEN_MODULES = {
     "dynamic_relative_wildcard": (
         "from importlib import *\ntarget = import_module('.dataset', package='mdcp.workload')"
     ),
+    "dynamic_relative_destructured": (
+        "import importlib\n"
+        "(loader,) = (importlib.import_module,)\n"
+        "target = loader('.dataset', package='mdcp.workload')"
+    ),
+    "dunder_relative_expanded_level": (
+        "options = {'level': 2}\n"
+        "target = __import__('workload.dataset', globals(), locals(), (), **options)"
+    ),
 }
 
 ALLOWED_NARROW_IMPORTS = (

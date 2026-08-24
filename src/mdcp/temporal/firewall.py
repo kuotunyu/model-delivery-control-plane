@@ -37,7 +37,6 @@ _DYNAMIC_IMPORT_FUNCTIONS = frozenset(
         "builtins.__import__",
     }
 )
-_DYNAMIC_IMPORT_BINDABLES = _DYNAMIC_IMPORT_FUNCTIONS | {"importlib", "builtins"}
 _ALLOWED_DIRECT_IMPORTS = {
     "mdcp.workload.dataset": frozenset({"load_uci_development_archive"}),
     "mdcp.workload.splits": frozenset({"DevelopmentPartitions", "split_development_rows"}),
@@ -204,66 +203,20 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
                 local_name = alias.asname or alias.name
                 bindings[local_name] = f"{module}.{alias.name}" if module else alias.name
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            value = node.value
-            targets = node.targets
-        elif isinstance(node, ast.AnnAssign | ast.NamedExpr):
-            value = node.value
-            targets = (node.target,)
-        else:
-            continue
-        if value is None:
-            continue
-        qualified_name = _attribute_name(value, bindings)
-        if qualified_name not in _DYNAMIC_IMPORT_BINDABLES:
-            continue
-        for target in targets:
-            if not isinstance(target, ast.Name):
-                if qualified_name in _DYNAMIC_IMPORT_FUNCTIONS:
-                    _fail()
-                continue
-            existing = bindings.get(target.id)
-            if existing is not None and existing != qualified_name:
-                _fail()
-            bindings[target.id] = qualified_name
     return bindings
 
 
 def _audit_tree(tree: ast.AST) -> None:
     bindings = _build_bindings(tree)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute):
+        if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
-            if qualified_name is not None and _is_forbidden_module(qualified_name):
+            if qualified_name in _DYNAMIC_IMPORT_FUNCTIONS or (
+                isinstance(node, ast.Attribute)
+                and qualified_name is not None
+                and _is_forbidden_module(qualified_name)
+            ):
                 _fail()
-        if not isinstance(node, ast.Call):
-            continue
-        function_name = _attribute_name(node.func, bindings)
-        if function_name not in _DYNAMIC_IMPORT_FUNCTIONS:
-            continue
-        if not node.args or not isinstance(node.args[0], ast.Constant):
-            _fail()
-        module_name = node.args[0].value
-        if (
-            not isinstance(module_name, str)
-            or module_name.startswith(".")
-            or _is_forbidden_module(module_name)
-        ):
-            _fail()
-        if function_name in {"__import__", "builtins.__import__"}:
-            positional_level = node.args[4] if len(node.args) > 4 else None
-            keyword_level = next(
-                (keyword.value for keyword in node.keywords if keyword.arg == "level"),
-                None,
-            )
-            for level in (positional_level, keyword_level):
-                if not isinstance(level, ast.Constant) or not isinstance(level.value, int):
-                    if level is not None:
-                        _fail()
-                    continue
-                if level.value != 0:
-                    _fail()
 
 
 def _safe_logical_path(value: str) -> str:
