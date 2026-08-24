@@ -186,6 +186,116 @@ def test_checked_in_receipt_schema_matches_model_and_closes_inventory() -> None:
         == V2_SERVING_PATHS
     )
 
+    behavioral_schema = checked_in["$defs"]["BehavioralFirewallBody"]
+    boundary_schema = checked_in["$defs"]["DevelopmentBoundaryResult"]
+    counter_schema = checked_in["$defs"]["ForbiddenCallCounts"]
+    assert behavioral_schema["additionalProperties"] is False
+    assert boundary_schema["additionalProperties"] is False
+    assert counter_schema["additionalProperties"] is False
+    assert set(counter_schema["properties"]) == {
+        "load_uci_archive",
+        "split_rows",
+        "DatasetPartitions.open_h2",
+    }
+    assert set(counter_schema["required"]) == set(counter_schema["properties"])
+    assert all(counter["const"] == 0 for counter in counter_schema["properties"].values())
+
+
+@pytest.mark.parametrize(
+    ("object_path", "extra_key"),
+    (
+        (("behavioral_firewall",), "unexpected_behavioral_field"),
+        (
+            ("behavioral_firewall", "development_boundary"),
+            "unexpected_boundary_field",
+        ),
+    ),
+)
+def test_receipt_model_rejects_extra_behavioral_object_fields(
+    synthetic_archive: ArchiveFixture,
+    object_path: tuple[str, ...],
+    extra_key: str,
+) -> None:
+    document = _build_reviewer_receipt(synthetic_archive).model_dump(mode="json")
+    target = document
+    for component in object_path:
+        target = target[component]
+    target[extra_key] = "not-allowed"
+
+    with pytest.raises(ValidationError):
+        TemporalContractReceipt.model_validate(document)
+
+
+def test_receipt_model_rejects_unknown_forbidden_call_counter(
+    synthetic_archive: ArchiveFixture,
+) -> None:
+    document = _build_reviewer_receipt(synthetic_archive).model_dump(mode="json")
+    counters = document["behavioral_firewall"]["development_boundary"]["forbidden_call_counts"]
+    counters["unknown_capability"] = 0
+
+    with pytest.raises(ValidationError):
+        TemporalContractReceipt.model_validate(document)
+
+
+@pytest.mark.parametrize(
+    "counter_name",
+    ("load_uci_archive", "split_rows", "DatasetPartitions.open_h2"),
+)
+def test_receipt_model_rejects_nonzero_forbidden_call_counter(
+    synthetic_archive: ArchiveFixture,
+    counter_name: str,
+) -> None:
+    document = _build_reviewer_receipt(synthetic_archive).model_dump(mode="json")
+    counters = document["behavioral_firewall"]["development_boundary"]["forbidden_call_counts"]
+    counters[counter_name] = 1
+
+    with pytest.raises(ValidationError):
+        TemporalContractReceipt.model_validate(document)
+
+
+@pytest.mark.parametrize(
+    "digest_path",
+    (
+        ("behavioral_firewall", "fixture_recipe_sha256"),
+        (
+            "behavioral_firewall",
+            "development_boundary",
+            "archive_sha256",
+        ),
+        (
+            "behavioral_firewall",
+            "development_boundary",
+            "development_rows_sha256",
+        ),
+        (
+            "behavioral_firewall",
+            "development_boundary",
+            "train_rows_sha256",
+        ),
+        (
+            "behavioral_firewall",
+            "development_boundary",
+            "h1_rows_sha256",
+        ),
+        ("behavioral_firewall", "static_firewall_implementation_sha256"),
+        ("behavioral_firewall", "behavioral_firewall_implementation_sha256"),
+        ("behavioral_firewall", "bounded_loader_implementation_sha256"),
+        ("behavioral_firewall", "development_split_implementation_sha256"),
+    ),
+)
+def test_receipt_model_rejects_invalid_nested_digest(
+    synthetic_archive: ArchiveFixture,
+    digest_path: tuple[str, ...],
+) -> None:
+    document = _build_reviewer_receipt(synthetic_archive).model_dump(mode="json")
+    target = document
+    for component in digest_path[:-1]:
+        target = target[component]
+    target[digest_path[-1]] = "A" * 64
+
+    with pytest.raises(ValidationError):
+        TemporalContractReceipt.model_validate(document)
+
 
 @pytest.mark.parametrize(
     "mutation",

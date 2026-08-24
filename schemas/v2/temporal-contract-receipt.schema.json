@@ -1,12 +1,15 @@
 {
   "$defs": {
     "BehavioralFirewallBody": {
+      "additionalProperties": false,
       "properties": {
         "behavioral_firewall_implementation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Behavioral Firewall Implementation Sha256",
           "type": "string"
         },
         "bounded_loader_implementation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Bounded Loader Implementation Sha256",
           "type": "string"
         },
@@ -14,10 +17,12 @@
           "$ref": "#/$defs/DevelopmentBoundaryResult"
         },
         "development_split_implementation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Development Split Implementation Sha256",
           "type": "string"
         },
         "fixture_recipe_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Fixture Recipe Sha256",
           "type": "string"
         },
@@ -27,6 +32,7 @@
           "type": "string"
         },
         "static_firewall_implementation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Static Firewall Implementation Sha256",
           "type": "string"
         },
@@ -50,8 +56,10 @@
       "type": "object"
     },
     "DevelopmentBoundaryResult": {
+      "additionalProperties": false,
       "properties": {
         "archive_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Archive Sha256",
           "type": "string"
         },
@@ -61,15 +69,12 @@
           "type": "integer"
         },
         "development_rows_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Development Rows Sha256",
           "type": "string"
         },
         "forbidden_call_counts": {
-          "additionalProperties": {
-            "type": "integer"
-          },
-          "title": "Forbidden Call Counts",
-          "type": "object"
+          "$ref": "#/$defs/ForbiddenCallCounts"
         },
         "h1_row_count": {
           "const": 4358,
@@ -77,6 +82,7 @@
           "type": "integer"
         },
         "h1_rows_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "H1 Rows Sha256",
           "type": "string"
         },
@@ -113,6 +119,7 @@
           "type": "integer"
         },
         "train_rows_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Train Rows Sha256",
           "type": "string"
         },
@@ -138,6 +145,33 @@
         "h2_loaded_rows"
       ],
       "title": "DevelopmentBoundaryResult",
+      "type": "object"
+    },
+    "ForbiddenCallCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "DatasetPartitions.open_h2": {
+          "const": 0,
+          "title": "Datasetpartitions.Open H2",
+          "type": "integer"
+        },
+        "load_uci_archive": {
+          "const": 0,
+          "title": "Load Uci Archive",
+          "type": "integer"
+        },
+        "split_rows": {
+          "const": 0,
+          "title": "Split Rows",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "load_uci_archive",
+        "split_rows",
+        "DatasetPartitions.open_h2"
+      ],
+      "title": "ForbiddenCallCounts",
       "type": "object"
     },
     "V2InventoryEntry": {

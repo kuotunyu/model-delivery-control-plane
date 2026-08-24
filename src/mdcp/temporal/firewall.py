@@ -6,9 +6,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import FrameType
-from typing import Literal
+from typing import Annotated, Literal
 
 import pandas as pd
+from pydantic import ConfigDict, StringConstraints, with_config
+from pydantic.dataclasses import dataclass as pydantic_dataclass
+from typing_extensions import TypedDict
 
 from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
@@ -51,6 +54,18 @@ _FORBIDDEN_CALL_CODES = {
     _OPEN_H2_CODE: "DatasetPartitions.open_h2",
 }
 
+Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+ForbiddenCallCounts = with_config(ConfigDict(extra="forbid"))(
+    TypedDict(
+        "ForbiddenCallCounts",
+        {
+            "load_uci_archive": Literal[0],
+            "split_rows": Literal[0],
+            "DatasetPartitions.open_h2": Literal[0],
+        },
+    )
+)
+
 
 @dataclass(frozen=True)
 class ImportBinding:
@@ -78,39 +93,39 @@ class BehavioralFirewallError(RuntimeError):
         super().__init__(reason_code)
 
 
-@dataclass(frozen=True)
+@pydantic_dataclass(config=ConfigDict(extra="forbid", frozen=True))
 class DevelopmentBoundaryResult:
     schema_version: Literal["mdcp.development-boundary.v1"]
     verdict: Literal["PASS"]
-    archive_sha256: str
+    archive_sha256: Sha256
     development_row_count: Literal[13_003]
-    development_rows_sha256: str
+    development_rows_sha256: Sha256
     train_row_count: Literal[8_645]
-    train_rows_sha256: str
+    train_rows_sha256: Sha256
     h1_row_count: Literal[4_358]
-    h1_rows_sha256: str
+    h1_rows_sha256: Sha256
     read_csv_nrows: tuple[Literal[13_003]]
-    forbidden_call_counts: dict[str, int]
+    forbidden_call_counts: ForbiddenCallCounts
     h2_status: Literal["SEALED_NOT_LOADED"]
     h2_loaded_rows: Literal[0]
 
 
-@dataclass(frozen=True)
+@pydantic_dataclass(config=ConfigDict(extra="forbid", frozen=True))
 class BehavioralFirewallBody:
     schema_version: Literal["mdcp.behavioral-h2-firewall.v1"]
     verdict: Literal["PASS"]
-    fixture_recipe_sha256: str
+    fixture_recipe_sha256: Sha256
     development_boundary: DevelopmentBoundaryResult
-    static_firewall_implementation_sha256: str
-    behavioral_firewall_implementation_sha256: str
-    bounded_loader_implementation_sha256: str
-    development_split_implementation_sha256: str
+    static_firewall_implementation_sha256: Sha256
+    behavioral_firewall_implementation_sha256: Sha256
+    bounded_loader_implementation_sha256: Sha256
+    development_split_implementation_sha256: Sha256
 
 
-@dataclass(frozen=True)
+@pydantic_dataclass(config=ConfigDict(extra="forbid", frozen=True))
 class BehavioralFirewallResult:
     body: BehavioralFirewallBody
-    behavioral_result_sha256: str
+    behavioral_result_sha256: Sha256
 
 
 def _fail() -> None:
