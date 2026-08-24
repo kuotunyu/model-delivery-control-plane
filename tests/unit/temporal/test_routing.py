@@ -5,7 +5,8 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-from mdcp.contracts.workload import BikeRequest, BikeRequestV2
+from mdcp.contracts.workload import BikeRequest
+from mdcp.contracts.workload_v2 import BikeRequestV2
 from mdcp.temporal.adapter import TemporalFeatureVector
 from mdcp.temporal.routing import AdmissionKind, classify_envelope
 

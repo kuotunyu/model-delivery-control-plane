@@ -7,7 +7,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-from mdcp.contracts.workload import BikeRequestV2
+from mdcp.contracts.workload_v2 import BikeRequestV2
 from mdcp.temporal.constants import (
     DOMAIN_END_LOCAL,
     DOMAIN_START_LOCAL,

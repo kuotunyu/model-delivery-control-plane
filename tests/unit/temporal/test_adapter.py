@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from mdcp.contracts.workload import BikeRequestV2
+from mdcp.contracts.workload_v2 import BikeRequestV2
 from mdcp.temporal.adapter import (
     TemporalContractError,
     TemporalReasonCode,

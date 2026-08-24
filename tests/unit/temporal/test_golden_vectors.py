@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mdcp.contracts.workload import BikeRequestV2
+from mdcp.contracts.workload_v2 import BikeRequestV2
 from mdcp.temporal.adapter import TemporalContractError, adapt_v2
 from mdcp.temporal.constants import TEMPORAL_FEATURE_COLUMNS, TEMPORAL_SCHEMA_ID
 

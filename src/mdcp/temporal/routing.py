@@ -6,7 +6,8 @@ from enum import StrEnum
 
 from pydantic import ValidationError
 
-from mdcp.contracts.workload import BikeRequest, BikeRequestV2
+from mdcp.contracts.workload import BikeRequest
+from mdcp.contracts.workload_v2 import BikeRequestV2
 from mdcp.temporal.adapter import TemporalContractError, TemporalFeatureVector, adapt_v2
 
 

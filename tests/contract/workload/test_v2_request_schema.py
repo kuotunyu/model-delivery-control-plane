@@ -7,7 +7,9 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
-from mdcp.contracts.workload import BikeRequest, BikeRequestEnvelope, BikeRequestV2
+from mdcp.contracts import workload as workload_v1
+from mdcp.contracts.workload import BikeRequest
+from mdcp.contracts.workload_v2 import BikeRequestEnvelope, BikeRequestV2
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 SCHEMA_PATH = REPOSITORY_ROOT / "schemas" / "v2" / "bike-request.schema.json"
@@ -28,6 +30,13 @@ VALID_V2 = {
     "hum": 0.81,
     "windspeed": 0.0,
 }
+
+
+def test_v1_and_v2_request_modules_are_disjoint() -> None:
+    assert BikeRequest.__module__ == "mdcp.contracts.workload"
+    assert BikeRequestV2.__module__ == "mdcp.contracts.workload_v2"
+    assert not hasattr(workload_v1, "BikeRequestV2")
+    assert not hasattr(workload_v1, "BikeRequestEnvelope")
 
 
 def test_v2_envelope_is_strict_and_reduces_to_v1() -> None:
