@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import importlib
+import builtins
+import datetime as datetime_module
+import io
 import os
 import random
+import secrets
 import socket
 import sys
 import time
+import types
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,15 +20,140 @@ import pytest
 from mdcp.temporal.constants import TEMPORAL_FEATURE_COLUMNS
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
-sys.path.insert(0, str(REPOSITORY_ROOT))
+TEMPORAL_FIXTURE_PATH = REPOSITORY_ROOT / "tests" / "temporal_fixtures.py"
 
-_temporal_fixtures = importlib.import_module("tests.temporal_fixtures")
-synthetic_development_frame = _temporal_fixtures.synthetic_development_frame
-synthetic_v2_payload = _temporal_fixtures.synthetic_v2_payload
+
+class _ForbiddenEnvironment:
+    def _reject(self, *_args: object, **_kwargs: object) -> None:
+        raise AssertionError("IMPORT_CAPABILITY_ENVIRONMENT")
+
+    __getitem__ = _reject
+    get = _reject
+    __iter__ = _reject
+    __len__ = _reject
+    keys = _reject
+    items = _reject
+    values = _reject
+    copy = _reject
+
+
+class _ForbiddenDateTime(datetime):
+    @classmethod
+    def now(cls, *_args: object, **_kwargs: object) -> datetime:
+        raise AssertionError("IMPORT_CAPABILITY_CLOCK")
+
+    @classmethod
+    def today(cls) -> datetime:
+        raise AssertionError("IMPORT_CAPABILITY_CLOCK")
+
+    @classmethod
+    def utcnow(cls) -> datetime:
+        raise AssertionError("IMPORT_CAPABILITY_CLOCK")
+
+
+def _blocked(capability: str) -> object:
+    def reject(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(f"IMPORT_CAPABILITY_{capability}")
+
+    return reject
+
+
+def _load_fixture_module_under_import_firewall(path: Path) -> types.ModuleType:
+    source = path.read_bytes()
+    code = compile(source, str(path), "exec")
+    module = types.ModuleType("_isolated_temporal_fixture")
+    module.__file__ = str(path)
+    module.__package__ = ""
+
+    with pytest.MonkeyPatch.context() as firewall:
+        filesystem = _blocked("FILESYSTEM")
+        firewall.setattr(builtins, "open", filesystem)
+        firewall.setattr(io, "open", filesystem)
+        firewall.setattr(Path, "open", filesystem)
+
+        network = _blocked("NETWORK")
+        firewall.setattr(socket, "socket", network)
+        firewall.setattr(socket, "create_connection", network)
+        firewall.setattr(socket, "getaddrinfo", network)
+
+        environment = _blocked("ENVIRONMENT")
+        firewall.setattr(os, "getenv", environment)
+        firewall.setattr(os, "environ", _ForbiddenEnvironment())
+        if hasattr(os, "getenvb"):
+            firewall.setattr(os, "getenvb", environment)
+        if hasattr(os, "environb"):
+            firewall.setattr(os, "environb", _ForbiddenEnvironment())
+
+        clock = _blocked("CLOCK")
+        for name in (
+            "monotonic",
+            "monotonic_ns",
+            "perf_counter",
+            "perf_counter_ns",
+            "process_time",
+            "process_time_ns",
+            "sleep",
+            "time",
+            "time_ns",
+        ):
+            firewall.setattr(time, name, clock)
+        firewall.setattr(datetime_module, "datetime", _ForbiddenDateTime)
+
+        entropy = _blocked("ENTROPY")
+        firewall.setattr(os, "urandom", entropy)
+        for name in ("token_bytes", "token_hex", "token_urlsafe"):
+            firewall.setattr(secrets, name, entropy)
+        for name in (
+            "choice",
+            "choices",
+            "getrandbits",
+            "randint",
+            "random",
+            "randrange",
+            "sample",
+            "seed",
+            "uniform",
+        ):
+            firewall.setattr(random, name, entropy)
+
+        exec(code, module.__dict__)
+
+    return module
+
+
+def test_temporal_fixture_is_not_imported_before_import_firewall() -> None:
+    assert "tests.temporal_fixtures" not in sys.modules
+    module = _load_fixture_module_under_import_firewall(TEMPORAL_FIXTURE_PATH)
+
+    assert callable(module.synthetic_development_frame)
+    assert callable(module.synthetic_v2_payload)
+    assert "tests.temporal_fixtures" not in sys.modules
+
+
+@pytest.mark.parametrize(
+    ("capability", "module_body"),
+    [
+        ("FILESYSTEM", "from pathlib import Path\nPath(__file__).read_bytes()"),
+        ("NETWORK", "import socket\nsocket.socket().close()"),
+        ("ENVIRONMENT", "import os\nos.getenv('PATH')"),
+        ("CLOCK", "import time\ntime.time()"),
+        ("ENTROPY", "import random\nrandom.random()"),
+        ("ENTROPY", "import os\nos.urandom(1)"),
+    ],
+)
+def test_import_firewall_rejects_malicious_fixture_module_bodies(
+    tmp_path: Path, capability: str, module_body: str
+) -> None:
+    fixture_path = tmp_path / f"malicious_{capability.casefold()}.py"
+    fixture_path.write_text(module_body, encoding="utf-8")
+
+    with pytest.raises(AssertionError, match=f"IMPORT_CAPABILITY_{capability}"):
+        _load_fixture_module_under_import_firewall(fixture_path)
 
 
 def test_synthetic_rows_stop_before_h2_and_keep_target_out_of_model_schema() -> None:
-    rows = synthetic_development_frame()
+    fixtures = _load_fixture_module_under_import_firewall(TEMPORAL_FIXTURE_PATH)
+    rows = fixtures.synthetic_development_frame()
 
     assert rows.attrs == {
         "evidence_class": "synthetic_test",
@@ -42,6 +171,9 @@ def test_synthetic_rows_stop_before_h2_and_keep_target_out_of_model_schema() -> 
 
 
 def test_synthetic_rows_and_payloads_are_reproducible() -> None:
+    fixtures = _load_fixture_module_under_import_firewall(TEMPORAL_FIXTURE_PATH)
+    synthetic_development_frame = fixtures.synthetic_development_frame
+    synthetic_v2_payload = fixtures.synthetic_v2_payload
     first = synthetic_development_frame()
     second = synthetic_development_frame()
 
@@ -72,6 +204,9 @@ def test_synthetic_rows_and_payloads_are_reproducible() -> None:
 def test_synthetic_payload_uses_round_trip_safe_new_york_offsets(
     local_time: datetime, expected_offset: str
 ) -> None:
+    synthetic_v2_payload = _load_fixture_module_under_import_firewall(
+        TEMPORAL_FIXTURE_PATH
+    ).synthetic_v2_payload
     encoded = synthetic_v2_payload(local_time, "dst-vector")["event_timestamp"]
     assert isinstance(encoded, str)
     localized = datetime.fromisoformat(encoded)
@@ -89,6 +224,9 @@ def test_synthetic_payload_uses_round_trip_safe_new_york_offsets(
 def test_synthetic_payload_rejects_nonexistent_or_ambiguous_new_york_time(
     invalid_local_time: datetime,
 ) -> None:
+    synthetic_v2_payload = _load_fixture_module_under_import_firewall(
+        TEMPORAL_FIXTURE_PATH
+    ).synthetic_v2_payload
     with pytest.raises(ValueError, match="synthetic timestamp is nonexistent or ambiguous"):
         synthetic_v2_payload(invalid_local_time, "invalid-dst-vector")
 
@@ -96,6 +234,10 @@ def test_synthetic_payload_rejects_nonexistent_or_ambiguous_new_york_time(
 def test_generator_uses_no_external_or_nondeterministic_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    fixtures = _load_fixture_module_under_import_firewall(TEMPORAL_FIXTURE_PATH)
+    synthetic_development_frame = fixtures.synthetic_development_frame
+    synthetic_v2_payload = fixtures.synthetic_v2_payload
+
     def forbidden(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("forbidden capability used")
 
