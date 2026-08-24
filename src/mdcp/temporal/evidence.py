@@ -49,8 +49,8 @@ _ABSOLUTE_PATH = re.compile(
 )
 _CREDENTIAL_VALUE = re.compile(
     r"(?:"
-    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
-    r"|\bBearer[ \t]+[A-Za-z0-9._~+/=-]{16,}"
+    r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"
+    r"|\bBearer[ \t]+[A-Za-z0-9._~+/=-]+"
     r"|\bgh[pousr]_[A-Za-z0-9]{20,255}\b"
     r"|\bgithub_pat_[A-Za-z0-9_]{20,255}\b"
     r"|\bhf_[A-Za-z0-9]{20,255}\b"
@@ -61,7 +61,10 @@ _CREDENTIAL_VALUE = re.compile(
 _RAW_EXCEPTION_VALUE = re.compile(
     r"(?:"
     r"Traceback\s+\(most recent call last\):"
-    r"|(?:^|[\s:;,])(?:[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)):\s+\S"
+    r"|(?:^|[\s:;,])(?:"
+    r"[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)"
+    r"|ConnectTimeout|ReadTimeout|InvalidResponse|Other"
+    r"):\s+\S"
     r")",
     re.MULTILINE,
 )

@@ -84,6 +84,9 @@ def test_public_scan_rejects_embedded_absolute_private_paths(private_path: str) 
         "Traceback (most recent call last):\n  synthetic frame\nValueError: redacted",
         "request failed with InvalidResponseError: redacted",
         "unhandled RuntimeException: redacted",
+        "ConnectTimeout: redacted",
+        "ReadTimeout: redacted",
+        "InvalidResponse: redacted",
     ],
 )
 def test_public_scan_rejects_raw_exceptions_under_arbitrary_keys(raw_exception: str) -> None:
@@ -97,6 +100,8 @@ def test_public_scan_rejects_raw_exceptions_under_arbitrary_keys(raw_exception: 
     "credential",
     [
         "-----BEGIN PRIVATE KEY-----",
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+        "Bearer abc",
         "Bearer " + "a" * 32,
         "ghp_" + "A" * 36,
         "github_pat_" + "A" * 22 + "_" + "B" * 59,
@@ -114,3 +119,21 @@ def test_public_scan_rejects_common_credential_shapes(credential: str) -> None:
 def test_public_scan_distinguishes_environment_dumps_from_research_assignments() -> None:
     assert public_evidence_violations({"note": "MODEL=rf\nTHREADS=1"}) == ("RAW_ENVIRONMENT",)
     assert public_evidence_violations({"note": "RATIO=0.97"}) == ()
+
+
+def test_public_scan_allows_sanitized_error_class_labels_without_raw_messages() -> None:
+    assert (
+        public_evidence_violations(
+            {
+                "error_classes": [
+                    "ConnectError",
+                    "ConnectTimeout",
+                    "ReadTimeout",
+                    "ProtocolError",
+                    "InvalidResponse",
+                    "Other",
+                ]
+            }
+        )
+        == ()
+    )
