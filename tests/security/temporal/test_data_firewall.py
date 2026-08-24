@@ -80,6 +80,20 @@ FORBIDDEN_MODULES = {
         "options = {'level': 2}\n"
         "target = __import__('workload.dataset', globals(), locals(), (), **options)"
     ),
+    "dynamic_relative_reflective": (
+        "import importlib\n"
+        "loader = getattr(importlib, 'import_module')\n"
+        "target = loader('.dataset', package='mdcp.workload')"
+    ),
+    "dunder_relative_reflective": (
+        "import builtins\n"
+        "loader = getattr(builtins, '__import__')\n"
+        "target = loader('dataset', globals(), locals(), (), 1)"
+    ),
+    "dunder_relative_builtin_namespace": (
+        "loader = getattr(__builtins__, '__import__')\n"
+        "target = loader('dataset', globals(), locals(), (), 1)"
+    ),
 }
 
 ALLOWED_NARROW_IMPORTS = (

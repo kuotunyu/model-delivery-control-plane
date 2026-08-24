@@ -37,6 +37,8 @@ _DYNAMIC_IMPORT_FUNCTIONS = frozenset(
         "builtins.__import__",
     }
 )
+_DYNAMIC_IMPORT_MODULES = frozenset({"importlib", "builtins"})
+_FORBIDDEN_DYNAMIC_REFERENCES = _DYNAMIC_IMPORT_FUNCTIONS | {"__builtins__"}
 _ALLOWED_DIRECT_IMPORTS = {
     "mdcp.workload.dataset": frozenset({"load_uci_development_archive"}),
     "mdcp.workload.splits": frozenset({"DevelopmentPartitions", "split_development_rows"}),
@@ -179,7 +181,9 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if _is_forbidden_module(alias.name):
+                if alias.name.split(".", 1)[0] in _DYNAMIC_IMPORT_MODULES or _is_forbidden_module(
+                    alias.name
+                ):
                     _fail()
                 local_name = alias.asname or alias.name.split(".", 1)[0]
                 qualified_name = alias.name if alias.asname else local_name
@@ -187,6 +191,8 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if node.level:
+                _fail()
+            if module.split(".", 1)[0] in _DYNAMIC_IMPORT_MODULES:
                 _fail()
             if any(alias.name == "*" for alias in node.names):
                 _fail()
@@ -211,7 +217,7 @@ def _audit_tree(tree: ast.AST) -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
-            if qualified_name in _DYNAMIC_IMPORT_FUNCTIONS or (
+            if qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES or (
                 isinstance(node, ast.Attribute)
                 and qualified_name is not None
                 and _is_forbidden_module(qualified_name)
