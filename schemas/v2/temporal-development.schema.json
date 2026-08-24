@@ -2,6 +2,447 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mdcp.local/schemas/v2/temporal-development.schema.json",
   "title": "MDCP v0.2 temporal development protocol",
+  "const": {
+    "schema_version": "mdcp.temporal-development.v0.2",
+    "folds": [
+      {
+        "id": "F1",
+        "train_start": "2011-01-01T00:00:00",
+        "train_end": "2011-07-01T00:00:00",
+        "validation_start": "2011-07-01T00:00:00",
+        "validation_end": "2011-10-01T00:00:00"
+      },
+      {
+        "id": "F2",
+        "train_start": "2011-01-01T00:00:00",
+        "train_end": "2011-10-01T00:00:00",
+        "validation_start": "2011-10-01T00:00:00",
+        "validation_end": "2012-01-01T00:00:00"
+      },
+      {
+        "id": "F3",
+        "train_start": "2011-01-01T00:00:00",
+        "train_end": "2012-01-01T00:00:00",
+        "validation_start": "2012-01-01T00:00:00",
+        "validation_end": "2012-04-01T00:00:00"
+      },
+      {
+        "id": "F4",
+        "train_start": "2011-01-01T00:00:00",
+        "train_end": "2012-04-01T00:00:00",
+        "validation_start": "2012-04-01T00:00:00",
+        "validation_end": "2012-07-01T00:00:00"
+      }
+    ],
+    "trial_ids": [
+      "CTRL-01",
+      "REC-180-L4",
+      "REC-180-L12",
+      "REC-270-L4",
+      "REC-270-L12",
+      "REC-365-L4",
+      "REC-365-L12",
+      "STAT-A0.1",
+      "STAT-A1",
+      "STAT-A10",
+      "STAT-A100",
+      "STAT-A1000",
+      "NL-E64-R0.03-D2",
+      "NL-E64-R0.03-D3",
+      "NL-E64-R0.07-D2",
+      "NL-E64-R0.07-D3",
+      "NL-E128-R0.03-D2",
+      "NL-E128-R0.03-D3",
+      "NL-E128-R0.07-D2",
+      "NL-E128-R0.07-D3"
+    ],
+    "model_feature_schema": [
+      "season",
+      "mnth",
+      "hr",
+      "holiday",
+      "weekday",
+      "workingday",
+      "weathersit",
+      "temp",
+      "atemp",
+      "hum",
+      "windspeed",
+      "elapsed_days",
+      "hour_sin",
+      "hour_cos",
+      "weekday_sin",
+      "weekday_cos",
+      "annual_sin",
+      "annual_cos"
+    ],
+    "families": [
+      {
+        "family_id": "CTRL",
+        "trial_count": 1,
+        "eligible_count": 0,
+        "training_mode": "full_expanding_fold",
+        "recency_days": [],
+        "feature_positions": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "model_kind": "random_forest_regressor",
+        "parameters": {
+          "bootstrap": [
+            true
+          ],
+          "max_depth": [
+            8
+          ],
+          "max_features": [
+            1
+          ],
+          "min_samples_leaf": [
+            4
+          ],
+          "n_estimators": [
+            32
+          ],
+          "n_jobs": [
+            1
+          ],
+          "random_state": [
+            2026
+          ]
+        },
+        "preprocessing": {
+          "categorical_positions": [],
+          "fixed_categorical_domains": [],
+          "standardization_ddof": null,
+          "standardized_positions": [],
+          "zero_variance_policy": null
+        }
+      },
+      {
+        "family_id": "REC",
+        "trial_count": 6,
+        "eligible_count": 6,
+        "training_mode": "trailing_complete_calendar_days",
+        "recency_days": [
+          180,
+          270,
+          365
+        ],
+        "feature_positions": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18
+        ],
+        "model_kind": "random_forest_regressor",
+        "parameters": {
+          "bootstrap": [
+            true
+          ],
+          "max_depth": [
+            8
+          ],
+          "max_features": [
+            1
+          ],
+          "min_samples_leaf": [
+            4,
+            12
+          ],
+          "n_estimators": [
+            64
+          ],
+          "n_jobs": [
+            1
+          ],
+          "random_state": [
+            2026
+          ]
+        },
+        "preprocessing": {
+          "categorical_positions": [],
+          "fixed_categorical_domains": [],
+          "standardization_ddof": null,
+          "standardized_positions": [],
+          "zero_variance_policy": null
+        }
+      },
+      {
+        "family_id": "STAT",
+        "trial_count": 5,
+        "eligible_count": 5,
+        "training_mode": "full_expanding_fold",
+        "recency_days": [],
+        "feature_positions": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18
+        ],
+        "model_kind": "ridge_regressor",
+        "parameters": {
+          "alpha": [
+            0.1,
+            1,
+            10,
+            100,
+            1000
+          ],
+          "fit_intercept": [
+            true
+          ],
+          "max_iter": [
+            10000
+          ],
+          "solver": [
+            "lsqr"
+          ],
+          "tol": [
+            1e-8
+          ]
+        },
+        "preprocessing": {
+          "categorical_positions": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "fixed_categorical_domains": [
+            [
+              1,
+              2,
+              3,
+              4
+            ],
+            [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ],
+            [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ],
+            [
+              0,
+              1
+            ],
+            [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ],
+          "standardization_ddof": 0,
+          "standardized_positions": [
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18
+          ],
+          "zero_variance_policy": "invalid"
+        }
+      },
+      {
+        "family_id": "NL",
+        "trial_count": 8,
+        "eligible_count": 8,
+        "training_mode": "full_expanding_fold",
+        "recency_days": [],
+        "feature_positions": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18
+        ],
+        "model_kind": "gradient_boosting_regressor",
+        "parameters": {
+          "learning_rate": [
+            0.03,
+            0.07
+          ],
+          "loss": [
+            "squared_error"
+          ],
+          "max_depth": [
+            2,
+            3
+          ],
+          "max_features": [
+            null
+          ],
+          "min_samples_leaf": [
+            8
+          ],
+          "n_estimators": [
+            64,
+            128
+          ],
+          "random_state": [
+            2026
+          ],
+          "subsample": [
+            1
+          ]
+        },
+        "preprocessing": {
+          "categorical_positions": [],
+          "fixed_categorical_domains": [],
+          "standardization_ddof": null,
+          "standardized_positions": [],
+          "zero_variance_policy": null
+        }
+      }
+    ],
+    "quality": {
+      "overall_max_ratio": 0.97,
+      "subgroup_max_ratio": 1.05,
+      "subgroup_names": [
+        "weather_clear",
+        "weather_mist",
+        "weather_adverse",
+        "day_non_working",
+        "day_working",
+        "demand_peak",
+        "demand_off_peak"
+      ],
+      "min_subgroup_rows": 100,
+      "bootstrap": {
+        "cluster": "calendar_day",
+        "index": 1899,
+        "paired": true,
+        "resamples": 2000,
+        "rng": "PCG64",
+        "seed": 2026
+      },
+      "completeness": {
+        "adapter": 1,
+        "candidate_prediction": 1,
+        "development_label": 1,
+        "stable_prediction": 1
+      },
+      "cross_fold": {
+        "fold_overall_max_ratio": 1.05,
+        "minimum_folds_at_or_below_one": 3
+      }
+    },
+    "execution": {
+      "seed": 2026,
+      "estimator_threads": 1,
+      "selection_fits": 80,
+      "replay_fits": 4,
+      "final_fits": 1,
+      "maximum_fits": 85,
+      "peak_resident_memory_bytes": 4294967296,
+      "wall_clock_seconds": 21600
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "required": [

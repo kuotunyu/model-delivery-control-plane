@@ -63,8 +63,6 @@ def _assert_schema_accepts(value: object, schema: dict[str, Any], location: str 
         assert accepted == 1, location
         return
 
-    if "const" in schema:
-        assert value == schema["const"], location
     if "enum" in schema:
         assert value in schema["enum"], location
 
@@ -99,6 +97,8 @@ def _assert_schema_accepts(value: object, schema: dict[str, Any], location: str 
     if isinstance(value, int | float) and not isinstance(value, bool):
         assert value >= schema.get("minimum", value), location
         assert value <= schema.get("maximum", value), location
+    if "const" in schema:
+        assert value == schema["const"], location
 
 
 def _assert_all_object_schemas_are_closed(value: object) -> None:
@@ -252,6 +252,47 @@ def test_checked_in_schema_accepts_protocol_and_is_recursively_closed() -> None:
     extra["families"][0]["parameters"]["unapproved"] = [1]
     with pytest.raises(AssertionError, match=r"\$\.families\[0\]\.parameters"):
         _assert_schema_accepts(extra, schema)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "feature_order",
+        "fold_boundary",
+        "family_model_kind",
+        "family_parameters",
+        "family_preprocessing",
+        "family_eligibility",
+        "family_feature_set",
+        "trial_order",
+    ],
+)
+def test_schema_rejects_semantically_reassigned_protocol_content(mutation: str) -> None:
+    protocol = _load_object(PROTOCOL_PATH)
+    schema = _load_object(SCHEMA_PATH)
+    tampered = deepcopy(protocol)
+
+    if mutation == "feature_order":
+        tampered["model_feature_schema"][0:2] = reversed(tampered["model_feature_schema"][0:2])
+    elif mutation == "fold_boundary":
+        tampered["folds"][0]["train_end"] = "2011-10-01T00:00:00"
+    elif mutation == "family_model_kind":
+        tampered["families"][0]["model_kind"] = "ridge_regressor"
+    elif mutation == "family_parameters":
+        tampered["families"][0]["parameters"] = tampered["families"][1]["parameters"]
+    elif mutation == "family_preprocessing":
+        tampered["families"][0]["preprocessing"] = tampered["families"][2]["preprocessing"]
+    elif mutation == "family_eligibility":
+        tampered["families"][0]["eligible_count"] = 1
+    elif mutation == "family_feature_set":
+        tampered["families"][0]["feature_positions"] = tampered["families"][1]["feature_positions"]
+    elif mutation == "trial_order":
+        tampered["trial_ids"][1:3] = reversed(tampered["trial_ids"][1:3])
+    else:  # pragma: no cover - the parametrization is the closed mutation inventory
+        raise AssertionError("unknown semantic mutation")
+
+    with pytest.raises(AssertionError):
+        _assert_schema_accepts(tampered, schema)
 
 
 def test_protocol_canonical_digest_is_stable() -> None:
