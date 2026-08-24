@@ -94,6 +94,18 @@ FORBIDDEN_MODULES = {
         "loader = getattr(__builtins__, '__import__')\n"
         "target = loader('dataset', globals(), locals(), (), 1)"
     ),
+    "dunder_relative_globals_subscript": (
+        "namespace = globals()['__builtins__']\n"
+        "loader = namespace['__import__'] if isinstance(namespace, dict) "
+        "else getattr(namespace, '__import__')\n"
+        "target = loader('workload.splits', globals(), locals(), (), 2)"
+    ),
+    "dunder_relative_globals_get": (
+        "namespace = globals().get('__builtins__')\n"
+        "loader = namespace.get('__import__') if isinstance(namespace, dict) "
+        "else getattr(namespace, '__import__')\n"
+        "target = loader('workload.dataset', globals(), locals(), (), level=2)"
+    ),
 }
 
 ALLOWED_NARROW_IMPORTS = (

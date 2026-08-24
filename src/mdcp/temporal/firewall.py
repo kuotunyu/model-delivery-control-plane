@@ -38,7 +38,13 @@ _DYNAMIC_IMPORT_FUNCTIONS = frozenset(
     }
 )
 _DYNAMIC_IMPORT_MODULES = frozenset({"importlib", "builtins"})
-_FORBIDDEN_DYNAMIC_REFERENCES = _DYNAMIC_IMPORT_FUNCTIONS | {"__builtins__"}
+_FORBIDDEN_DYNAMIC_REFERENCES = _DYNAMIC_IMPORT_FUNCTIONS | {
+    "__builtins__",
+    "globals",
+    "locals",
+    "vars",
+    "sys.modules",
+}
 _ALLOWED_DIRECT_IMPORTS = {
     "mdcp.workload.dataset": frozenset({"load_uci_development_archive"}),
     "mdcp.workload.splits": frozenset({"DevelopmentPartitions", "split_development_rows"}),
