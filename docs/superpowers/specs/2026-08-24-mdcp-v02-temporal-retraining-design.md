@@ -1,6 +1,6 @@
 # Model Delivery Control Plane v0.2 Temporal Retraining Design Specification
 
-- Status: `PROPOSED / APPROACH_A_APPROVED / OWNER_FINAL_SPEC_REVIEW_REQUIRED`
+- Status: `APPROVED / APPROACH_A / IMPLEMENTATION_PLANNING_AUTHORIZED`
 - Date: 2026-08-24
 - v0.1 base SHA: `46c2baa6b96323624106acb7cc0772ae2bc1608a`
 - Historical verdict: `NO_ELIGIBLE_CANDIDATE`
@@ -896,7 +896,7 @@ API or support for later timestamps.
 
 ## 13. Written-spec acceptance and stop point
 
-This document is ready for owner written-spec review only when a fresh self-review confirms:
+This document passed final owner written-spec review after a fresh self-review confirmed:
 
 - no placeholder or unresolved choice;
 - no contradiction between historical and v0.2 roles;
@@ -915,12 +915,12 @@ This document is ready for owner written-spec review only when a fresh self-revi
 - freeze and H2 one-shot transitions fail closed;
 - Wave 3 cannot start before H2 PASS;
 - no private path or opaque payload is present;
-- no implementation command, implementation plan, H2 access, model run, Docker/GPU action, or
-  external publication is authorized by this spec.
+- no implementation command, H2 access, model run, Docker/GPU action, or external publication is
+  authorized by this spec; only implementation planning is authorized.
 
 The terminal state for this commit is:
 
-`DESIGN_SPEC_REVISED / H2_SEALED / OWNER_FINAL_SPEC_REVIEW_REQUIRED`
+`DESIGN_SPEC_APPROVED / H2_SEALED / IMPLEMENTATION_PLANNING_AUTHORIZED`
 
-No implementation work or implementation plan may begin until the owner reviews this written
-specification and grants separate authorization.
+Implementation planning is authorized. Implementation work, formal search, H2 access, model runs,
+Docker/GPU actions, Wave 3, and external publication still require their separately declared gates.
