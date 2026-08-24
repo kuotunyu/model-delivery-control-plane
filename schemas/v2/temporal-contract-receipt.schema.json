@@ -1,0 +1,919 @@
+{
+  "$defs": {
+    "BehavioralFirewallBody": {
+      "properties": {
+        "behavioral_firewall_implementation_sha256": {
+          "title": "Behavioral Firewall Implementation Sha256",
+          "type": "string"
+        },
+        "bounded_loader_implementation_sha256": {
+          "title": "Bounded Loader Implementation Sha256",
+          "type": "string"
+        },
+        "development_boundary": {
+          "$ref": "#/$defs/DevelopmentBoundaryResult"
+        },
+        "development_split_implementation_sha256": {
+          "title": "Development Split Implementation Sha256",
+          "type": "string"
+        },
+        "fixture_recipe_sha256": {
+          "title": "Fixture Recipe Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "mdcp.behavioral-h2-firewall.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "static_firewall_implementation_sha256": {
+          "title": "Static Firewall Implementation Sha256",
+          "type": "string"
+        },
+        "verdict": {
+          "const": "PASS",
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "verdict",
+        "fixture_recipe_sha256",
+        "development_boundary",
+        "static_firewall_implementation_sha256",
+        "behavioral_firewall_implementation_sha256",
+        "bounded_loader_implementation_sha256",
+        "development_split_implementation_sha256"
+      ],
+      "title": "BehavioralFirewallBody",
+      "type": "object"
+    },
+    "DevelopmentBoundaryResult": {
+      "properties": {
+        "archive_sha256": {
+          "title": "Archive Sha256",
+          "type": "string"
+        },
+        "development_row_count": {
+          "const": 13003,
+          "title": "Development Row Count",
+          "type": "integer"
+        },
+        "development_rows_sha256": {
+          "title": "Development Rows Sha256",
+          "type": "string"
+        },
+        "forbidden_call_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Forbidden Call Counts",
+          "type": "object"
+        },
+        "h1_row_count": {
+          "const": 4358,
+          "title": "H1 Row Count",
+          "type": "integer"
+        },
+        "h1_rows_sha256": {
+          "title": "H1 Rows Sha256",
+          "type": "string"
+        },
+        "h2_loaded_rows": {
+          "const": 0,
+          "title": "H2 Loaded Rows",
+          "type": "integer"
+        },
+        "h2_status": {
+          "const": "SEALED_NOT_LOADED",
+          "title": "H2 Status",
+          "type": "string"
+        },
+        "read_csv_nrows": {
+          "maxItems": 1,
+          "minItems": 1,
+          "prefixItems": [
+            {
+              "const": 13003,
+              "type": "integer"
+            }
+          ],
+          "title": "Read Csv Nrows",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "mdcp.development-boundary.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "train_row_count": {
+          "const": 8645,
+          "title": "Train Row Count",
+          "type": "integer"
+        },
+        "train_rows_sha256": {
+          "title": "Train Rows Sha256",
+          "type": "string"
+        },
+        "verdict": {
+          "const": "PASS",
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "verdict",
+        "archive_sha256",
+        "development_row_count",
+        "development_rows_sha256",
+        "train_row_count",
+        "train_rows_sha256",
+        "h1_row_count",
+        "h1_rows_sha256",
+        "read_csv_nrows",
+        "forbidden_call_counts",
+        "h2_status",
+        "h2_loaded_rows"
+      ],
+      "title": "DevelopmentBoundaryResult",
+      "type": "object"
+    },
+    "V2InventoryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "V2InventoryEntry",
+      "type": "object"
+    },
+    "V2ServingInventoryBody": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/V2InventoryEntry"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "entry_point": {
+          "const": "mdcp.predictor.app_v2:app",
+          "title": "Entry Point",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "mdcp.v2-serving-inventory.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "entry_point",
+        "entries"
+      ],
+      "title": "V2ServingInventoryBody",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "archive_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Archive Sha256",
+      "type": "string"
+    },
+    "behavioral_firewall": {
+      "$ref": "#/$defs/BehavioralFirewallBody"
+    },
+    "behavioral_result_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Behavioral Result Sha256",
+      "type": "string"
+    },
+    "check_ids": {
+      "maxItems": 11,
+      "minItems": 11,
+      "prefixItems": [
+        {
+          "const": "V1_SERVING_IDENTITY",
+          "type": "string"
+        },
+        {
+          "const": "V2_REQUEST_SCHEMA",
+          "type": "string"
+        },
+        {
+          "const": "V2_ENTRY_POINT",
+          "type": "string"
+        },
+        {
+          "const": "V2_SERVING_INVENTORY",
+          "type": "string"
+        },
+        {
+          "const": "ROUTING_TRUTH_TABLE",
+          "type": "string"
+        },
+        {
+          "const": "DEVELOPMENT_BOUNDARY",
+          "type": "string"
+        },
+        {
+          "const": "FEATURE_LINEAGE",
+          "type": "string"
+        },
+        {
+          "const": "STATIC_H2_FIREWALL",
+          "type": "string"
+        },
+        {
+          "const": "BEHAVIORAL_H2_FIREWALL",
+          "type": "string"
+        },
+        {
+          "const": "GOLDEN_VECTOR_INVENTORY",
+          "type": "string"
+        },
+        {
+          "const": "PUBLIC_EVIDENCE",
+          "type": "string"
+        }
+      ],
+      "title": "Check Ids",
+      "type": "array"
+    },
+    "development_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Development Identity Sha256",
+      "type": "string"
+    },
+    "development_row_count": {
+      "const": 13003,
+      "title": "Development Row Count",
+      "type": "integer"
+    },
+    "development_rows_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Development Rows Sha256",
+      "type": "string"
+    },
+    "feature_count": {
+      "const": 18,
+      "title": "Feature Count",
+      "type": "integer"
+    },
+    "feature_lineage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Feature Lineage Sha256",
+      "type": "string"
+    },
+    "golden_case_count": {
+      "const": 14,
+      "title": "Golden Case Count",
+      "type": "integer"
+    },
+    "golden_case_ids": {
+      "maxItems": 14,
+      "minItems": 14,
+      "prefixItems": [
+        {
+          "const": "origin",
+          "type": "string"
+        },
+        {
+          "const": "year_end_category_maxima",
+          "type": "string"
+        },
+        {
+          "const": "leap_day",
+          "type": "string"
+        },
+        {
+          "const": "spring_before",
+          "type": "string"
+        },
+        {
+          "const": "spring_after",
+          "type": "string"
+        },
+        {
+          "const": "fall_edt",
+          "type": "string"
+        },
+        {
+          "const": "fall_est",
+          "type": "string"
+        },
+        {
+          "const": "malformed_timestamp",
+          "type": "string"
+        },
+        {
+          "const": "nonexistent_local_time",
+          "type": "string"
+        },
+        {
+          "const": "wrong_ambiguous_offset",
+          "type": "string"
+        },
+        {
+          "const": "cross_field_mismatch",
+          "type": "string"
+        },
+        {
+          "const": "before_lower_bound",
+          "type": "string"
+        },
+        {
+          "const": "last_accepted_hour",
+          "type": "string"
+        },
+        {
+          "const": "exact_upper_bound",
+          "type": "string"
+        }
+      ],
+      "title": "Golden Case Ids",
+      "type": "array"
+    },
+    "golden_case_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Golden Case Inventory Sha256",
+      "type": "string"
+    },
+    "golden_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Golden Manifest Sha256",
+      "type": "string"
+    },
+    "h1_row_count": {
+      "const": 4358,
+      "title": "H1 Row Count",
+      "type": "integer"
+    },
+    "h1_rows_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "H1 Rows Sha256",
+      "type": "string"
+    },
+    "h2_loaded_rows": {
+      "const": 0,
+      "title": "H2 Loaded Rows",
+      "type": "integer"
+    },
+    "h2_status": {
+      "const": "SEALED_NOT_LOADED",
+      "title": "H2 Status",
+      "type": "string"
+    },
+    "receipt_schema_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Receipt Schema Sha256",
+      "type": "string"
+    },
+    "request_schema_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Schema Sha256",
+      "type": "string"
+    },
+    "routing_truth_table_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Routing Truth Table Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "mdcp.temporal-contract-receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "static_firewall_result_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Static Firewall Result Sha256",
+      "type": "string"
+    },
+    "temporal_schema_id": {
+      "const": "mdcp.temporal-features.v0.2",
+      "title": "Temporal Schema Id",
+      "type": "string"
+    },
+    "train_row_count": {
+      "const": 8645,
+      "title": "Train Row Count",
+      "type": "integer"
+    },
+    "train_rows_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Train Rows Sha256",
+      "type": "string"
+    },
+    "v1_entry_point": {
+      "const": "mdcp.predictor.app:app",
+      "title": "V1 Entry Point",
+      "type": "string"
+    },
+    "v1_serving_identity": {
+      "const": "d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209",
+      "title": "V1 Serving Identity",
+      "type": "string"
+    },
+    "v2_entry_point": {
+      "const": "mdcp.predictor.app_v2:app",
+      "title": "V2 Entry Point",
+      "type": "string"
+    },
+    "v2_serving_inventory": {
+      "$ref": "#/$defs/V2ServingInventoryBody",
+      "properties": {
+        "entries": {
+          "maxItems": 23,
+          "minItems": 23,
+          "prefixItems": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "pyproject.toml",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "schemas/v2/bike-request.schema.json",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "schemas/v2/temporal-contract-receipt.schema.json",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/common/canonical.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/common/digests.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/common/enums.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/contracts/serving_identity_v2.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/contracts/workload.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/contracts/workload_v2.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/predictor/app_v2.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/predictor/runtime.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/temporal/adapter.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/temporal/constants.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/temporal/contract_gate.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/temporal/evidence.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/temporal/firewall.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/temporal/golden_vectors.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/temporal/routing.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/workload/dataset.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/workload/features.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "src/mdcp/workload/splits.py",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "tests/fixtures/temporal/adapter-golden-vectors.json",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "const": "uv.lock",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "type": "object"
+            }
+          ],
+          "type": "array"
+        },
+        "entry_point": {
+          "const": "mdcp.predictor.app_v2:app",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "mdcp.v2-serving-inventory.v1",
+          "type": "string"
+        }
+      }
+    },
+    "v2_serving_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "V2 Serving Inventory Sha256",
+      "type": "string"
+    },
+    "verdict": {
+      "const": "PASS",
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "verdict",
+    "check_ids",
+    "v1_serving_identity",
+    "v1_entry_point",
+    "v2_entry_point",
+    "v2_serving_inventory",
+    "v2_serving_inventory_sha256",
+    "request_schema_sha256",
+    "receipt_schema_sha256",
+    "temporal_schema_id",
+    "feature_count",
+    "archive_sha256",
+    "development_row_count",
+    "development_rows_sha256",
+    "train_row_count",
+    "train_rows_sha256",
+    "h1_row_count",
+    "h1_rows_sha256",
+    "development_identity_sha256",
+    "routing_truth_table_sha256",
+    "feature_lineage_sha256",
+    "static_firewall_result_sha256",
+    "golden_case_ids",
+    "golden_case_count",
+    "golden_case_inventory_sha256",
+    "golden_manifest_sha256",
+    "behavioral_firewall",
+    "behavioral_result_sha256",
+    "h2_status",
+    "h2_loaded_rows"
+  ],
+  "title": "TemporalContractReceipt",
+  "type": "object"
+}
