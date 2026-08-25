@@ -409,6 +409,51 @@ def test_static_firewall_rejects_retargeted_approved_file_receiver(tmp_path: Pat
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
+@pytest.mark.parametrize(
+    "shadow",
+    (
+        "def Path(value, _real=Path):\n    return _real('synthetic-h2.json')\n",
+        "class Path:\n    pass\n",
+    ),
+)
+def test_static_firewall_rejects_definition_shadowing_of_imported_capability(
+    tmp_path: Path,
+    shadow: str,
+) -> None:
+    logical_path = "src/mdcp/predictor/app_v2.py"
+    _write_logical_module(
+        tmp_path,
+        logical_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        f"{shadow}"
+        "def runtime_from_environment():\n"
+        "    descriptor_path = Path(os.environ['MDCP_DESCRIPTOR_PATH'])\n"
+        "    return descriptor_path.read_text(encoding='utf-8')",
+    )
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+def test_static_firewall_rejects_argument_shadowing_of_imported_capability(
+    tmp_path: Path,
+) -> None:
+    logical_path = "src/mdcp/predictor/app_v2.py"
+    _write_logical_module(
+        tmp_path,
+        logical_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        "def runtime_from_environment(Path=Path):\n"
+        "    descriptor_path = Path(os.environ['MDCP_DESCRIPTOR_PATH'])\n"
+        "    return descriptor_path.read_text(encoding='utf-8')",
+    )
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 @pytest.mark.parametrize("source", ("breakpoint()", "help('modules')"))
 def test_static_firewall_rejects_runtime_import_and_evaluation_hooks(
     tmp_path: Path,

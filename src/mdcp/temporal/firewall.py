@@ -272,14 +272,22 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Attribute",
             "ast.AsyncFunctionDef",
             "ast.Call",
+            "ast.ClassDef",
             "ast.Constant",
+            "ast.ExceptHandler",
             "ast.FunctionDef",
+            "ast.Global",
             "ast.Import",
             "ast.ImportFrom",
             "ast.Load",
+            "ast.MatchAs",
+            "ast.MatchMapping",
+            "ast.MatchStar",
             "ast.Name",
+            "ast.Nonlocal",
             "ast.Starred",
             "ast.Subscript",
+            "ast.arg",
             "ast.expr",
             "ast.iter_child_nodes",
             "ast.parse",
@@ -683,6 +691,12 @@ def _import_allowed(logical_path: str, module: str, imported_name: str | None) -
     return (module, imported_name) in _FORMAL_IMPORT_ALLOWLIST.get(logical_path, frozenset())
 
 
+def _bind_import(bindings: dict[str, str], local_name: str, qualified_name: str) -> None:
+    if local_name in bindings:
+        _fail()
+    bindings[local_name] = qualified_name
+
+
 def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], frozenset[str]]:
     bindings: dict[str, str] = {}
     module_roots: set[str] = set()
@@ -700,7 +714,7 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                     _fail()
                 local_name = alias.asname or alias.name.split(".", 1)[0]
                 qualified_name = alias.name if alias.asname else local_name
-                bindings[local_name] = qualified_name
+                _bind_import(bindings, local_name, qualified_name)
                 module_roots.add(qualified_name)
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
@@ -726,9 +740,29 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                 if not _import_allowed(logical_path, module, alias.name):
                     _fail()
                 local_name = alias.asname or alias.name
-                bindings[local_name] = f"{module}.{alias.name}" if module else alias.name
+                _bind_import(
+                    bindings,
+                    local_name,
+                    f"{module}.{alias.name}" if module else alias.name,
+                )
 
     return bindings, frozenset(module_roots)
+
+
+def _shadows_imported_binding(node: ast.AST, bindings: dict[str, str]) -> bool:
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return node.name in bindings
+    if isinstance(node, ast.arg):
+        return node.arg in bindings
+    if isinstance(node, ast.ExceptHandler):
+        return node.name in bindings if node.name is not None else False
+    if isinstance(node, ast.Global | ast.Nonlocal):
+        return any(name in bindings for name in node.names)
+    if isinstance(node, ast.MatchAs | ast.MatchStar):
+        return node.name in bindings if node.name is not None else False
+    if isinstance(node, ast.MatchMapping):
+        return node.rest in bindings if node.rest is not None else False
+    return False
 
 
 def _audit_tree(tree: ast.AST, logical_path: str) -> None:
@@ -739,6 +773,8 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     previous_reader_references = 0
     descriptor_path_references = 0
     for node in ast.walk(tree):
+        if _shadows_imported_binding(node, bindings):
+            _fail()
         if isinstance(node, ast.Attribute) and _attribute_name(node, bindings) == "pandas.read_csv":
             pandas_reader_references += 1
         if isinstance(node, ast.Name) and node.id == "previous_read_csv":
