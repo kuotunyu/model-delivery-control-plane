@@ -437,6 +437,27 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("typing", "Literal"),
         }
     ),
+    "src/mdcp/temporal/run_evidence.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("json", None),
+            ("math", None),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.canonical", "parse_json_bytes"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("os", None),
+            ("pathlib", "Path"),
+            ("pathlib", "PurePosixPath"),
+            ("pydantic", "BaseModel"),
+            ("pydantic", "ConfigDict"),
+            ("pydantic", "StringConstraints"),
+            ("pydantic", "field_validator"),
+            ("pydantic", "model_validator"),
+            ("typing", "Annotated"),
+            ("typing", "Literal"),
+        }
+    ),
 }
 _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/predictor/app_v2.py": frozenset(
@@ -554,6 +575,24 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     ),
     "src/mdcp/temporal/cli.py": frozenset({"argparse.ArgumentParser"}),
     "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
+    "src/mdcp/temporal/run_evidence.py": frozenset(
+        {
+            "json.JSONDecodeError",
+            "json.loads",
+            "math.isfinite",
+            "os.O_BINARY",
+            "os.O_CREAT",
+            "os.O_EXCL",
+            "os.O_WRONLY",
+            "os.close",
+            "os.fsync",
+            "os.open",
+            "os.path",
+            "os.path.isjunction",
+            "os.rename",
+            "os.write",
+        }
+    ),
 }
 _FILE_ACCESS_METHODS = frozenset(
     {
@@ -607,6 +646,18 @@ _ALLOWED_FILE_ACCESS_CALLS = {
         {
             ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
             ("_read_expected_public_file", "read_bytes", "name:expected_path"),
+        }
+    ),
+    "src/mdcp/temporal/run_evidence.py": frozenset(
+        {
+            (
+                "_checked_in_schema",
+                "read_text",
+                "Path:schemas/v2/development-result-index.schema.json",
+            ),
+            ("verify_development_result", "read_bytes", "name:path"),
+            ("_write_exclusive_canonical_file", "open", "name:os"),
+            ("_write_exclusive_canonical_file", "write", "name:os"),
         }
     ),
 }

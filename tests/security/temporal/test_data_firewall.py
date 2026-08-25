@@ -780,6 +780,28 @@ def test_static_firewall_allows_committed_selection_module(tmp_path: Path) -> No
     assert len(result.implementation_sha256) == 64
 
 
+def test_static_firewall_allows_only_the_closed_run_evidence_capabilities(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, source)
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
+    assert result.checked_paths == (logical_path,)
+
+
+def test_static_firewall_rejects_unapproved_run_evidence_capability(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    needle = "import math\n"
+    assert source.count(needle) == 1
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, "import math\nimport time\n", 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 def test_static_firewall_allows_exact_fold_timestamp_normalization(tmp_path: Path) -> None:
     logical_path = "src/mdcp/temporal/folds.py"
     _write_logical_module(
@@ -831,6 +853,7 @@ def test_runtime_guard_and_command_surfaces_are_discovered() -> None:
         "src/mdcp/temporal/runner.py",
         "src/mdcp/temporal/cli.py",
         "src/mdcp/temporal/search_identity.py",
+        "src/mdcp/temporal/run_evidence.py",
     }.issubset(result.checked_paths)
 
 

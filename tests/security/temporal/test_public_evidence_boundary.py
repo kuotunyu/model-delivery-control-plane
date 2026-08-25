@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mdcp.temporal.evidence import public_evidence_violations
+from mdcp.temporal.run_evidence import PrivateBundleIdentity
 
 
 def test_public_scan_rejects_private_metadata_without_echoing_values() -> None:
@@ -137,3 +138,14 @@ def test_public_scan_allows_sanitized_error_class_labels_without_raw_messages() 
         )
         == ()
     )
+
+
+def test_private_bundle_identity_is_public_safe_by_shape_and_value() -> None:
+    identity = PrivateBundleIdentity(
+        file_count=2,
+        total_bytes=42,
+        inventory_sha256="a" * 64,
+        manifest_sha256="b" * 64,
+    )
+
+    assert public_evidence_violations(identity.model_dump(mode="json")) == ()

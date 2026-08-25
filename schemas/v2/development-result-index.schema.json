@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "ClosedMetrics": {
+      "additionalProperties": false,
+      "description": "The only public aggregate metrics permitted in a fold receipt.",
+      "properties": {
+        "row_count": {"anyOf": [{"type": "number"}, {"type": "null"}], "title": "Row Count"},
+        "stable_mae": {"anyOf": [{"type": "number"}, {"type": "null"}], "title": "Stable Mae"},
+        "candidate_mae": {"anyOf": [{"type": "number"}, {"type": "null"}], "title": "Candidate Mae"},
+        "point_ratio": {"anyOf": [{"type": "number"}, {"type": "null"}], "title": "Point Ratio"},
+        "ucb95": {"anyOf": [{"type": "number"}, {"type": "null"}], "title": "Ucb95"}
+      },
+      "required": ["row_count", "stable_mae", "candidate_mae", "point_ratio", "ucb95"],
+      "title": "ClosedMetrics",
+      "type": "object"
+    },
+    "PublicFoldReceipt": {
+      "additionalProperties": false,
+      "description": "One closed four-fold public receipt.",
+      "properties": {
+        "fold_id": {"enum": ["F1", "F2", "F3", "F4"], "title": "Fold Id", "type": "string"},
+        "status": {"enum": ["PASS", "FAIL", "UNKNOWN"], "title": "Status", "type": "string"},
+        "metrics": {"$ref": "#/$defs/ClosedMetrics"},
+        "reason_codes": {"items": {"enum": ["METRICS_UNAVAILABLE", "QUALITY_THRESHOLD_EXCEEDED"], "type": "string"}, "title": "Reason Codes", "type": "array"}
+      },
+      "required": ["fold_id", "status", "metrics", "reason_codes"],
+      "title": "PublicFoldReceipt",
+      "type": "object"
+    },
+    "PublicTrialReceipt": {
+      "additionalProperties": false,
+      "description": "A trial has exactly one fit per closed fold.",
+      "properties": {
+        "trial_id": {"enum": ["TRIAL-01", "TRIAL-02", "TRIAL-03", "TRIAL-04", "TRIAL-05", "TRIAL-06", "TRIAL-07", "TRIAL-08", "TRIAL-09", "TRIAL-10", "TRIAL-11", "TRIAL-12", "TRIAL-13", "TRIAL-14", "TRIAL-15", "TRIAL-16", "TRIAL-17", "TRIAL-18", "TRIAL-19", "TRIAL-20"], "title": "Trial Id", "type": "string"},
+        "selection_fit_count": {"const": 4, "title": "Selection Fit Count", "type": "integer"},
+        "folds": {"maxItems": 4, "minItems": 4, "prefixItems": [{"$ref": "#/$defs/PublicFoldReceipt"}, {"$ref": "#/$defs/PublicFoldReceipt"}, {"$ref": "#/$defs/PublicFoldReceipt"}, {"$ref": "#/$defs/PublicFoldReceipt"}], "title": "Folds", "type": "array"}
+      },
+      "required": ["trial_id", "selection_fit_count", "folds"],
+      "title": "PublicTrialReceipt",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Public-only, schema-closed receipt for one development inventory.",
+  "properties": {
+    "schema_version": {"const": "mdcp.development-result-index.v1", "title": "Schema Version", "type": "string"},
+    "canonicalization_version": {"const": "RFC8785", "title": "Canonicalization Version", "type": "string"},
+    "evidence_class": {"enum": ["synthetic_test", "natural_development"], "title": "Evidence Class", "type": "string"},
+    "status": {"enum": ["PASS", "FAIL", "UNKNOWN"], "title": "Status", "type": "string"},
+    "h1_role": {"const": "OBSERVED_DEVELOPMENT_ONLY", "title": "H1 Role", "type": "string"},
+    "h2_state": {"const": "SEALED_NOT_LOADED", "title": "H2 State", "type": "string"},
+    "h2_loaded_rows": {"const": 0, "title": "H2 Loaded Rows", "type": "integer"},
+    "selection_fit_count": {"const": 80, "title": "Selection Fit Count", "type": "integer"},
+    "result_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Result Sha256", "type": "string"},
+    "trials": {"maxItems": 20, "minItems": 20, "prefixItems": [{"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}, {"$ref": "#/$defs/PublicTrialReceipt"}], "title": "Trials", "type": "array"}
+  },
+  "required": ["schema_version", "canonicalization_version", "evidence_class", "status", "h1_role", "h2_state", "h2_loaded_rows", "selection_fit_count", "result_sha256", "trials"],
+  "title": "PublicDevelopmentResult",
+  "type": "object"
+}
