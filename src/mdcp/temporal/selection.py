@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from threading import Lock
 from typing import Literal
 
 from mdcp.common.canonical import canonicalize_json
@@ -79,6 +80,8 @@ class ReplayResult:
     trial_id: str
     family_id: str
     ranking_key: RankingKey
+    qualification_inventory_sha256: str
+    session_sha256: str
     verdict: GateVerdict
     digests: tuple[ReplayFoldDigests, ...]
 
@@ -299,6 +302,104 @@ def _valid_replay_digests(digests: object) -> bool:
     return True
 
 
+def _replay_digest_material(digests: tuple[ReplayFoldDigests, ...]) -> list[dict[str, str]]:
+    return [
+        {
+            "fold_id": digest.fold_id,
+            "verdict": digest.verdict.value,
+            "configuration_sha256": digest.configuration_sha256,
+            "preprocessing_state_sha256": digest.preprocessing_state_sha256,
+            "feature_vector_sha256": digest.feature_vector_sha256,
+            "prediction_vector_sha256": digest.prediction_vector_sha256,
+            "metric_sha256": digest.metric_sha256,
+            "receipt_sha256": digest.receipt_sha256,
+        }
+        for digest in digests
+    ]
+
+
+class ReplaySelectionSession:
+    """Transient one-shot authorization bound to qualifications and expected replay bytes."""
+
+    __slots__ = (
+        "_consumed",
+        "_expected_digests",
+        "_lock",
+        "_qualification_inventory_sha256",
+        "_qualification_results",
+        "_session_sha256",
+    )
+
+    def __init__(
+        self,
+        qualification_results: tuple[QualificationResult, ...],
+        expected_digests: tuple[ReplayFoldDigests, ...],
+    ) -> None:
+        provisional = rank_qualified(qualification_results)
+        if not _valid_replay_digests(expected_digests) or any(
+            digest.verdict is not GateVerdict.PASS for digest in expected_digests
+        ):
+            raise ValueError("expected replay digest inventory is invalid")
+        qualification_inventory_sha256 = (
+            provisional.qualification_inventory_sha256
+            if provisional is not None
+            else _qualification_inventory_digest(qualification_results)
+        )
+        session_sha256 = sha256_hex(
+            canonicalize_json(
+                {
+                    "qualification_inventory_sha256": qualification_inventory_sha256,
+                    "expected_replay_digests": _replay_digest_material(expected_digests),
+                }
+            )
+        )
+        self._qualification_results = qualification_results
+        self._expected_digests = expected_digests
+        self._qualification_inventory_sha256 = qualification_inventory_sha256
+        self._session_sha256 = session_sha256
+        self._lock = Lock()
+        self._consumed = False
+
+    @property
+    def qualification_inventory_sha256(self) -> str:
+        """Return only the safe digest identity, never the raw qualification inventory."""
+        return self._qualification_inventory_sha256
+
+    @property
+    def session_sha256(self) -> str:
+        """Return the safe one-shot session identity."""
+        return self._session_sha256
+
+    @property
+    def consumed(self) -> bool:
+        """Read replay-consumption state under the same lock used by the transition."""
+        with self._lock:
+            return self._consumed
+
+    def __repr__(self) -> str:
+        return (
+            "ReplaySelectionSession("
+            f"session_sha256='{self._session_sha256}', consumed={self.consumed})"
+        )
+
+    def __reduce_ex__(self, protocol: int) -> object:
+        del protocol
+        raise TypeError("replay selection sessions are transient and non-serializable")
+
+    def _consume(self) -> bool:
+        with self._lock:
+            if self._consumed:
+                return False
+            self._consumed = True
+            return True
+
+    def _ranked_provisional(self) -> ProvisionalWinner | None:
+        return rank_qualified(self._qualification_results)
+
+    def _matches_expected_digests(self, digests: object) -> bool:
+        return _valid_replay_digests(digests) and digests == self._expected_digests
+
+
 def _no_eligible_decision() -> SelectionDecision:
     return SelectionDecision(
         status="NO_ELIGIBLE_CANDIDATE",
@@ -309,7 +410,7 @@ def _no_eligible_decision() -> SelectionDecision:
     )
 
 
-def _replay_terminal(provisional: ProvisionalWinner, reason_code: str) -> SelectionDecision:
+def _replay_terminal(provisional: ProvisionalWinner | None, reason_code: str) -> SelectionDecision:
     return SelectionDecision(
         status="UNKNOWN/NO_ELIGIBLE_CANDIDATE",
         provisional_winner=provisional,
@@ -320,41 +421,54 @@ def _replay_terminal(provisional: ProvisionalWinner, reason_code: str) -> Select
 
 
 def finalize_selection(
+    session: ReplaySelectionSession,
     provisional: ProvisionalWinner | None,
     replay: ReplayResult | None,
 ) -> SelectionDecision:
-    """Promote only the sole rank-one replay, with no rerank, fallback, or retry."""
-    if provisional is None:
-        if replay is not None:
-            raise ValueError("replay without a provisional winner is invalid")
-        return _no_eligible_decision()
-    if not _valid_provisional(provisional):
-        raise ValueError("provisional winner is invalid")
+    """Atomically consume one replay and promote only exact expected replay bytes."""
+    if type(session) is not ReplaySelectionSession:
+        raise ValueError("replay selection session is invalid")
+    if not session._consume():
+        return _replay_terminal(session._ranked_provisional(), "REPLAY_ALREADY_CONSUMED")
+
+    canonical_provisional = session._ranked_provisional()
+    if canonical_provisional is None:
+        if provisional is None and replay is None:
+            return _no_eligible_decision()
+        return _replay_terminal(None, "PROVISIONAL_WINNER_UNEXPECTED")
+    if not _valid_provisional(provisional) or provisional != canonical_provisional:
+        return _replay_terminal(canonical_provisional, "PROVISIONAL_WINNER_MISMATCH")
     if type(replay) is not ReplayResult:
-        raise ValueError("exactly one replay is required")
+        return _replay_terminal(canonical_provisional, "REPLAY_RESULT_INVALID")
     if type(replay.verdict) is not GateVerdict:
-        raise ValueError("replay verdict is invalid")
+        return _replay_terminal(canonical_provisional, "REPLAY_VERDICT_INVALID")
+    if not _valid_sha256(replay.qualification_inventory_sha256) or not _valid_sha256(
+        replay.session_sha256
+    ):
+        return _replay_terminal(canonical_provisional, "REPLAY_IDENTITY_INVALID")
     if not _valid_ranking_key(
         replay.ranking_key,
         trial_id=replay.trial_id,
         family_id=replay.family_id,
     ) or (
-        replay.trial_id != provisional.trial_id
-        or replay.family_id != provisional.family_id
-        or replay.ranking_key != provisional.ranking_key
+        replay.trial_id != canonical_provisional.trial_id
+        or replay.family_id != canonical_provisional.family_id
+        or replay.ranking_key != canonical_provisional.ranking_key
+        or replay.qualification_inventory_sha256
+        != canonical_provisional.qualification_inventory_sha256
+        or replay.qualification_inventory_sha256 != session.qualification_inventory_sha256
+        or replay.session_sha256 != session.session_sha256
     ):
-        raise ValueError("replay identity is invalid")
-    if not _valid_replay_digests(replay.digests):
-        raise ValueError("replay digest inventory is invalid")
+        return _replay_terminal(canonical_provisional, "REPLAY_IDENTITY_INVALID")
 
     if replay.verdict is not GateVerdict.PASS:
-        return _replay_terminal(provisional, f"REPLAY_{replay.verdict.value}")
-    if any(digest.verdict is not GateVerdict.PASS for digest in replay.digests):
-        return _replay_terminal(provisional, "REPLAY_FOLD_NOT_PASS")
+        return _replay_terminal(canonical_provisional, f"REPLAY_{replay.verdict.value}")
+    if not session._matches_expected_digests(replay.digests):
+        return _replay_terminal(canonical_provisional, "REPLAY_DIGEST_MISMATCH")
     return SelectionDecision(
         status="PASS",
-        provisional_winner=provisional,
-        final_winner=provisional,
+        provisional_winner=canonical_provisional,
+        final_winner=canonical_provisional,
         retry_allowed=False,
         reason_codes=(),
     )

@@ -22,6 +22,7 @@ from mdcp.temporal.folds import FoldSpec, materialize_folds
 from mdcp.temporal.selection import (
     ReplayFoldDigests,
     ReplayResult,
+    ReplaySelectionSession,
     finalize_selection,
     rank_qualified,
 )
@@ -164,12 +165,16 @@ def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_forma
         )
         for fold in folds
     )
+    session = ReplaySelectionSession(qualifications, fold_digests)
     decision = finalize_selection(
+        session,
         provisional,
         ReplayResult(
             trial_id=provisional.trial_id,
             family_id=provisional.family_id,
             ranking_key=provisional.ranking_key,
+            qualification_inventory_sha256=provisional.qualification_inventory_sha256,
+            session_sha256=session.session_sha256,
             verdict=GateVerdict.PASS,
             digests=fold_digests,
         ),
