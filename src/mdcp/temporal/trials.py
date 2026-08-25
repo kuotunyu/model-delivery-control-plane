@@ -84,9 +84,12 @@ class _PopulationStandardScaler(BaseEstimator, TransformerMixin):
 class _NonNegativePipeline(Pipeline):
     """Pipeline whose native prediction contract is exactly ``max(0, prediction)``."""
 
+    def predict_raw(self, X: object, **params: object) -> np.ndarray:
+        """Return the pre-clipping sklearn prediction for converter qualification only."""
+        return np.asarray(super().predict(X, **params), dtype=float)
+
     def predict(self, X: object, **params: object) -> np.ndarray:
-        prediction = super().predict(X, **params)
-        return np.maximum(0.0, np.asarray(prediction, dtype=float))
+        return np.maximum(0.0, self.predict_raw(X, **params))
 
 
 _CATEGORIES = (
@@ -344,11 +347,7 @@ def _specification(
     )
 
 
-def load_trial_specs(protocol: Mapping[str, Any]) -> tuple[TrialSpec, ...]:
-    """Return the published 20-trial inventory only for the exact canonical protocol."""
-    if not isinstance(protocol, Mapping) or dict(protocol) != _CANONICAL_PROTOCOL:
-        raise ValueError("trial protocol is invalid")
-
+def _canonical_trial_specs() -> tuple[TrialSpec, ...]:
     specs = [
         _specification(
             "CTRL-01",
@@ -437,6 +436,37 @@ def load_trial_specs(protocol: Mapping[str, Any]) -> tuple[TrialSpec, ...]:
     return tuple(specs)
 
 
+def _exact_value(expected: object, actual: object) -> bool:
+    """Compare protocol/spec values without Python's bool/int or int/float coercion."""
+    if isinstance(expected, Mapping):
+        return (
+            isinstance(actual, Mapping)
+            and set(expected) == set(actual)
+            and all(_exact_value(expected[key], actual[key]) for key in expected)
+        )
+    if isinstance(expected, list | tuple):
+        return (
+            type(actual) is type(expected)
+            and len(actual) == len(expected)
+            and all(_exact_value(left, right) for left, right in zip(expected, actual, strict=True))
+        )
+    return type(actual) is type(expected) and actual == expected
+
+
+_CANONICAL_TRIAL_SPECS = _canonical_trial_specs()
+
+
+def _is_canonical_trial_spec(spec: object) -> bool:
+    return any(spec is candidate for candidate in _CANONICAL_TRIAL_SPECS)
+
+
+def load_trial_specs(protocol: Mapping[str, Any]) -> tuple[TrialSpec, ...]:
+    """Return the published 20-trial inventory only for the exact canonical protocol."""
+    if not isinstance(protocol, Mapping) or not _exact_value(_CANONICAL_PROTOCOL, protocol):
+        raise ValueError("trial protocol is invalid")
+    return _CANONICAL_TRIAL_SPECS
+
+
 def _feature_names(spec: TrialSpec) -> tuple[str, ...]:
     if not spec.feature_positions or any(
         position < 1 or position > len(TEMPORAL_FEATURE_COLUMNS)
@@ -481,7 +511,9 @@ def _materialize_features(rows: pd.DataFrame) -> pd.DataFrame:
 
 def training_rows_for_trial(spec: TrialSpec, fold: FoldRows) -> pd.DataFrame:
     """Materialize the declared feature subset from a fold's causally available training rows."""
-    if not isinstance(spec, TrialSpec) or not isinstance(fold, FoldRows):
+    if not _is_canonical_trial_spec(spec):
+        raise ValueError("trial specification is invalid")
+    if not isinstance(fold, FoldRows):
         raise ValueError("trial training inputs are invalid")
     if spec.training_mode == "full_expanding_fold":
         source = fold.train
@@ -534,7 +566,7 @@ def _preprocessor(spec: TrialSpec) -> ColumnTransformer:
 
 def build_estimator(spec: TrialSpec) -> Pipeline:
     """Build the exact deterministic sklearn pipeline for one declared trial."""
-    if not isinstance(spec, TrialSpec):
+    if not _is_canonical_trial_spec(spec):
         raise ValueError("trial specification is invalid")
     parameters = dict(spec.model_parameters)
     if spec.family in (TrialFamily.CTRL, TrialFamily.REC):

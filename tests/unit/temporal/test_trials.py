@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -113,7 +115,15 @@ def test_trial_specs_freeze_every_family_configuration(
 
 @pytest.mark.parametrize(
     "mutation",
-    ["unknown_root", "unknown_parameter", "mutated_parameter", "mutated_categories"],
+    [
+        "unknown_root",
+        "unknown_parameter",
+        "mutated_parameter",
+        "mutated_categories",
+        "int_for_bool",
+        "bool_for_int",
+        "int_for_float",
+    ],
 )
 def test_trial_protocol_is_fail_closed_for_unknown_or_mutated_values(mutation: str) -> None:
     protocol = deepcopy(PROTOCOL)
@@ -125,11 +135,54 @@ def test_trial_protocol_is_fail_closed_for_unknown_or_mutated_values(mutation: s
         protocol["families"][1]["parameters"]["n_estimators"] = [65]
     elif mutation == "mutated_categories":
         protocol["families"][2]["preprocessing"]["fixed_categorical_domains"][2] = [0, 1]
+    elif mutation == "int_for_bool":
+        protocol["families"][0]["parameters"]["bootstrap"] = [1]
+    elif mutation == "bool_for_int":
+        protocol["families"][0]["parameters"]["n_jobs"] = [True]
+    elif mutation == "int_for_float":
+        protocol["families"][0]["parameters"]["max_features"] = [1]
     else:  # pragma: no cover - parametrization is closed
         raise AssertionError("unknown mutation")
 
     with pytest.raises(ValueError, match="trial protocol is invalid"):
         load_trial_specs(protocol)
+
+
+@pytest.mark.parametrize("api", ["build", "rows"])
+@pytest.mark.parametrize("mutation", ["replace", "construct"])
+def test_public_trial_boundaries_reject_mutated_specs(
+    api: str,
+    mutation: str,
+    specs: tuple[TrialSpec, ...],
+    f4: FoldRows,
+) -> None:
+    original = _spec(specs, "REC-180-L4")
+    if mutation == "replace":
+        mutated = replace(original, recency_days=181)
+    elif mutation == "construct":
+        mutated = TrialSpec(
+            trial_id=original.trial_id,
+            family=original.family,
+            final_eligible=original.final_eligible,
+            training_mode=original.training_mode,
+            recency_days=original.recency_days,
+            feature_positions=original.feature_positions,
+            model_kind=original.model_kind,
+            model_parameters=MappingProxyType({**original.model_parameters, "min_samples_leaf": 5}),
+            preprocessing=original.preprocessing,
+            random_state=original.random_state,
+            estimator_threads=original.estimator_threads,
+        )
+    else:  # pragma: no cover - parametrization is closed
+        raise AssertionError("unknown mutation")
+
+    with pytest.raises(ValueError, match="trial specification is invalid"):
+        if api == "build":
+            build_estimator(mutated)
+        elif api == "rows":
+            training_rows_for_trial(mutated, f4)
+        else:  # pragma: no cover - parametrization is closed
+            raise AssertionError("unknown API")
 
 
 def test_recency_never_pads_from_future(specs: tuple[TrialSpec, ...], f4: FoldRows) -> None:
@@ -154,6 +207,50 @@ def test_training_rows_materialize_only_declared_features_and_raw_target(
     assert "elapsed_days" not in rows
     assert rows["cnt"].equals(f4.train.loc[rows.index, "cnt"])
     assert rows.index.max() < f4.spec.validation_start
+
+
+def test_recency_rows_exclude_field_twelve_in_exact_declared_order(
+    specs: tuple[TrialSpec, ...], f4: FoldRows
+) -> None:
+    rows = training_rows_for_trial(_spec(specs, "REC-270-L12"), f4)
+
+    assert tuple(rows.columns) == (
+        "season",
+        "mnth",
+        "hr",
+        "holiday",
+        "weekday",
+        "workingday",
+        "weathersit",
+        "temp",
+        "atemp",
+        "hum",
+        "windspeed",
+        "hour_sin",
+        "hour_cos",
+        "weekday_sin",
+        "weekday_cos",
+        "annual_sin",
+        "annual_cos",
+        "cnt",
+    )
+    assert "elapsed_days" not in rows
+
+
+def test_every_recency_trial_has_only_its_exact_declared_parameters(
+    specs: tuple[TrialSpec, ...],
+) -> None:
+    for spec in specs:
+        if spec.family is TrialFamily.REC:
+            assert spec.model_parameters == {
+                "n_estimators": 64,
+                "max_depth": 8,
+                "min_samples_leaf": 4 if spec.trial_id.endswith("L4") else 12,
+                "max_features": 1.0,
+                "bootstrap": True,
+                "random_state": 2026,
+                "n_jobs": 1,
+            }
 
 
 def test_factory_builds_exact_estimators_and_a_pipeline(
@@ -214,3 +311,35 @@ def test_native_factory_predictions_are_finite_and_non_negative(
 
     assert np.isfinite(predictions).all()
     assert (predictions >= 0).all()
+
+
+def test_native_clipping_equals_maximum_of_a_negative_raw_prediction() -> None:
+    positions = np.arange(8, dtype=float)
+    features = pd.DataFrame(
+        {
+            "season": [1, 2, 3, 4, 1, 2, 3, 4],
+            "mnth": np.arange(1, 9),
+            "hr": np.arange(8),
+            "holiday": [0, 1] * 4,
+            "weekday": np.arange(8) % 7,
+            "workingday": [1, 0] * 4,
+            "weathersit": [1, 2, 3, 4, 1, 2, 3, 4],
+            **{
+                column: positions + offset
+                for offset, column in enumerate(TEMPORAL_FEATURE_COLUMNS[7:], start=1)
+            },
+        }
+    )
+    target = 20 + positions
+    spec = _spec(load_trial_specs(PROTOCOL), "STAT-A1")
+    estimator = build_estimator(spec).fit(features, target)
+    probe = features.head(1).copy()
+    probe.loc[:, TEMPORAL_FEATURE_COLUMNS[7:]] = -1_000_000.0
+
+    raw = estimator.predict_raw(probe)
+    clipped = estimator.predict(probe)
+
+    assert raw[0] < 0
+    np.testing.assert_array_equal(clipped, np.maximum(0.0, raw))
+    assert clipped[0] == 0.0
+    assert not np.array_equal(clipped, raw)
