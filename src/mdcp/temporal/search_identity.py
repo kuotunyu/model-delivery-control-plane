@@ -174,6 +174,8 @@ def verify_search_freeze(
     head = _git(root, "rev-parse", "HEAD")
     if head is None:
         return _fail("SEARCH_FREEZE_HEAD_INVALID")
+    if not _has_regular_public_evidence(root, head):
+        return _fail("SEARCH_FREEZE_PUBLIC_EVIDENCE_NOT_REGULAR")
     receipt_bytes = _read_expected_public_file(root, receipt_path, SEARCH_RECEIPT_RELATIVE_PATH)
     if receipt_bytes is None:
         return _fail("SEARCH_RECEIPT_MISSING")
@@ -239,14 +241,15 @@ def _is_clean_checkout(root: Path) -> bool:
 
 def _read_expected_public_file(root: Path, supplied: Path, expected: Path) -> bytes | None:
     try:
-        resolved = supplied.resolve()
-        expected_resolved = (root / expected).resolve()
+        supplied_absolute = supplied.absolute()
+        expected_path = root / expected
+        expected_absolute = expected_path.absolute()
     except OSError:
         return None
-    if resolved != expected_resolved:
+    if supplied_absolute != expected_absolute or expected_path.is_symlink():
         return None
     try:
-        return resolved.read_bytes()
+        return expected_path.read_bytes()
     except OSError:
         return None
 
@@ -287,6 +290,24 @@ def _has_exact_allowlisted_additions(root: Path) -> bool:
         and all(len(entry) == 2 and entry[0] == "A" for entry in entries)
         and {entry[1] for entry in entries} == _ALLOWLISTED_FREEZE_ADDITIONS
     )
+
+
+def _has_regular_public_evidence(root: Path, head: str) -> bool:
+    for relative_path in _ALLOWLISTED_FREEZE_ADDITIONS:
+        entry = _git(root, "ls-tree", head, "--", relative_path)
+        if entry is None:
+            return False
+        metadata, separator, path = entry.partition("\t")
+        fields = metadata.split()
+        if (
+            not separator
+            or path != relative_path
+            or len(fields) != 3
+            or fields[0] != "100644"
+            or fields[1] != "blob"
+        ):
+            return False
+    return True
 
 
 def _bound_digests_recompute(root: Path, receipt: SearchReceipt) -> bool:

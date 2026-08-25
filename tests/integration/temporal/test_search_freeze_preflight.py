@@ -46,6 +46,10 @@ def _git(repository: Path, *arguments: str) -> str:
 
 def _commit(repository: Path, subject: str) -> str:
     _git(repository, "add", ".")
+    return _commit_staged(repository, subject)
+
+
+def _commit_staged(repository: Path, subject: str) -> str:
     _git(
         repository,
         "-c",
@@ -57,6 +61,25 @@ def _commit(repository: Path, subject: str) -> str:
         subject,
     )
     return _git(repository, "rev-parse", "HEAD")
+
+
+def _stage_symlink_entry(repository: Path, relative_path: Path) -> None:
+    blob = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repository,
+        check=True,
+        input="external-search-receipt.json",
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _git(repository, "add", str(INDEX_RELATIVE_PATH))
+    _git(
+        repository,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"120000,{blob},{relative_path.as_posix()}",
+    )
 
 
 def _write(repository: Path, relative_path: str | Path, contents: bytes) -> None:
@@ -133,21 +156,28 @@ def _freeze(repository: Path, mutation: str | None = None) -> tuple[Path, Path]:
             document["trial_table_sha256"] = "0" * 64
         elif mutation == "dataset_identity":
             document["dataset_archive_sha256"] = "0" * 64
-        else:
+        elif mutation != "receipt_symlink":
             raise AssertionError(f"unexpected mutation {mutation}")
-        receipt_path.write_bytes(canonicalize_json(document))
-        _write(
-            repository,
-            INDEX_RELATIVE_PATH,
-            canonicalize_json(
-                {
-                    "schema_version": "mdcp.search-evidence-index.v1",
-                    "search_receipt_sha256": sha256(receipt_path.read_bytes()).hexdigest(),
-                    "entries": [],
-                }
-            ),
-        )
-    _commit(repository, "freeze")
+        if mutation != "receipt_symlink":
+            receipt_path.write_bytes(canonicalize_json(document))
+            _write(
+                repository,
+                INDEX_RELATIVE_PATH,
+                canonicalize_json(
+                    {
+                        "schema_version": "mdcp.search-evidence-index.v1",
+                        "search_receipt_sha256": sha256(receipt_path.read_bytes()).hexdigest(),
+                        "entries": [],
+                    }
+                ),
+            )
+        else:
+            _stage_symlink_entry(repository, RECEIPT_RELATIVE_PATH)
+    if mutation == "receipt_symlink":
+        _commit_staged(repository, "freeze")
+        _git(repository, "update-index", "--skip-worktree", str(RECEIPT_RELATIVE_PATH))
+    else:
+        _commit(repository, "freeze")
     return receipt_path, index_path
 
 
@@ -198,6 +228,49 @@ def test_preflight_rejects_extra_path_in_freeze_child(git_fixture: Path) -> None
 
     assert result.verdict == "FAIL"
     assert result.reason_codes == ("SEARCH_FREEZE_DIFF_NOT_ALLOWLISTED",)
+
+
+def test_preflight_rejects_symlinked_allowlisted_receipt(git_fixture: Path) -> None:
+    receipt, index = _freeze(git_fixture, "receipt_symlink")
+
+    assert _git(git_fixture, "ls-tree", "HEAD", str(RECEIPT_RELATIVE_PATH)).startswith("120000")
+    result = verify_search_freeze(git_fixture, receipt, index)
+
+    assert result.verdict == "FAIL"
+    assert result.reason_codes == ("SEARCH_FREEZE_PUBLIC_EVIDENCE_NOT_REGULAR",)
+
+
+def test_preflight_rejects_head_self_reference_when_status_is_clean(git_fixture: Path) -> None:
+    receipt, index = _freeze(git_fixture)
+    import json
+
+    document = json.loads(receipt.read_text(encoding="utf-8"))
+    document["search_source_commit"] = _git(git_fixture, "rev-parse", "HEAD")
+    receipt.write_bytes(canonicalize_json(document))
+    _write(
+        git_fixture,
+        INDEX_RELATIVE_PATH,
+        canonicalize_json(
+            {
+                "schema_version": "mdcp.search-evidence-index.v1",
+                "search_receipt_sha256": sha256(receipt.read_bytes()).hexdigest(),
+                "entries": [],
+            }
+        ),
+    )
+    _git(
+        git_fixture,
+        "update-index",
+        "--skip-worktree",
+        str(receipt.relative_to(git_fixture)),
+        str(index.relative_to(git_fixture)),
+    )
+
+    result = verify_search_freeze(git_fixture, receipt, index)
+
+    assert _git(git_fixture, "status", "--porcelain=v1", "--untracked-files=all") == ""
+    assert result.verdict == "FAIL"
+    assert result.reason_codes == ("SEARCH_FREEZE_SELF_REFERENCE",)
 
 
 def test_preflight_rejects_a_dirty_checkout(git_fixture: Path) -> None:
