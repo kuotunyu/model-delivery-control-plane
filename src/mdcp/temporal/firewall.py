@@ -50,6 +50,7 @@ _FORBIDDEN_DYNAMIC_REFERENCES = _DYNAMIC_IMPORT_FUNCTIONS | {
     "getattr",
     "globals",
     "locals",
+    "open",
     "setattr",
     "vars",
     "sys.modules",
@@ -266,10 +267,14 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         {
             "ast.AST",
             "ast.Attribute",
+            "ast.AsyncFunctionDef",
             "ast.Call",
+            "ast.Constant",
+            "ast.FunctionDef",
             "ast.Import",
             "ast.ImportFrom",
             "ast.Name",
+            "ast.Subscript",
             "ast.expr",
             "ast.iter_child_nodes",
             "ast.parse",
@@ -284,6 +289,55 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/temporal/golden_vectors.py": frozenset(
         {"hashlib.sha256", "math.isfinite", "struct.error", "struct.pack"}
     ),
+}
+_FILE_ACCESS_METHODS = frozenset(
+    {
+        "open",
+        "read",
+        "read1",
+        "read_bytes",
+        "read_text",
+        "readinto",
+        "readinto1",
+        "readline",
+        "readlines",
+        "write",
+        "write_bytes",
+        "write_text",
+        "writelines",
+    }
+)
+_ALLOWED_FILE_ACCESS_CALLS = {
+    "src/mdcp/predictor/app_v2.py": frozenset(
+        {("runtime_from_environment", "read_text", "name:descriptor_path")}
+    ),
+    "src/mdcp/temporal/contract_gate.py": frozenset(
+        {
+            ("_checked_json", "read_bytes", "name:path"),
+            ("_path_digest", "read_bytes", "name:path"),
+        }
+    ),
+    _TRUSTED_FIREWALL_PATH: frozenset(
+        {
+            ("_implementation_sha256", "read_bytes", "Path:code.co_filename"),
+            ("audit_static_h2_firewall", "read_bytes", "Path:__file__"),
+            ("audit_static_h2_firewall", "read_text", "name:source_path"),
+            ("run_behavioral_h2_firewall", "read_bytes", "Path:__file__"),
+        }
+    ),
+    "src/mdcp/temporal/golden_vectors.py": frozenset(
+        {("verify_golden_vector_manifest", "read_bytes", "name:path")}
+    ),
+}
+_ALLOWED_ENVIRONMENT_KEYS = {
+    "src/mdcp/predictor/app_v2.py": frozenset(
+        {
+            "MDCP_DESCRIPTOR_PATH",
+            "MDCP_ONNX_PATH",
+            "MDCP_RELEASE_ID",
+            "MDCP_ROUTE_REVISION",
+        }
+    )
 }
 _FAILURE_REASON = "H2_IMPORT_CAPABILITY_FORBIDDEN"
 _BEHAVIORAL_FAILURE_REASON = "BEHAVIORAL_H2_FIREWALL_FAILED"
@@ -437,6 +491,87 @@ def _allowed_dunder_attribute(node: ast.Attribute, logical_path: str) -> bool:
     return False
 
 
+def _enclosing_function(
+    node: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+) -> str | None:
+    current = parents.get(node)
+    while current is not None:
+        if isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef):
+            return current.name
+        current = parents.get(current)
+    return None
+
+
+def _file_receiver_identity(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return f"name:{node.id}"
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Path"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        argument = node.args[0]
+        if isinstance(argument, ast.Name) and argument.id == "__file__":
+            return "Path:__file__"
+        if (
+            isinstance(argument, ast.Attribute)
+            and argument.attr == "co_filename"
+            and isinstance(argument.value, ast.Name)
+            and argument.value.id == "code"
+        ):
+            return "Path:code.co_filename"
+    return None
+
+
+def _allowed_file_access_call(
+    node: ast.Call,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    if not isinstance(node.func, ast.Attribute):
+        return False
+    identity = (
+        _enclosing_function(node, parents),
+        node.func.attr,
+        _file_receiver_identity(node.func.value),
+    )
+    return identity in _ALLOWED_FILE_ACCESS_CALLS.get(logical_path, frozenset())
+
+
+def _constant_string(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _environment_access_allowed(
+    node: ast.Attribute,
+    qualified_name: str,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    allowed_keys = _ALLOWED_ENVIRONMENT_KEYS.get(logical_path, frozenset())
+    parent = parents.get(node)
+    if qualified_name == "os.environ":
+        return (
+            isinstance(parent, ast.Subscript)
+            and parent.value is node
+            and _constant_string(parent.slice) in allowed_keys
+        )
+    if qualified_name == "os.getenv":
+        return (
+            isinstance(parent, ast.Call)
+            and parent.func is node
+            and len(parent.args) == 1
+            and not parent.keywords
+            and _constant_string(parent.args[0]) in allowed_keys
+        )
+    return True
+
+
 def _import_allowed(logical_path: str, module: str, imported_name: str | None) -> bool:
     if imported_name is not None and module in _ALLOWED_DIRECT_IMPORTS:
         return imported_name in _ALLOWED_DIRECT_IMPORTS[module]
@@ -496,6 +631,16 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     allowed_module_attributes = _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST.get(logical_path, frozenset())
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in _FILE_ACCESS_METHODS
+            and not (
+                isinstance(parents.get(node), ast.Call)
+                and parents[node].func is node
+                and _allowed_file_access_call(parents[node], logical_path, parents)
+            )
+        ):
+            _fail()
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
             if qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES or (
@@ -507,6 +652,17 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                     )
                     or node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
                     or (qualified_name is not None and _is_forbidden_module(qualified_name))
+                )
+            ):
+                _fail()
+            if (
+                isinstance(node, ast.Attribute)
+                and qualified_name in {"os.environ", "os.getenv"}
+                and not _environment_access_allowed(
+                    node,
+                    qualified_name,
+                    logical_path,
+                    parents,
                 )
             ):
                 _fail()

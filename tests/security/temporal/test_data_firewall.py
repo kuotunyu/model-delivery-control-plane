@@ -320,6 +320,62 @@ def test_static_firewall_rejects_object_level_string_evaluation(
 @pytest.mark.parametrize(
     "source",
     (
+        "import os\n"
+        "with open(os.environ['MDCP_REVIEW_H2'], 'rb') as stream:\n"
+        "    recovered = stream.read()",
+        "import os\n"
+        "from pathlib import Path\n"
+        "recovered = Path(os.environ['MDCP_REVIEW_H2']).read_bytes()",
+        "with open('descriptor.json', 'rb') as stream:\n    recovered = stream.read()",
+        "from pathlib import Path\nrecovered = Path('descriptor.json').read_bytes()",
+    ),
+)
+def test_static_firewall_rejects_unscoped_public_file_access(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    logical_path = "src/mdcp/predictor/app_v2.py"
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+def test_static_firewall_rejects_file_reader_capability_alias(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/predictor/app_v2.py"
+    _write_logical_module(
+        tmp_path,
+        logical_path,
+        "from pathlib import Path\n"
+        "reader = Path('descriptor.json').read_bytes\n"
+        "recovered = reader()",
+    )
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "import os\nrecovered = os.environ['MDCP_REVIEW_H2']",
+        "import os\nrecovered = os.getenv('MDCP_REVIEW_H2')",
+    ),
+)
+def test_static_firewall_rejects_unapproved_environment_keys(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    logical_path = "src/mdcp/predictor/app_v2.py"
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
         "from mdcp.workload.dataset import DatasetIntegrityError",
         "from mdcp.workload.splits import H2SealedError",
         "from mdcp.workload.splits import open_h2",
