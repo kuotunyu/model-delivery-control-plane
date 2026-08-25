@@ -26,6 +26,7 @@ from mdcp.temporal.evaluation import (
     NamedQualityMetric,
     QualificationContext,
     QualificationEvidence,
+    QualificationFoldDigests,
 )
 from mdcp.temporal.evaluation import (
     evaluate_fold as production_evaluate_fold,
@@ -83,6 +84,7 @@ def _identity(fold_id: str, position: int, row: PairedQualityRow) -> SourceRowId
 def _context(
     fold_rows: Mapping[str, tuple[PairedQualityRow, ...]],
 ) -> QualificationContext:
+    trial_identity = canonical_trial_identity("STAT-A1")
     return QualificationContext(
         folds=tuple(
             FoldQualificationContext(
@@ -95,7 +97,23 @@ def _context(
             )
             for fold_id in FOLD_IDS
         ),
-        trial_identity=canonical_trial_identity("STAT-A1"),
+        trial_identity=trial_identity,
+        fold_digests=_fold_digests(trial_identity.configuration_sha256),
+    )
+
+
+def _fold_digests(configuration_sha256: str) -> tuple[QualificationFoldDigests, ...]:
+    return tuple(
+        QualificationFoldDigests(
+            fold_id=fold_id,
+            configuration_sha256=configuration_sha256,
+            preprocessing_state_sha256=sha256_hex(f"{fold_id}:preprocessing".encode()),
+            feature_vector_sha256=sha256_hex(f"{fold_id}:features".encode()),
+            prediction_vector_sha256=sha256_hex(f"{fold_id}:predictions".encode()),
+            metric_sha256=sha256_hex(f"{fold_id}:metric".encode()),
+            receipt_sha256=sha256_hex(f"{fold_id}:receipt".encode()),
+        )
+        for fold_id in FOLD_IDS
     )
 
 
@@ -822,8 +840,23 @@ def test_attacker_coordinated_context_replacement_cannot_reuse_unchanged_report(
         QualificationContext(
             folds=tuple(changed_folds),
             trial_identity=context.trial_identity,
+            fold_digests=context.fold_digests,
         ),
     )
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)
+
+
+def test_qualification_report_binds_original_four_fold_execution_digests() -> None:
+    report, context = _bound_report()
+    changed = replace(
+        report.fold_digests[0],
+        preprocessing_state_sha256="0" * 64,
+    )
+    mutated_report = replace(report, fold_digests=(changed, *report.fold_digests[1:]))
+
+    result = qualify_trial(mutated_report, context)
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)

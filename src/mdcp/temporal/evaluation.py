@@ -78,11 +78,25 @@ class FoldQualificationContext:
 
 
 @dataclass(frozen=True, slots=True)
+class QualificationFoldDigests:
+    """Public-safe original-execution evidence bound to one qualification fold."""
+
+    fold_id: str
+    configuration_sha256: str
+    preprocessing_state_sha256: str
+    feature_vector_sha256: str
+    prediction_vector_sha256: str
+    metric_sha256: str
+    receipt_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class QualificationContext:
     """Transient exact four-fold source inventory and paired-row binding."""
 
     folds: tuple[FoldQualificationContext, ...]
     trial_identity: TrialIdentity
+    fold_digests: tuple[QualificationFoldDigests, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +138,7 @@ class DevelopmentQualityReport:
     pooled_inventory_sha256: str
     pooled_pairing_sha256: str
     trial_identity: TrialIdentity
+    fold_digests: tuple[QualificationFoldDigests, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +155,7 @@ class QualificationResult:
     pooled_ucb95: float | None
     worst_fold_point: float | None
     worst_subgroup_ucb95: float | None
+    fold_digests: tuple[QualificationFoldDigests, ...] | None
 
 
 def _invalid_bootstrap(reason_code: str) -> BootstrapResult:
@@ -299,6 +315,33 @@ def _valid_fold_context(context: object) -> bool:
     )
 
 
+def _valid_qualification_fold_digests(
+    digests: object,
+    trial_identity: TrialIdentity,
+) -> bool:
+    return (
+        type(digests) is tuple
+        and len(digests) == len(FOLD_IDS)
+        and all(type(digest) is QualificationFoldDigests for digest in digests)
+        and tuple(digest.fold_id for digest in digests) == FOLD_IDS
+        and all(
+            digest.configuration_sha256 == trial_identity.configuration_sha256
+            and all(
+                _valid_sha256(value)
+                for value in (
+                    digest.configuration_sha256,
+                    digest.preprocessing_state_sha256,
+                    digest.feature_vector_sha256,
+                    digest.prediction_vector_sha256,
+                    digest.metric_sha256,
+                    digest.receipt_sha256,
+                )
+            )
+            for digest in digests
+        )
+    )
+
+
 def _valid_qualification_context(context: object) -> bool:
     if (
         type(context) is not QualificationContext
@@ -307,6 +350,7 @@ def _valid_qualification_context(context: object) -> bool:
         or len(context.folds) != len(FOLD_IDS)
         or any(not _valid_fold_context(fold) for fold in context.folds)
         or tuple(fold.fold_id for fold in context.folds) != FOLD_IDS
+        or not _valid_qualification_fold_digests(context.fold_digests, context.trial_identity)
     ):
         return False
     request_ids = [row.request_id for fold in context.folds for row in fold.paired_rows]
@@ -532,6 +576,7 @@ def evaluate_pooled(
         pooled_inventory_sha256=_pooled_digest([report.inventory_sha256 for report in reports]),
         pooled_pairing_sha256=_pooled_digest([report.pairing_sha256 for report in reports]),
         trial_identity=context.trial_identity,
+        fold_digests=context.fold_digests,
     )
 
 
@@ -650,6 +695,8 @@ def _report_shape_reasons(report: DevelopmentQualityReport) -> list[str]:
         return ["INVALID_REPORT_SHAPE"]
     if not _exact_subgroup_inventory(report.pooled_subgroups):
         return ["INVALID_SUBGROUP_INVENTORY:POOLED"]
+    if not _valid_qualification_fold_digests(report.fold_digests, report.trial_identity):
+        return ["INVALID_QUALIFICATION_FOLD_DIGESTS"]
     if (
         type(report.reason_codes) is not tuple
         or any(type(reason) is not str for reason in report.reason_codes)
@@ -843,6 +890,7 @@ def _report_sha256(report: DevelopmentQualityReport) -> str:
         "reason_codes": list(report.reason_codes),
         "pooled_inventory_sha256": report.pooled_inventory_sha256,
         "pooled_pairing_sha256": report.pooled_pairing_sha256,
+        "fold_digests": [asdict(digest) for digest in report.fold_digests],
     }
     return sha256_hex(canonicalize_json(material))
 
@@ -890,6 +938,12 @@ def _qualification_result(
         worst_subgroup_ucb95=(
             max(entry.metric.ucb95 for entry in report.pooled_subgroups)
             if metrics_available
+            else None
+        ),
+        fold_digests=(
+            report.fold_digests
+            if identity is not None
+            and _valid_qualification_fold_digests(report.fold_digests, identity)
             else None
         ),
     )

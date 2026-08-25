@@ -202,6 +202,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.common.canonical", "canonicalize_json"),
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.temporal.evaluation", "QualificationFoldDigests"),
             ("mdcp.temporal.evaluation", "QualificationResult"),
             ("mdcp.temporal.trials", "canonical_trial_identity"),
             ("threading", "Lock"),

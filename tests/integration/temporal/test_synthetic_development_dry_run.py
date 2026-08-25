@@ -4,6 +4,7 @@ from datetime import date
 
 import pandas as pd
 
+from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.temporal.completeness import (
     AdapterOutcome,
@@ -15,6 +16,7 @@ from mdcp.temporal.evaluation import (
     FoldQualificationContext,
     QualificationContext,
     QualificationEvidence,
+    QualificationFoldDigests,
     evaluate_pooled,
     qualify_trial,
 )
@@ -129,6 +131,22 @@ def _fold_context(fold) -> tuple[FoldQualificationContext, object]:
     )
 
 
+def _fold_digests(trial_id: str) -> tuple[QualificationFoldDigests, ...]:
+    configuration_sha256 = canonical_trial_identity(trial_id).configuration_sha256
+    return tuple(
+        QualificationFoldDigests(
+            fold_id=fold_id,
+            configuration_sha256=configuration_sha256,
+            preprocessing_state_sha256=sha256_hex(f"{trial_id}:{fold_id}:preprocessing".encode()),
+            feature_vector_sha256=sha256_hex(f"{trial_id}:{fold_id}:features".encode()),
+            prediction_vector_sha256=sha256_hex(f"{trial_id}:{fold_id}:predictions".encode()),
+            metric_sha256=sha256_hex(f"{trial_id}:{fold_id}:metric".encode()),
+            receipt_sha256=sha256_hex(f"{trial_id}:{fold_id}:receipt".encode()),
+        )
+        for fold_id in ("F1", "F2", "F3", "F4")
+    )
+
+
 def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_formal_fits() -> None:
     source = _generated_source()
     folds = materialize_folds(source, FOLD_SPECS)
@@ -149,6 +167,7 @@ def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_forma
                 QualificationContext(
                     folds=fold_contexts,
                     trial_identity=canonical_trial_identity(trial_id),
+                    fold_digests=_fold_digests(trial_id),
                 ),
                 completeness,
                 evidence,
@@ -156,6 +175,7 @@ def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_forma
             QualificationContext(
                 folds=fold_contexts,
                 trial_identity=canonical_trial_identity(trial_id),
+                fold_digests=_fold_digests(trial_id),
             ),
         )
         for trial_id in FINAL_TRIAL_FAMILIES
@@ -167,18 +187,18 @@ def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_forma
     assert provisional is not None
     fold_digests = tuple(
         ReplayFoldDigests(
-            fold_id=fold.spec.fold_id,
+            fold_id=digest.fold_id,
             verdict=GateVerdict.PASS,
-            configuration_sha256=provisional.configuration_sha256,
-            preprocessing_state_sha256="b" * 64,
-            feature_vector_sha256="c" * 64,
-            prediction_vector_sha256="d" * 64,
-            metric_sha256="e" * 64,
-            receipt_sha256="f" * 64,
+            configuration_sha256=digest.configuration_sha256,
+            preprocessing_state_sha256=digest.preprocessing_state_sha256,
+            feature_vector_sha256=digest.feature_vector_sha256,
+            prediction_vector_sha256=digest.prediction_vector_sha256,
+            metric_sha256=digest.metric_sha256,
+            receipt_sha256=digest.receipt_sha256,
         )
-        for fold in folds
+        for digest in provisional.fold_digests
     )
-    session = ReplaySelectionSession(qualifications, fold_digests)
+    session = ReplaySelectionSession(qualifications)
     decision = finalize_selection(
         session,
         provisional,

@@ -11,7 +11,7 @@ from weakref import WeakKeyDictionary
 from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
-from mdcp.temporal.evaluation import QualificationResult
+from mdcp.temporal.evaluation import QualificationFoldDigests, QualificationResult
 from mdcp.temporal.trials import canonical_trial_identity
 
 type RankingKey = tuple[float, float, float, int, str]
@@ -54,6 +54,7 @@ class RankedTrial:
     worst_fold_point: float
     worst_subgroup_ucb95: float
     ranking_key: RankingKey
+    fold_digests: tuple[QualificationFoldDigests, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +128,20 @@ def _valid_qualification(result: object) -> bool:
         or type(result.verdict) is not GateVerdict
     ):
         return False
+    if result.qualified is True and not _valid_bound_fold_digests(
+        result.fold_digests,
+        identity.configuration_sha256,
+    ):
+        return False
+    if (
+        result.qualified is False
+        and result.fold_digests is not None
+        and not _valid_bound_fold_digests(
+            result.fold_digests,
+            identity.configuration_sha256,
+        )
+    ):
+        return False
     if type(result.qualified) is not bool:
         return False
     if type(result.reason_codes) is not tuple or any(
@@ -167,6 +182,22 @@ def _qualification_inventory_digest(results: tuple[QualificationResult, ...]) ->
             "pooled_ucb95": result.pooled_ucb95,
             "worst_fold_point": result.worst_fold_point,
             "worst_subgroup_ucb95": result.worst_subgroup_ucb95,
+            "fold_digests": (
+                None
+                if result.fold_digests is None
+                else [
+                    {
+                        "fold_id": digest.fold_id,
+                        "configuration_sha256": digest.configuration_sha256,
+                        "preprocessing_state_sha256": digest.preprocessing_state_sha256,
+                        "feature_vector_sha256": digest.feature_vector_sha256,
+                        "prediction_vector_sha256": digest.prediction_vector_sha256,
+                        "metric_sha256": digest.metric_sha256,
+                        "receipt_sha256": digest.receipt_sha256,
+                    }
+                    for digest in result.fold_digests
+                ]
+            ),
         }
         for result in sorted(results, key=lambda item: item.trial_id)
     ]
@@ -232,6 +263,7 @@ def rank_qualified(results: tuple[QualificationResult, ...]) -> ProvisionalWinne
             worst_fold_point=result.worst_fold_point,
             worst_subgroup_ucb95=result.worst_subgroup_ucb95,
             ranking_key=_ranking_key(result),
+            fold_digests=result.fold_digests,
         )
         for result in qualified
     )
@@ -245,12 +277,37 @@ def rank_qualified(results: tuple[QualificationResult, ...]) -> ProvisionalWinne
         worst_fold_point=first.worst_fold_point,
         worst_subgroup_ucb95=first.worst_subgroup_ucb95,
         ranking_key=first.ranking_key,
+        fold_digests=first.fold_digests,
         qualification_inventory_sha256=_qualification_inventory_digest(results),
     )
 
 
 def _valid_sha256(value: object) -> bool:
     return type(value) is str and len(value) == 64 and set(value).issubset(_SHA256_ALPHABET)
+
+
+def _valid_bound_fold_digests(digests: object, configuration_sha256: str) -> bool:
+    return (
+        type(digests) is tuple
+        and len(digests) == len(_FOLD_IDS)
+        and all(type(digest) is QualificationFoldDigests for digest in digests)
+        and tuple(digest.fold_id for digest in digests) == _FOLD_IDS
+        and all(
+            digest.configuration_sha256 == configuration_sha256
+            and all(
+                _valid_sha256(value)
+                for value in (
+                    digest.configuration_sha256,
+                    digest.preprocessing_state_sha256,
+                    digest.feature_vector_sha256,
+                    digest.prediction_vector_sha256,
+                    digest.metric_sha256,
+                    digest.receipt_sha256,
+                )
+            )
+            for digest in digests
+        )
+    )
 
 
 def _valid_ranking_key(
@@ -370,21 +427,28 @@ class ReplaySelectionSession:
     def __init__(
         self,
         qualification_results: tuple[QualificationResult, ...],
-        expected_digests: tuple[ReplayFoldDigests, ...],
+        caller_defined_baseline: object = None,
     ) -> None:
+        if caller_defined_baseline is not None:
+            raise ValueError("caller-defined replay baseline is forbidden")
         provisional = rank_qualified(qualification_results)
-        if provisional is None:
-            if expected_digests != ():
-                raise ValueError("expected replay digest inventory is invalid")
-        elif (
-            not _valid_replay_digests(expected_digests)
-            or any(digest.verdict is not GateVerdict.PASS for digest in expected_digests)
-            or any(
-                digest.configuration_sha256 != provisional.configuration_sha256
-                for digest in expected_digests
+        expected_digests = (
+            ()
+            if provisional is None
+            else tuple(
+                ReplayFoldDigests(
+                    fold_id=digest.fold_id,
+                    verdict=GateVerdict.PASS,
+                    configuration_sha256=digest.configuration_sha256,
+                    preprocessing_state_sha256=digest.preprocessing_state_sha256,
+                    feature_vector_sha256=digest.feature_vector_sha256,
+                    prediction_vector_sha256=digest.prediction_vector_sha256,
+                    metric_sha256=digest.metric_sha256,
+                    receipt_sha256=digest.receipt_sha256,
+                )
+                for digest in provisional.fold_digests
             )
-        ):
-            raise ValueError("expected replay digest inventory is invalid")
+        )
         qualification_inventory_sha256 = (
             provisional.qualification_inventory_sha256
             if provisional is not None

@@ -24,6 +24,7 @@ from mdcp.temporal.evaluation import (
     FoldQualificationContext,
     QualificationContext,
     QualificationEvidence,
+    QualificationFoldDigests,
     evaluate_pooled,
     qualify_trial,
 )
@@ -129,6 +130,7 @@ def _identity(fold_id: str, position: int, row: PairedQualityRow) -> SourceRowId
 
 
 def _context(fold_rows: dict[str, tuple[PairedQualityRow, ...]]) -> QualificationContext:
+    trial_identity = canonical_trial_identity("STAT-A1")
     return QualificationContext(
         folds=tuple(
             FoldQualificationContext(
@@ -141,7 +143,19 @@ def _context(fold_rows: dict[str, tuple[PairedQualityRow, ...]]) -> Qualificatio
             )
             for fold_id in FOLD_IDS
         ),
-        trial_identity=canonical_trial_identity("STAT-A1"),
+        trial_identity=trial_identity,
+        fold_digests=tuple(
+            QualificationFoldDigests(
+                fold_id=fold_id,
+                configuration_sha256=trial_identity.configuration_sha256,
+                preprocessing_state_sha256=sha256_hex(f"{fold_id}:preprocessing".encode()),
+                feature_vector_sha256=sha256_hex(f"{fold_id}:features".encode()),
+                prediction_vector_sha256=sha256_hex(f"{fold_id}:predictions".encode()),
+                metric_sha256=sha256_hex(f"{fold_id}:metric".encode()),
+                receipt_sha256=sha256_hex(f"{fold_id}:receipt".encode()),
+            )
+            for fold_id in FOLD_IDS
+        ),
     )
 
 

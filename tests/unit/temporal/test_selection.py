@@ -10,7 +10,7 @@ import pytest
 
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
-from mdcp.temporal.evaluation import QualificationResult
+from mdcp.temporal.evaluation import QualificationFoldDigests, QualificationResult
 from mdcp.temporal.selection import (
     ReplayFoldDigests,
     ReplayResult,
@@ -65,6 +65,7 @@ def _result(
         pooled_ucb95=pooled_ucb95,
         worst_fold_point=worst_fold_point,
         worst_subgroup_ucb95=worst_subgroup_ucb95,
+        fold_digests=_qualification_digests(trial_id),
     )
 
 
@@ -73,6 +74,22 @@ def _inventory(
 ) -> tuple[QualificationResult, ...]:
     replacements = replacements or {}
     return tuple(replacements.get(trial_id, _result(trial_id)) for trial_id in FINAL_TRIAL_FAMILIES)
+
+
+def _qualification_digests(trial_id: str) -> tuple[QualificationFoldDigests, ...]:
+    configuration_sha256 = canonical_trial_identity(trial_id).configuration_sha256
+    return tuple(
+        QualificationFoldDigests(
+            fold_id=fold_id,
+            configuration_sha256=configuration_sha256,
+            preprocessing_state_sha256="b" * 64,
+            feature_vector_sha256="c" * 64,
+            prediction_vector_sha256="d" * 64,
+            metric_sha256="e" * 64,
+            receipt_sha256="f" * 64,
+        )
+        for fold_id in ("F1", "F2", "F3", "F4")
+    )
 
 
 def _digests(
@@ -103,20 +120,9 @@ _DEFAULT_DIGESTS = object()
 
 def _session(
     results: tuple[QualificationResult, ...] | None = None,
-    expected_digests: tuple[ReplayFoldDigests, ...] | None = None,
 ) -> ReplaySelectionSession:
     inventory = results or _inventory()
-    provisional = rank_qualified(inventory)
-    if expected_digests is None:
-        expected_digests = (
-            ()
-            if provisional is None
-            else _digests(configuration_sha256=provisional.configuration_sha256)
-        )
-    return ReplaySelectionSession(
-        inventory,
-        expected_digests,
-    )
+    return ReplaySelectionSession(inventory)
 
 
 def _replay(
@@ -134,7 +140,19 @@ def _replay(
         session_sha256=session.session_sha256,
         verdict=verdict,
         digests=(
-            _digests(configuration_sha256=provisional.configuration_sha256)
+            tuple(
+                ReplayFoldDigests(
+                    fold_id=digest.fold_id,
+                    verdict=GateVerdict.PASS,
+                    configuration_sha256=digest.configuration_sha256,
+                    preprocessing_state_sha256=digest.preprocessing_state_sha256,
+                    feature_vector_sha256=digest.feature_vector_sha256,
+                    prediction_vector_sha256=digest.prediction_vector_sha256,
+                    metric_sha256=digest.metric_sha256,
+                    receipt_sha256=digest.receipt_sha256,
+                )
+                for digest in provisional.fold_digests
+            )
             if digests is _DEFAULT_DIGESTS
             else digests
         ),
@@ -242,6 +260,7 @@ def test_ranking_rejects_noncanonical_final_eligible_inventory(mutation: str) ->
             pooled_ucb95=0.80,
             worst_fold_point=0.80,
             worst_subgroup_ucb95=0.80,
+            fold_digests=_qualification_digests("CTRL-01"),
         )
 
     with pytest.raises(ValueError, match="qualification inventory"):
@@ -273,6 +292,29 @@ def test_qualification_inventory_digest_binds_each_report_identity() -> None:
     assert original is not None
     assert mutated is not None
     assert original.qualification_inventory_sha256 != mutated.qualification_inventory_sha256
+
+
+def test_qualification_inventory_digest_binds_original_fold_evidence() -> None:
+    original = rank_qualified(_inventory())
+    result = _result("STAT-A0.1")
+    changed_fold = replace(
+        result.fold_digests[0],
+        preprocessing_state_sha256="0" * 64,
+    )
+    changed = replace(result, fold_digests=(changed_fold, *result.fold_digests[1:]))
+    mutated = rank_qualified(_inventory({"STAT-A0.1": changed}))
+
+    assert original is not None
+    assert mutated is not None
+    assert original.qualification_inventory_sha256 != mutated.qualification_inventory_sha256
+
+
+def test_qualified_result_requires_exact_bound_four_fold_evidence() -> None:
+    result = _result("STAT-A0.1")
+    changed = replace(result, fold_digests=result.fold_digests[:-1])
+
+    with pytest.raises(ValueError, match="qualification result is invalid"):
+        rank_qualified(_inventory({"STAT-A0.1": changed}))
 
 
 @pytest.mark.parametrize(
@@ -491,15 +533,33 @@ def test_replay_requires_exact_four_fold_lowercase_digest_inventory(mutation: st
     assert decision.final_winner is None
 
 
-def test_replay_session_rejects_digests_for_a_different_configuration() -> None:
+def test_replay_session_rejects_caller_baseline_for_a_different_configuration() -> None:
     results = _inventory()
     wrong_configuration = canonical_trial_identity("STAT-A1").configuration_sha256
 
-    with pytest.raises(ValueError, match="expected replay digest inventory is invalid"):
+    with pytest.raises(ValueError, match="caller-defined replay baseline is forbidden"):
         ReplaySelectionSession(
             results,
             _digests(configuration_sha256=wrong_configuration),
         )
+
+
+def test_replay_session_rejects_any_caller_defined_baseline() -> None:
+    results = _inventory()
+    forged = tuple(
+        replace(
+            digest,
+            preprocessing_state_sha256="0" * 64,
+            feature_vector_sha256="1" * 64,
+            prediction_vector_sha256="2" * 64,
+            metric_sha256="3" * 64,
+            receipt_sha256="4" * 64,
+        )
+        for digest in _digests()
+    )
+
+    with pytest.raises(ValueError, match="caller-defined replay baseline is forbidden"):
+        ReplaySelectionSession(results, forged)
 
 
 def test_top_level_pass_cannot_hide_a_nonpass_fold_replay() -> None:
@@ -627,7 +687,7 @@ def test_session_consumption_operations_cannot_be_replaced_or_reset() -> None:
 
     first = finalize_selection(session, provisional, _replay(provisional, session))
     with pytest.raises(RuntimeError, match="already initialized"):
-        session.__init__(results, _digests())
+        session.__init__(results)
     second = finalize_selection(session, provisional, _replay(provisional, session))
 
     assert first.status == "PASS"
