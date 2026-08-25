@@ -53,6 +53,38 @@ class FoldSpec:
         object.__setattr__(self, "validation_end", validation_end)
 
 
+_CANONICAL_FOLD_SPECS = (
+    FoldSpec(
+        "F1",
+        pd.Timestamp("2011-01-01T00:00:00"),
+        pd.Timestamp("2011-07-01T00:00:00"),
+        pd.Timestamp("2011-07-01T00:00:00"),
+        pd.Timestamp("2011-10-01T00:00:00"),
+    ),
+    FoldSpec(
+        "F2",
+        pd.Timestamp("2011-01-01T00:00:00"),
+        pd.Timestamp("2011-10-01T00:00:00"),
+        pd.Timestamp("2011-10-01T00:00:00"),
+        pd.Timestamp("2012-01-01T00:00:00"),
+    ),
+    FoldSpec(
+        "F3",
+        pd.Timestamp("2011-01-01T00:00:00"),
+        pd.Timestamp("2012-01-01T00:00:00"),
+        pd.Timestamp("2012-01-01T00:00:00"),
+        pd.Timestamp("2012-04-01T00:00:00"),
+    ),
+    FoldSpec(
+        "F4",
+        pd.Timestamp("2011-01-01T00:00:00"),
+        pd.Timestamp("2012-04-01T00:00:00"),
+        pd.Timestamp("2012-04-01T00:00:00"),
+        pd.Timestamp("2012-07-01T00:00:00"),
+    ),
+)
+
+
 @dataclass(frozen=True)
 class SourceRowIdentity:
     """An in-memory validation-row identity bound to its canonical digest."""
@@ -121,13 +153,8 @@ def load_fold_specs(protocol: Mapping[str, Any]) -> tuple[FoldSpec, ...]:
         except (TypeError, ValueError) as error:
             raise ValueError("protocol fold is invalid") from error
 
-    if len(specs) != 4 or len({spec.fold_id for spec in specs}) != len(specs):
+    if tuple(specs) != _CANONICAL_FOLD_SPECS:
         raise ValueError("protocol fold inventory is invalid")
-    if any(
-        later.validation_start < earlier.validation_end
-        for earlier, later in zip(specs, specs[1:], strict=False)
-    ):
-        raise ValueError("protocol validation intervals overlap")
     return tuple(specs)
 
 
@@ -204,6 +231,25 @@ def _validate_materialization_specs(specs: Sequence[FoldSpec]) -> None:
         raise ValueError("validation intervals overlap")
     if tuple(specs) != chronological:
         raise ValueError("fold specifications are not chronological")
+    if tuple(specs) != _CANONICAL_FOLD_SPECS:
+        raise ValueError("fold specifications are not canonical")
+
+
+def is_frozen_validation_timestamp(fold_id: str, timestamp: object) -> bool:
+    """Return whether a naive timestamp is inside its exact approved fold interval."""
+    if type(fold_id) is not str:
+        return False
+    matching = tuple(spec for spec in _CANONICAL_FOLD_SPECS if spec.fold_id == fold_id)
+    if len(matching) != 1:
+        return False
+    try:
+        local = pd.Timestamp(timestamp)
+    except (TypeError, ValueError):
+        return False
+    if local.tz is not None:
+        return False
+    spec = matching[0]
+    return bool(spec.validation_start <= local < spec.validation_end)
 
 
 def _ordered_source_rows(source: pd.DataFrame) -> list[_OrderedSourceRow]:

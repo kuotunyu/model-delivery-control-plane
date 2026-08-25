@@ -174,6 +174,41 @@ def test_load_fold_specs_rejects_malformed_fold_mapping() -> None:
 
 
 @pytest.mark.parametrize(
+    ("fold_position", "field", "mutated_value"),
+    [
+        (0, "id", "F4"),
+        (0, "validation_end", "2011-09-01T00:00:00"),
+        (1, "train_start", "2011-02-01T00:00:00"),
+        (3, "validation_start", "2012-05-01T00:00:00"),
+    ],
+)
+def test_load_fold_specs_rejects_any_mutated_canonical_identity(
+    fold_position: int, field: str, mutated_value: str
+) -> None:
+    protocol = _protocol()
+    protocol["folds"][fold_position][field] = mutated_value
+
+    with pytest.raises(ValueError, match=r"protocol fold(?: inventory)? is invalid"):
+        load_fold_specs(protocol)
+
+
+def test_materialization_rejects_directly_constructed_noncanonical_boundaries() -> None:
+    mutated = FoldSpec(
+        "F1",
+        pd.Timestamp("2011-01-01"),
+        pd.Timestamp("2011-07-01"),
+        pd.Timestamp("2011-07-01"),
+        pd.Timestamp("2011-09-01"),
+    )
+
+    with pytest.raises(ValueError, match="fold specifications are not canonical"):
+        materialize_folds(
+            _synthetic_development_frame(),
+            (mutated, *EXACT_FOLD_SPECS[1:]),
+        )
+
+
+@pytest.mark.parametrize(
     ("train_end", "validation_start", "validation_end"),
     [
         ("2011-07-01T01:00:00", "2011-07-01T01:00:00", "2011-10-01T00:00:00"),

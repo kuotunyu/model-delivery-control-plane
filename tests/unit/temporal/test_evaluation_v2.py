@@ -290,20 +290,17 @@ def test_pooled_evaluation_rejects_calendar_day_overlap_between_folds() -> None:
     )
     receipts = {fold_id: _complete_receipt(len(rows)) for fold_id, rows in fold_rows.items()}
 
-    report = evaluate_pooled(
-        fold_rows,
-        receipts,
-        QualificationEvidence(
-            lineage=GateVerdict.PASS,
-            converter=GateVerdict.PASS,
-            evidence=GateVerdict.PASS,
-            budget=GateVerdict.PASS,
-        ),
-    )
-
-    assert report.pooled_bootstrap.valid is False
-    assert "OVERLAPPING_FOLD_CALENDAR_DAY" in report.reason_codes
-    assert qualify_trial(report).verdict is GateVerdict.UNKNOWN
+    with pytest.raises(ValueError, match="qualification context is invalid"):
+        evaluate_pooled(
+            fold_rows,
+            receipts,
+            QualificationEvidence(
+                lineage=GateVerdict.PASS,
+                converter=GateVerdict.PASS,
+                evidence=GateVerdict.PASS,
+                budget=GateVerdict.PASS,
+            ),
+        )
 
 
 def test_qualification_accepts_every_frozen_threshold_at_its_boundary() -> None:
@@ -873,6 +870,47 @@ def test_changed_context_rows_are_unknown_even_when_identity_order_is_unchanged(
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)
+
+
+def test_context_identity_outside_its_frozen_validation_interval_is_invalid() -> None:
+    fold_rows = {fold_id: _rows(fold_id) for fold_id in FOLD_IDS}
+    context = _context(fold_rows)
+    first_fold = context.folds[0]
+    first_row = first_fold.paired_rows[0].model_copy(update={"calendar_day": date(2011, 10, 1)})
+    first_identity = first_fold.inventory[0]
+    changed_material = {
+        "fold_id": first_identity.fold_id,
+        "request_id": first_identity.request_id,
+        "local_timestamp": "2011-10-01T00:00:00",
+        "source_position": first_identity.source_position,
+    }
+    changed_identity = SourceRowIdentity(
+        **changed_material,
+        identity_sha256=sha256_hex(canonicalize_json(changed_material)),
+    )
+    changed_context = replace(
+        context,
+        folds=(
+            replace(
+                first_fold,
+                inventory=(changed_identity, *first_fold.inventory[1:]),
+                paired_rows=(first_row, *first_fold.paired_rows[1:]),
+            ),
+            *context.folds[1:],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="qualification context is invalid"):
+        production_evaluate_pooled(
+            changed_context,
+            {fold_id: _complete_receipt(len(rows)) for fold_id, rows in fold_rows.items()},
+            QualificationEvidence(
+                lineage=GateVerdict.PASS,
+                converter=GateVerdict.PASS,
+                evidence=GateVerdict.PASS,
+                budget=GateVerdict.PASS,
+            ),
+        )
 
 
 def test_invalid_numeric_context_row_fails_closed_before_digest_or_bootstrap() -> None:

@@ -188,6 +188,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.completeness", "CompletenessReceipt"),
             ("mdcp.temporal.completeness", "LayerAccounting"),
             ("mdcp.temporal.folds", "SourceRowIdentity"),
+            ("mdcp.temporal.folds", "is_frozen_validation_timestamp"),
         }
     ),
     "src/mdcp/temporal/selection.py": frozenset(

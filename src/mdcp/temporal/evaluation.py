@@ -23,7 +23,7 @@ from mdcp.temporal.completeness import (
     CompletenessReceipt,
     LayerAccounting,
 )
-from mdcp.temporal.folds import SourceRowIdentity
+from mdcp.temporal.folds import SourceRowIdentity, is_frozen_validation_timestamp
 
 FOLD_IDS = ("F1", "F2", "F3", "F4")
 FIXED_SUBGROUPS = (
@@ -254,6 +254,7 @@ def _valid_source_identity(identity: object, fold_id: str) -> bool:
     if (
         timestamp.tzinfo is not None
         or timestamp.isoformat(timespec="seconds") != identity.local_timestamp
+        or not is_frozen_validation_timestamp(fold_id, timestamp)
     ):
         return False
     return identity.identity_sha256 == sha256_hex(canonicalize_json(_identity_material(identity)))
