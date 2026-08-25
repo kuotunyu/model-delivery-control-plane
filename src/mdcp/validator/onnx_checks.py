@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 
 import numpy as np
@@ -80,7 +81,23 @@ def _shape_is_bounded(value_info: onnx.ValueInfoProto) -> bool:
     )
 
 
-def validate_onnx(path: Path, policy: ValidationPolicy) -> OnnxValidationResult:
+def _input_inventory(
+    model: onnx.ModelProto,
+) -> tuple[tuple[str, tuple[int | None, ...]], ...]:
+    return tuple(
+        (
+            value.name,
+            tuple(dimension.dim_value or None for dimension in value.type.tensor_type.shape.dim),
+        )
+        for value in model.graph.input
+    )
+
+
+def validate_onnx(
+    path: Path,
+    policy: ValidationPolicy,
+    expected_inputs: Sequence[tuple[str, Sequence[int | None]]] | None = None,
+) -> OnnxValidationResult:
     if path.stat().st_size > policy.max_onnx_bytes:
         return _result(b"", ReasonCode.VAL_RESOURCE_LIMIT, ValidationVerdict.FAIL)
     content = path.read_bytes()
@@ -122,6 +139,16 @@ def validate_onnx(path: Path, policy: ValidationPolicy) -> OnnxValidationResult:
         return _result(
             content,
             ReasonCode.VAL_RESOURCE_LIMIT,
+            ValidationVerdict.FAIL,
+            operators=operators,
+            opset=opset,
+        )
+    if expected_inputs is not None and _input_inventory(model) != tuple(
+        (name, tuple(shape)) for name, shape in expected_inputs
+    ):
+        return _result(
+            content,
+            ReasonCode.VAL_ONNX_INVALID,
             ValidationVerdict.FAIL,
             operators=operators,
             opset=opset,

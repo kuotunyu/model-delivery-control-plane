@@ -1,0 +1,19 @@
+{
+  "schema_version": "mdcp.onnx-operator-policy.v1",
+  "minimum_opset": 13,
+  "maximum_opset": 18,
+  "operators": [
+    "Add",
+    "ArrayFeatureExtractor",
+    "Cast",
+    "Concat",
+    "Identity",
+    "LinearRegressor",
+    "MatMul",
+    "OneHotEncoder",
+    "Relu",
+    "Reshape",
+    "Scaler",
+    "TreeEnsembleRegressor"
+  ]
+}
