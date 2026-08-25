@@ -74,9 +74,11 @@ _FORBIDDEN_REFLECTION_ATTRIBUTES = frozenset(
         "f_locals",
         "gi_frame",
         "modules",
+        "query",
         "sys",
         "tb_frame",
         "tb_next",
+        "eval",
     }
 )
 _TRUSTED_FIREWALL_PATH = "src/mdcp/temporal/firewall.py"
@@ -170,7 +172,6 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.routing", "AdmissionKind"),
             ("mdcp.temporal.routing", "classify_envelope"),
             ("mdcp.workload.features", "audit_temporal_feature_lineage"),
-            ("pandas", None),
             ("pathlib", "Path"),
             ("pydantic", "BaseModel"),
             ("pydantic", "ConfigDict"),
@@ -260,7 +261,6 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/temporal/adapter.py": frozenset(
         {"math.cos", "math.isfinite", "math.pi", "math.sin", "re.compile"}
     ),
-    "src/mdcp/temporal/contract_gate.py": frozenset({"pandas.DataFrame"}),
     "src/mdcp/temporal/evidence.py": frozenset({"re.IGNORECASE", "re.MULTILINE", "re.compile"}),
     _TRUSTED_FIREWALL_PATH: frozenset(
         {

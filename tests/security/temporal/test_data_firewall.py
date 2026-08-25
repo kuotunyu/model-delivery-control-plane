@@ -298,6 +298,25 @@ def test_static_firewall_rejects_private_attribute_capability_recovery(
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
+@pytest.mark.parametrize("method", ("eval", "query"))
+def test_static_firewall_rejects_object_level_string_evaluation(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/firewall.py"
+    source = (
+        "import pandas as pd\n"
+        "frame = pd.DataFrame({'x': [1]})\n"
+        f"target = frame.{method}("
+        "\"@__builtins__.__import__('mdcp.workload.dataset', "
+        'fromlist=[\'load_uci_archive\'])", engine="python")'
+    )
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 @pytest.mark.parametrize(
     "source",
     (

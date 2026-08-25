@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Literal
 
-import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from mdcp.common.canonical import canonicalize_json, parse_json_bytes
@@ -125,6 +124,10 @@ class TemporalContractGateError(RuntimeError):
     def __init__(self) -> None:
         self.reason_code = "TEMPORAL_CONTRACT_GATE_FAILED"
         super().__init__(self.reason_code)
+
+
+class _FeatureLineageColumns:
+    columns = TEMPORAL_FEATURE_COLUMNS
 
 
 class DevelopmentIdentity(BaseModel):
@@ -320,7 +323,7 @@ def _check_development_boundary(
 
 
 def _check_feature_lineage() -> str:
-    lineage = audit_temporal_feature_lineage(pd.DataFrame(columns=TEMPORAL_FEATURE_COLUMNS))
+    lineage = audit_temporal_feature_lineage(_FeatureLineageColumns())
     if lineage.columns != TEMPORAL_FEATURE_COLUMNS:
         raise TemporalContractGateError()
     return lineage.lineage_sha256
