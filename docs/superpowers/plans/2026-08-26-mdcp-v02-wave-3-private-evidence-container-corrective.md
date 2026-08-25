@@ -137,7 +137,7 @@ class PrivateContainerCheck(BaseModel):
         ],
         ...,
     ]
-    identity: PrivateBundleIdentity | None
+    identity: PrivateBundleIdentity | None = None
 ```
 
 - [ ] **Step 1: Write exact container RED tests**
@@ -180,8 +180,13 @@ publication; natural class without permit; and failure messages that contain onl
 
 Add Windows REDs for exact regular-file publication, `FILE_CREATE`, share `0`, descendant
 `FILE_OPEN_REPARSE_POINT`, retained no-delete ancestor handles, junction/symlink/cross-volume and
-normalized-handle-name rejection, destination create collision, short write, flush failure,
-post-write identity mismatch, handle-bound cleanup, and absence of staging/rename/path-open calls.
+normalized-handle-name rejection, destination create collision, short write, file-flush failure,
+parent-directory-flush failure, post-write identity mismatch, handle-bound cleanup, and absence of
+staging/rename/path-open calls. Add explicit raw destination REDs for every pre-mutation path class:
+8.3/tilde component, trailing dot, trailing space, `CON`/`PRN`/`AUX`/`NUL`, `COM1..COM9`,
+`LPT1..LPT9`, ADS colon, UNC, `\\?\`, `\\.\`, relative, dot/dot-dot, non-NFC, and normalized final-
+handle mismatch. Assert the destination/parent remains unchanged and the fixed error does not echo
+the raw path.
 Add a platform-dispatch RED proving a forced `posix` branch returns `PUBLICATION_UNSUPPORTED` while
 the test directory remains byte-for-byte empty. Only junction/cross-volume fixture setup may skip
 for missing Windows capability.
@@ -239,8 +244,12 @@ not delete. Retain all ancestor handles.
 Create the final non-directory child exactly once with handle-relative
 `NtCreateFile(FILE_CREATE)`, share `0`, synchronous/write-through options, and write/delete/
 synchronize/read-attributes authority. Loop until all prebuilt bytes are written; reject zero/short
-progress. Flush, recheck file and retained ancestor identities, close the file, then close ancestors.
-On a handled failure before successful close, call
+progress. Call `FlushFileBuffers` on the file handle, recheck file and retained ancestor identities,
+then call `FlushFileBuffers` on the retained trusted-parent directory handle while both the final
+file and all ancestor handles remain live. A parent flush failure is `PUBLICATION_FAILED` and enters
+the same handle-bound cleanup path; there is no success fallback for a filesystem that rejects the
+authoritative Windows durability primitive. Only after both flushes and all checks pass may the
+file close, followed by the ancestor handles. On a handled failure before successful close, call
 `SetFileInformationByHandle(FileDispositionInfo)` only on the owned share-zero file handle. A
 cleanup failure remains `PUBLICATION_FAILED`; do not reopen/delete by name. Remove all staging,
 layout, and rename helpers.
@@ -382,8 +391,9 @@ git commit -m "fix: enforce one-shot formal development session"
   permit: FormalRunPermit) -> DevelopmentRunBundle`, and
   `write_formal_bundle_no_clobber(destination: Path, bundle: PrivateRunBundle,
   permit: FormalRunPermit) -> PrivateBundleIdentity`.
-- CLI commands after this task are exactly `run-development`, `verify-search-freeze`, and
-  `verify-development-result`.
+- CLI commands after this task are exactly `run-development` and `verify-search-freeze`. Task 6
+  later adds `prepare-search-freeze`, `verify-search-source`, and `verify-development-result`; no
+  other command is permitted.
 - Formal wrapper consumes: the exact permit, corrected freeze identity, trusted runtime guard,
   bounded loader, one new regular-file private-container destination, and one new public result path.
 - Removes: `replay-provisional`, caller-injected clocks/probes/writers, and public natural writers.
@@ -466,10 +476,12 @@ durably flushed before any loader import/call or output creation.
 `FormalRunPermit` is constructible only inside successful consumption, is not a Pydantic/dataclass
 serialization surface, and is consumed in memory once. The private formal wrapper accepts exactly
 that permit and delegates to the same internal single-container publisher. It requires the five
-approved natural logical paths and a non-existing regular-file destination under a precreated
-trusted external parent. No formal command is invoked in this task.
+approved natural logical paths and a non-existing final leaf under a precreated trusted external
+parent; an existing file, directory, link, reparse point, or other destination type fails closed.
+No formal command is invoked in this task.
 
-The CLI has only `run-development`; remove `replay-provisional`. Set the exact BLAS/OpenMP/joblib
+The CLI operational mutation surface has only `run-development`; its read-only command at this
+boundary is `verify-search-freeze`. Remove `replay-provisional`. Set the exact BLAS/OpenMP/joblib
 thread keys to `1` before estimator-bearing imports. Construct repository, clock, memory, loader,
 firewall, container, and public-publisher dependencies internally.
 
@@ -591,6 +603,8 @@ git commit -m "test: prove the formal development boundary"
 - Produces: `SearchSourceEntry`, `SearchEvidenceIndex`,
   `build_search_source_inventory(root)`, `prepare_search_freeze(root, created_at_utc)`, source-
   archive verifier, and offline `verify-development-result` CLI.
+- Final CLI surface after this task is exactly `run-development`, `verify-search-freeze`,
+  `prepare-search-freeze`, `verify-search-source`, and `verify-development-result`.
 - Binds: the amendment's exact 41 ordered source paths and exactly five logical private outputs
   inside the single container.
 - Excludes: test paths from production identity and both Task 7 freeze files from source identity.
@@ -625,7 +639,9 @@ Add missing/extra/duplicate/reordered/unknown path, symlink, wrong mode/size/dig
 source/index mutation, amendment/plan omission, 39-path legacy inventory, test-path addition,
 private output missing/extra/duplicate/order/path, physical directory interpretation, pre-run
 output digest, receipt/index mismatch, result fit transition, H2 inconsistency, and source archive
-without `.git` tests.
+without `.git` tests. Add a parser test asserting the exact five-command tuple
+`("run-development", "verify-search-freeze", "prepare-search-freeze",
+"verify-search-source", "verify-development-result")` and rejecting every other command.
 
 - [ ] **Step 2: Run RED**
 
@@ -751,17 +767,34 @@ uv lock --check
 git diff --check
 ```
 
-Run the repository's credential/private-path/publication-boundary scan. Exclude only adversarial
-temporal security tests and the defensive regex source `src/mdcp/temporal/evidence.py` from the
-credential grep; separately verify `evidence.py` against the 41-path inventory and run
-`tests/security/temporal/test_public_evidence_boundary.py`. Require zero findings in production,
-schemas, configs, fixtures, and non-adversarial tests.
+Run this exact credential/private-path/publication-boundary gate. Exclude only adversarial temporal
+security tests and the defensive regex source `src/mdcp/temporal/evidence.py` from credential grep:
+
+```powershell
+$credentialPattern = '-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----|Bearer[ \t]+[A-Za-z0-9._~+/=-]+|\bgh[pousr]_[A-Za-z0-9]{20,255}\b|\bgithub_pat_[A-Za-z0-9_]{20,255}\b|\bhf_[A-Za-z0-9]{20,255}\b|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'
+$credentialFindings = @(rg -n --pcre2 $credentialPattern src schemas configs tests --glob '!src/mdcp/temporal/evidence.py' --glob '!tests/security/temporal/**')
+if ($LASTEXITCODE -notin 0, 1) { throw 'credential scan execution failed' }
+if ($credentialFindings.Count -ne 0) { throw 'credential scan finding' }
+
+$privatePathPattern = '(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+|/(?:root|home|Users|mnt|tmp|var/tmp|private|Volumes)(?=/|\s|$))'
+$privatePathFindings = @(rg -n --pcre2 $privatePathPattern src schemas configs tests/fixtures --glob '!src/mdcp/temporal/evidence.py')
+if ($LASTEXITCODE -notin 0, 1) { throw 'private-path scan execution failed' }
+if ($privatePathFindings.Count -ne 0) { throw 'private-path scan finding' }
+
+uv run pytest tests/security/temporal/test_public_evidence_boundary.py -q
+uv run pytest tests/integration/temporal/test_search_freeze_preflight.py -q -k source_archive_without_dot_git_recomputes_exact_inventory
+```
+
+Expected: both grep finding counts are `0`, the public-evidence suite passes, and the deterministic
+41-path no-`.git` fixture proof reports one PASS. `src/mdcp/temporal/evidence.py` is separately
+covered by the exact 41-path builder/integration proof; after Task 7 creates the actual index, Step 5
+recomputes its real committed hash through `verify-search-source`.
 
 Recompute Wave 0–2 handoff/protected digests, v1/v2 serving identities, both corrective design and
 plan digests, exact 41-source identity, static/behavioral firewall identities, public schemas,
-dependency lock, branch/remote/tag status, and H2 sealed/zero. Export the committed source with
-`git archive` to a new temporary directory, remove no working files, and prove both v1/v2 and the
-41-path search identity without `.git`. Delete only the verified temporary export after the proof.
+dependency lock, branch/remote/tag status, and H2 sealed/zero. The integration command above proves
+the archive algorithm before freeze without inventing an index; Step 5 performs the same proof
+against the actual committed freeze index.
 
 Require an independent read-only Task 6 source review with Critical `0`, Important `0` before
 creating freeze outputs. Any gate failure stops before Step 3.
@@ -805,6 +838,32 @@ check/format, `uv lock --check`, `git diff --check`, scans, protected identities
 branch/remote/tag, and behavioral H2 firewall. Verify `HEAD^` is the receipt's
 `SEARCH_SOURCE_COMMIT`, HEAD is its direct child, and `git diff --name-only HEAD^ HEAD` is exactly
 the two freeze files.
+
+Run the actual no-`.git` proof against the committed freeze index with these exact commands:
+
+```powershell
+$archiveRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mdcp-w3-freeze-" + [guid]::NewGuid().ToString("N"))
+$archiveTree = Join-Path $archiveRoot "tree"
+New-Item -ItemType Directory -Path $archiveTree | Out-Null
+git archive --format=tar HEAD -o (Join-Path $archiveRoot "freeze.tar")
+tar -xf (Join-Path $archiveRoot "freeze.tar") -C $archiveTree
+if (Test-Path -LiteralPath (Join-Path $archiveTree ".git")) { throw 'source archive contains .git' }
+uv run python -m mdcp.temporal.cli verify-search-source --root $archiveTree --index (Join-Path $archiveTree "evidence/public/v02/search/evidence-index.json")
+if ($LASTEXITCODE -ne 0) { throw 'source archive identity failed' }
+```
+
+Expected stdout is exactly `SEARCH_SOURCE_INVENTORY_PASS`; this recomputes the committed
+`src/mdcp/temporal/evidence.py` entry and all other 40 entries without Git history. Preserve the
+command output in the completion report. Clean only this invocation-owned temporary root after
+verifying the resolved target is inside the OS temporary directory and has the generated prefix:
+
+```powershell
+$resolvedArchiveRoot = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $archiveRoot).Path)
+$resolvedTempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+if (-not $resolvedArchiveRoot.StartsWith($resolvedTempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'temporary cleanup boundary failed' }
+if (-not ([System.IO.Path]::GetFileName($resolvedArchiveRoot)).StartsWith("mdcp-w3-freeze-", [StringComparison]::Ordinal)) { throw 'temporary cleanup identity failed' }
+Remove-Item -LiteralPath $resolvedArchiveRoot -Recurse -Force
+```
 
 Obtain final independent read-only review of the complete corrective range. Critical and Important
 must both be zero. Confirm working tree clean, remote `0`, no tag, P2 absent/unconsumed, no UCI/H1/H2
