@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Literal
@@ -20,6 +18,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.utils.validation import check_array, check_is_fitted
 
+from mdcp.contracts.workload import BikeRequest
+from mdcp.temporal.adapter import adapt_local_v2
 from mdcp.temporal.constants import TEMPORAL_FEATURE_COLUMNS
 from mdcp.temporal.folds import FoldRows
 
@@ -489,23 +489,21 @@ def _materialize_features(rows: pd.DataFrame) -> pd.DataFrame:
     if not all(np.isfinite(rows[column].to_numpy(dtype=float)).all() for column in required):
         raise ValueError("training rows are invalid")
 
-    materialized = rows.loc[:, (*TEMPORAL_FEATURE_COLUMNS[:11], "cnt")].copy()
-    elapsed_days = np.array(
-        [
-            (timestamp.date() - date(2011, 1, 1)).days + timestamp.hour / 24
-            for timestamp in materialized.index
-        ],
-        dtype=float,
+    vectors = []
+    for position, (timestamp, row) in enumerate(rows.iterrows()):
+        request = BikeRequest.model_validate(
+            {
+                "request_id": f"development-{position}",
+                **{name: row[name] for name in TEMPORAL_FEATURE_COLUMNS[:11]},
+            }
+        )
+        vectors.append(adapt_local_v2(request, timestamp.to_pydatetime()))
+    materialized = pd.DataFrame(
+        [vector.values for vector in vectors],
+        columns=TEMPORAL_FEATURE_COLUMNS,
+        index=rows.index,
     )
-    hour = materialized["hr"].to_numpy(dtype=float)
-    weekday = materialized["weekday"].to_numpy(dtype=float)
-    materialized["elapsed_days"] = elapsed_days
-    materialized["hour_sin"] = np.sin(2 * math.pi * hour / 24)
-    materialized["hour_cos"] = np.cos(2 * math.pi * hour / 24)
-    materialized["weekday_sin"] = np.sin(2 * math.pi * weekday / 7)
-    materialized["weekday_cos"] = np.cos(2 * math.pi * weekday / 7)
-    materialized["annual_sin"] = np.sin(2 * math.pi * elapsed_days / 365.2425)
-    materialized["annual_cos"] = np.cos(2 * math.pi * elapsed_days / 365.2425)
+    materialized["cnt"] = rows["cnt"].to_numpy(copy=True)
     return materialized.loc[:, (*TEMPORAL_FEATURE_COLUMNS, "cnt")]
 
 

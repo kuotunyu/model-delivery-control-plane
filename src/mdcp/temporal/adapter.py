@@ -7,6 +7,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
+from mdcp.contracts.workload import BikeRequest
 from mdcp.contracts.workload_v2 import BikeRequestV2
 from mdcp.temporal.constants import (
     DOMAIN_END_LOCAL,
@@ -65,23 +66,29 @@ def _normalize_timestamp(raw: str) -> datetime:
     return normalized
 
 
-def adapt_v2(request: BikeRequestV2) -> TemporalFeatureVector:
-    local = _normalize_timestamp(request.event_timestamp)
-    local_civil = local.replace(tzinfo=None)
+def adapt_local_v2(request: BikeRequest, local_civil: datetime) -> TemporalFeatureVector:
+    """Apply the shared v0.2 feature contract to one trusted local civil hour."""
+    if (
+        type(local_civil) is not datetime
+        or local_civil.tzinfo is not None
+        or local_civil.minute
+        or local_civil.second
+        or local_civil.microsecond
+    ):
+        raise TemporalContractError(TemporalReasonCode.INVALID_EVENT_TIMESTAMP)
     if not DOMAIN_START_LOCAL <= local_civil < DOMAIN_END_LOCAL:
         raise TemporalContractError(TemporalReasonCode.EVENT_TIMESTAMP_OUT_OF_RANGE)
 
-    sunday_zero_weekday = (local.weekday() + 1) % 7
-    if (local.month, local.hour, sunday_zero_weekday) != (
+    sunday_zero_weekday = (local_civil.weekday() + 1) % 7
+    if (local_civil.month, local_civil.hour, sunday_zero_weekday) != (
         request.mnth,
         request.hr,
         request.weekday,
     ):
         raise TemporalContractError(TemporalReasonCode.TEMPORAL_FIELD_MISMATCH)
 
-    elapsed_days = (local.date() - _ELAPSED_ORIGIN).days + request.hr / 24
-    legacy = request.to_legacy()
-    legacy_values = legacy.model_dump(mode="python")
+    elapsed_days = (local_civil.date() - _ELAPSED_ORIGIN).days + request.hr / 24
+    legacy_values = request.model_dump(mode="python")
     values = (
         *(float(legacy_values[name]) for name in TEMPORAL_FEATURE_COLUMNS[:11]),
         float(elapsed_days),
@@ -93,3 +100,8 @@ def adapt_v2(request: BikeRequestV2) -> TemporalFeatureVector:
         math.cos(2 * math.pi * elapsed_days / 365.2425),
     )
     return TemporalFeatureVector(names=TEMPORAL_FEATURE_COLUMNS, values=values)
+
+
+def adapt_v2(request: BikeRequestV2) -> TemporalFeatureVector:
+    local = _normalize_timestamp(request.event_timestamp)
+    return adapt_local_v2(request.to_legacy(), local.replace(tzinfo=None))

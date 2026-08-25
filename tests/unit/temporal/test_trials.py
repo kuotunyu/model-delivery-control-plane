@@ -209,6 +209,18 @@ def test_training_rows_materialize_only_declared_features_and_raw_target(
     assert rows.index.max() < f4.spec.validation_start
 
 
+def test_training_rows_fail_closed_on_timestamp_field_mismatch(
+    specs: tuple[TrialSpec, ...], f4: FoldRows
+) -> None:
+    source = f4.train.copy()
+    first_position = source.columns.get_loc("mnth")
+    source.iloc[0, first_position] = 12 if source.index[0].month != 12 else 11
+    mismatched_fold = replace(f4, train=source)
+
+    with pytest.raises(ValueError, match="TEMPORAL_FIELD_MISMATCH"):
+        training_rows_for_trial(_spec(specs, "NL-E64-R0.03-D2"), mismatched_fold)
+
+
 def test_recency_rows_exclude_field_twelve_in_exact_declared_order(
     specs: tuple[TrialSpec, ...], f4: FoldRows
 ) -> None:
