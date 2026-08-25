@@ -7,6 +7,7 @@ import ctypes
 import json
 import math
 import os
+import stat
 import unicodedata
 from ctypes import wintypes
 from pathlib import Path, PurePosixPath
@@ -47,11 +48,13 @@ _WINDOWS_RESERVED_NAMES = frozenset(
 _WINDOWS_DELETE = 0x00010000
 _WINDOWS_SYNCHRONIZE = 0x00100000
 _WINDOWS_FILE_LIST_DIRECTORY = 0x00000001
+_WINDOWS_FILE_READ_DATA = 0x00000001
 _WINDOWS_FILE_WRITE_DATA = 0x00000002
 _WINDOWS_FILE_ADD_FILE = 0x00000002
 _WINDOWS_FILE_TRAVERSE = 0x00000020
 _WINDOWS_FILE_READ_ATTRIBUTES = 0x00000080
 _WINDOWS_FILE_SHARE_READ_WRITE = 0x00000003
+_WINDOWS_FILE_SHARE_READ = 0x00000001
 _WINDOWS_OPEN_EXISTING = 3
 _WINDOWS_FILE_ATTRIBUTE_DIRECTORY = 0x00000010
 _WINDOWS_FILE_ATTRIBUTE_NORMAL = 0x00000080
@@ -289,11 +292,25 @@ class PrivateFoldEvidence(BaseModel):
     logical_path: str
     canonical_bytes: bytes
 
+    @field_validator("logical_path", mode="before")
+    @classmethod
+    def _exact_logical_path_type(cls, value: object) -> object:
+        if type(value) is not str:
+            raise ValueError("LOGICAL_PATH_INVALID")
+        return value
+
     @field_validator("logical_path")
     @classmethod
     def _canonical_logical_path(cls, value: str) -> str:
         if not _is_canonical_logical_path(value):
             raise ValueError("LOGICAL_PATH_INVALID")
+        return value
+
+    @field_validator("canonical_bytes", mode="before")
+    @classmethod
+    def _exact_canonical_bytes_type(cls, value: object) -> object:
+        if type(value) is not bytes:
+            raise ValueError("CANONICAL_BYTES_INVALID")
         return value
 
 
@@ -305,6 +322,20 @@ class PrivateRunBundle(BaseModel):
     evidence_class: Literal["synthetic_test", "natural_development"]
     files: tuple[PrivateFoldEvidence, ...]
 
+    @field_validator("evidence_class", mode="before")
+    @classmethod
+    def _exact_evidence_class_type(cls, value: object) -> object:
+        if type(value) is not str:
+            raise ValueError("EVIDENCE_CLASS_INVALID")
+        return value
+
+    @field_validator("files", mode="before")
+    @classmethod
+    def _exact_files_type(cls, value: object) -> object:
+        if type(value) is not tuple:
+            raise ValueError("PRIVATE_FILES_INVALID")
+        return value
+
 
 class PrivateBundleIdentity(BaseModel):
     """The deliberately narrow public identity of private published files."""
@@ -315,6 +346,20 @@ class PrivateBundleIdentity(BaseModel):
     total_bytes: StrictInt
     inventory_sha256: Sha256
     manifest_sha256: Sha256
+
+    @field_validator("file_count", "total_bytes", mode="before")
+    @classmethod
+    def _exact_integer_type(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("IDENTITY_COUNT_INVALID")
+        return value
+
+    @field_validator("inventory_sha256", "manifest_sha256", mode="before")
+    @classmethod
+    def _exact_digest_type(cls, value: object) -> object:
+        if type(value) is not str:
+            raise ValueError("IDENTITY_DIGEST_INVALID")
+        return value
 
     @field_validator("file_count", "total_bytes")
     @classmethod
@@ -477,6 +522,24 @@ def _private_container_failure(code: str) -> PrivateContainerCheck:
     return PrivateContainerCheck(verdict="FAIL", reason_codes=(code,))
 
 
+def _canonical_base64_decoded_size(value: str) -> int | None:
+    if not value.isascii() or len(value) % 4:
+        return None
+    padding = 2 if value.endswith("==") else 1 if value.endswith("=") else 0
+    data_end = len(value) - padding
+    if value.find("=") not in (-1, data_end):
+        return None
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    if any(value[index] not in alphabet for index in range(data_end)):
+        return None
+    if padding and len(value) < 4:
+        return None
+    decoded_size = (len(value) // 4) * 3 - padding
+    if decoded_size == 0 and value:
+        return None
+    return decoded_size
+
+
 def _inventory_core(entries: tuple[_PrivateContainerEntry, ...]) -> list[dict[str, object]]:
     return [
         {
@@ -520,7 +583,7 @@ def _validated_private_files(
         raise _PublicationError("LOGICAL_PATH_ORDER_INVALID")
     total_bytes = 0
     for item in files:
-        if type(item.canonical_bytes) is not bytes:
+        if type(item.logical_path) is not str or type(item.canonical_bytes) is not bytes:
             raise _PublicationError("PRIVATE_BUNDLE_INVALID")
         if len(item.canonical_bytes) > _MAX_PRIVATE_PAYLOAD_BYTES:
             raise _PublicationError("PRIVATE_CONTAINER_SIZE_EXCEEDED")
@@ -542,6 +605,11 @@ def _canonical_private_container(
 ) -> tuple[bytes, PrivateBundleIdentity]:
     """Build and validate the sole deterministic physical private artifact."""
     if type(bundle) is not PrivateRunBundle:
+        raise _PublicationError("PRIVATE_BUNDLE_INVALID")
+    if type(bundle.evidence_class) is not str or bundle.evidence_class not in (
+        "synthetic_test",
+        "natural_development",
+    ):
         raise _PublicationError("PRIVATE_BUNDLE_INVALID")
     files = _validated_private_files(bundle.files)
     entries = tuple(
@@ -586,14 +654,7 @@ def verify_private_container(
     if not isinstance(path, Path) or type(expected_identity) is not PrivateBundleIdentity:
         return _private_container_failure("PRIVATE_CONTAINER_INVALID")
     try:
-        if path.is_symlink() or not path.is_file():
-            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
-        file_size = path.stat().st_size
-        if file_size > _MAX_PRIVATE_CONTAINER_BYTES:
-            return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
-        raw = path.read_bytes()
-        if len(raw) != file_size:
-            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        raw = _read_private_container_once(path)
         document = parse_json_bytes(raw)
         container = _PrivateContainer.model_validate(document)
         if canonicalize_json(container.model_dump(mode="json")) != raw:
@@ -608,14 +669,19 @@ def verify_private_container(
             return _private_container_failure("PRIVATE_CONTAINER_INVALID")
         total_bytes = 0
         for entry in entries:
+            decoded_size = _canonical_base64_decoded_size(entry.payload_base64)
+            if decoded_size is None:
+                return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+            if decoded_size > _MAX_PRIVATE_PAYLOAD_BYTES:
+                return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
             try:
                 payload = base64.b64decode(entry.payload_base64, validate=True)
             except Exception:
                 return _private_container_failure("PRIVATE_CONTAINER_INVALID")
             if base64.b64encode(payload).decode("ascii") != entry.payload_base64:
                 return _private_container_failure("PRIVATE_CONTAINER_INVALID")
-            if len(payload) > _MAX_PRIVATE_PAYLOAD_BYTES:
-                return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+            if len(payload) != decoded_size:
+                return _private_container_failure("PRIVATE_CONTAINER_INVALID")
             total_bytes += len(payload)
             if total_bytes > _MAX_PRIVATE_TOTAL_BYTES:
                 return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
@@ -651,6 +717,8 @@ def verify_private_container(
         )
         if identity != expected_identity:
             return _private_container_failure("PRIVATE_CONTAINER_IDENTITY_MISMATCH")
+    except _PublicationError as error:
+        return _private_container_failure(str(error))
     except Exception:
         return _private_container_failure("PRIVATE_CONTAINER_INVALID")
     return PrivateContainerCheck(verdict="PASS", reason_codes=(), identity=identity)
@@ -658,6 +726,28 @@ def verify_private_container(
 
 def _absolute_destination(destination: Path) -> Path:
     if not isinstance(destination, Path):
+        raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+    try:
+        raw_paths = destination._raw_paths
+    except Exception:
+        raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
+    if (
+        type(raw_paths) is not list
+        or not raw_paths
+        or any(type(raw_path) is not str or not raw_path for raw_path in raw_paths)
+    ):
+        raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+    first_raw = raw_paths[0]
+    ascii_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    if (
+        len(first_raw) < 3
+        or first_raw[0] not in ascii_letters
+        or first_raw[1:3] != ":\\"
+        or any("/" in raw_path for raw_path in raw_paths)
+        or any(
+            component in (".", "..") for raw_path in raw_paths for component in raw_path.split("\\")
+        )
+    ):
         raise _PublicationError("TRUSTED_PARENT_REQUIRED")
     value = str(destination)
     if (
@@ -667,7 +757,7 @@ def _absolute_destination(destination: Path) -> Path:
         or not destination.is_absolute()
         or len(destination.drive) != 2
         or destination.drive[1:] != ":"
-        or not destination.drive[0].isalpha()
+        or destination.drive[0] not in ascii_letters
         or destination.anchor != destination.drive + "\\"
     ):
         raise _PublicationError("TRUSTED_PARENT_REQUIRED")
@@ -696,11 +786,166 @@ def _windows_last_error() -> int:
     return int(get_last_error())
 
 
-def _windows_close(handle: int) -> None:
+def _windows_private_file_information(
+    handle: int,
+) -> tuple[int, tuple[int, int, int], int]:
+    get_information = ctypes.windll.kernel32.GetFileInformationByHandle
+    get_information.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(_WindowsFileInformation),
+    )
+    get_information.restype = wintypes.BOOL
+    information = _WindowsFileInformation()
+    if not get_information(handle, ctypes.byref(information)):
+        raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+    return (
+        information.dwFileAttributes,
+        (
+            information.dwVolumeSerialNumber,
+            information.nFileIndexHigh,
+            information.nFileIndexLow,
+        ),
+        (int(information.nFileSizeHigh) << 32) | int(information.nFileSizeLow),
+    )
+
+
+def _windows_read_private_file(handle: int, size: int) -> bytes:
+    read_file = ctypes.windll.kernel32.ReadFile
+    read_file.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    )
+    read_file.restype = wintypes.BOOL
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk_size = min(remaining, 1_048_576)
+        buffer = ctypes.create_string_buffer(chunk_size)
+        read = wintypes.DWORD()
+        if not read_file(
+            handle,
+            ctypes.byref(buffer),
+            chunk_size,
+            ctypes.byref(read),
+            None,
+        ):
+            raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+        count = int(read.value)
+        if count <= 0 or count > chunk_size:
+            raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+        chunks.append(buffer.raw[:count])
+        remaining -= count
+    return b"".join(chunks)
+
+
+def _read_private_container_windows(path: Path) -> bytes:
+    create_file = ctypes.windll.kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        _WINDOWS_FILE_READ_DATA | _WINDOWS_FILE_READ_ATTRIBUTES,
+        _WINDOWS_FILE_SHARE_READ,
+        None,
+        _WINDOWS_OPEN_EXISTING,
+        _WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    if handle == _WINDOWS_INVALID_HANDLE_VALUE:
+        raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+    owned_handle = int(handle)
+    raw: bytes | None = None
+    try:
+        attributes, identity, size = _windows_private_file_information(owned_handle)
+        if (
+            attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY
+            or attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+        ):
+            raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+        if size > _MAX_PRIVATE_CONTAINER_BYTES:
+            raise _PublicationError("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+        raw = _windows_read_private_file(owned_handle, size)
+        current_attributes, current_identity, current_size = _windows_private_file_information(
+            owned_handle
+        )
+        if (
+            current_attributes != attributes
+            or current_identity != identity
+            or current_size != size
+            or len(raw) != size
+        ):
+            raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+    finally:
+        if not _windows_close(owned_handle):
+            raise _PublicationError("PRIVATE_CONTAINER_INVALID") from None
+    if raw is None:
+        raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+    return raw
+
+
+def _read_private_container_posix(path: Path) -> bytes:
+    no_follow = os.O_NOFOLLOW
+    descriptor = os.open(str(path), os.O_RDONLY | no_follow)
+    try:
+        information = os.fstat(descriptor)
+        if not stat.S_ISREG(information.st_mode):
+            raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+        if information.st_size > _MAX_PRIVATE_CONTAINER_BYTES:
+            raise _PublicationError("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+        remaining = information.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1_048_576))
+            if not chunk:
+                raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        current = os.fstat(descriptor)
+        if (
+            current.st_dev != information.st_dev
+            or current.st_ino != information.st_ino
+            or current.st_size != information.st_size
+        ):
+            raise _PublicationError("PRIVATE_CONTAINER_INVALID")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _read_private_container_once(path: Path) -> bytes:
+    if os.name == "nt":
+        return _read_private_container_windows(path)
+    return _read_private_container_posix(path)
+
+
+def _windows_close(handle: int) -> bool:
     close_handle = ctypes.windll.kernel32.CloseHandle
     close_handle.argtypes = (wintypes.HANDLE,)
     close_handle.restype = wintypes.BOOL
-    close_handle(handle)
+    return bool(close_handle(handle))
+
+
+def _windows_close_all(handles: list[int]) -> bool:
+    all_closed = True
+    for handle in handles:
+        try:
+            closed = _windows_close(handle)
+        except Exception:
+            closed = False
+        if not closed:
+            all_closed = False
+    return all_closed
 
 
 def _windows_create_file(
@@ -872,7 +1117,8 @@ def _windows_open_trusted_ancestors(
         try:
             attributes, root_identity = _windows_file_information(root_handle)
         except _PublicationError:
-            _windows_close(root_handle)
+            if not _windows_close(root_handle):
+                raise _PublicationError("PUBLICATION_FAILED") from None
             raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
         records.append((root_handle, root_identity, expected))
         if (
@@ -903,7 +1149,8 @@ def _windows_open_trusted_ancestors(
             try:
                 attributes, identity = _windows_file_information(handle)
             except _PublicationError:
-                _windows_close(handle)
+                if not _windows_close(handle):
+                    raise _PublicationError("PUBLICATION_FAILED") from None
                 raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
             records.append((handle, identity, expected))
             if (
@@ -915,9 +1162,12 @@ def _windows_open_trusted_ancestors(
                 raise _PublicationError("TRUSTED_PARENT_REQUIRED")
             parent_handle = handle
         return records
-    except Exception:
-        for handle, _, _ in reversed(records):
-            _windows_close(handle)
+    except Exception as caught:
+        close_failed = not _windows_close_all([handle for handle, _, _ in reversed(records)])
+        if close_failed or (
+            isinstance(caught, _PublicationError) and str(caught) == "PUBLICATION_FAILED"
+        ):
+            raise _PublicationError("PUBLICATION_FAILED") from None
         raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
 
 
@@ -1004,6 +1254,7 @@ def _publish_windows_container(destination: Path, content: bytes) -> None:
     final_handle: int | None = None
     published = False
     cleanup_failed = False
+    close_failed = False
     error: _PublicationError | None = None
     final_options = (
         _WINDOWS_FILE_NON_DIRECTORY_FILE
@@ -1070,10 +1321,14 @@ def _publish_windows_container(destination: Path, content: bytes) -> None:
                         cleanup_failed = True
                 except Exception:
                     cleanup_failed = True
-            _windows_close(final_handle)
-        for handle, _, _ in reversed(ancestors):
-            _windows_close(handle)
-    if cleanup_failed:
+            try:
+                if not _windows_close(final_handle):
+                    close_failed = True
+            except Exception:
+                close_failed = True
+        if not _windows_close_all([handle for handle, _, _ in reversed(ancestors)]):
+            close_failed = True
+    if cleanup_failed or close_failed:
         raise _PublicationError("PUBLICATION_FAILED") from None
     if error is not None:
         raise error

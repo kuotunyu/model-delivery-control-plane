@@ -391,6 +391,28 @@ def test_private_container_rejects_non_file_and_link(tmp_path: Path) -> None:
     )
 
 
+def test_private_verifier_opens_once_without_path_preflight(
+    tmp_path: Path,
+) -> None:
+    raw, identity = private_container_bytes()
+    path = write_untrusted_container(tmp_path, raw)
+
+    class GuardedPath(type(path)):
+        def is_symlink(self) -> bool:
+            raise AssertionError("verifier performed a path preflight")
+
+        def is_file(self) -> bool:
+            raise AssertionError("verifier performed a path preflight")
+
+        def stat(self, *, follow_symlinks: bool = True) -> object:
+            raise AssertionError("verifier performed a path preflight")
+
+        def read_bytes(self) -> bytes:
+            raise AssertionError("verifier reopened the path")
+
+    assert run_evidence.verify_private_container(GuardedPath(path), identity).verdict == "PASS"
+
+
 def test_private_container_entry_limit_is_128() -> None:
     bundle = PrivateRunBundle(
         evidence_class="synthetic_test",
@@ -401,6 +423,53 @@ def test_private_container_entry_limit_is_128() -> None:
     )
     with pytest.raises(ValueError, match="^PRIVATE_CONTAINER_SIZE_EXCEEDED$"):
         run_evidence._canonical_private_container(bundle)
+
+
+def test_private_verifier_preflights_base64_size_before_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, identity = private_container_bytes()
+    path = write_untrusted_container(tmp_path, raw)
+
+    def forbidden_decode(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("oversized payload reached base64 decoding")
+
+    monkeypatch.setattr(run_evidence, "_MAX_PRIVATE_PAYLOAD_BYTES", 1)
+    monkeypatch.setattr(run_evidence.base64, "b64decode", forbidden_decode)
+
+    assert run_evidence.verify_private_container(path, identity).reason_codes == (
+        "PRIVATE_CONTAINER_SIZE_EXCEEDED",
+    )
+
+
+def test_private_models_reject_precoercion_runtime_types() -> None:
+    fold = PrivateFoldEvidence(logical_path="private/fold.json", canonical_bytes=b"{}")
+    digest = "a" * 64
+
+    with pytest.raises(ValueError):
+        PrivateFoldEvidence(logical_path=b"private/fold.json", canonical_bytes=b"{}")
+    with pytest.raises(ValueError):
+        PrivateFoldEvidence(logical_path="private/fold.json", canonical_bytes="{}")
+    with pytest.raises(ValueError):
+        PrivateFoldEvidence(logical_path="private/fold.json", canonical_bytes=bytearray(b"{}"))
+    with pytest.raises(ValueError):
+        PrivateRunBundle(evidence_class=b"synthetic_test", files=(fold,))
+    with pytest.raises(ValueError):
+        PrivateRunBundle(evidence_class="synthetic_test", files=[fold])
+    with pytest.raises(ValueError):
+        PrivateBundleIdentity(
+            file_count=1,
+            total_bytes=2,
+            inventory_sha256=digest.encode("ascii"),
+            manifest_sha256=digest,
+        )
+    with pytest.raises(ValueError):
+        PrivateBundleIdentity(
+            file_count=1,
+            total_bytes=2,
+            inventory_sha256=digest,
+            manifest_sha256=digest.upper(),
+        )
 
 
 def test_private_container_verifier_rejects_129_entries(tmp_path: Path) -> None:
@@ -613,6 +682,35 @@ def test_windows_raw_destination_oracle_rejects_aliases_before_mutation(
             write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
         assert str(destination) not in str(caught.value)
         assert tuple(tmp_path.iterdir()) == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
+@pytest.mark.parametrize(
+    "raw_case",
+    ("dot", "forward_slash", "unicode_drive", "missing_state", "malformed_state"),
+)
+def test_windows_raw_spelling_is_rejected_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_case: str
+) -> None:
+    if raw_case == "dot":
+        destination = Path(str(tmp_path) + r"\.\bundle.container.json")
+    elif raw_case == "forward_slash":
+        destination = Path(tmp_path.as_posix() + "/bundle.container.json")
+    elif raw_case == "unicode_drive":
+        destination = Path(r"Ｃ:\root\bundle.container.json")
+    else:
+        destination = tmp_path / "bundle.container.json"
+        destination._raw_paths = None if raw_case == "missing_state" else [str(tmp_path), 7]
+
+    monkeypatch.setattr(
+        run_evidence,
+        "_publish_windows_container",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("destination oracle bypassed")),
+    )
+    before = tuple(tmp_path.iterdir())
+    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert tuple(tmp_path.iterdir()) == before
 
 
 @pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
@@ -931,9 +1029,9 @@ def test_windows_native_ancestor_name_failure_closes_opened_root(
             opened.append(handle)
         return handle, error
 
-    def record_close(handle: int) -> None:
+    def record_close(handle: int) -> bool:
         closed.append(handle)
-        original_close(handle)
+        return original_close(handle)
 
     monkeypatch.setattr(run_evidence, "_windows_create_file", record_open)
     monkeypatch.setattr(run_evidence, "_windows_close", record_close)
@@ -958,9 +1056,9 @@ def test_windows_delete_disposition_exception_still_closes_every_handle(
     original_close = run_evidence._windows_close
     closed: list[int] = []
 
-    def record_close(handle: int) -> None:
+    def record_close(handle: int) -> bool:
         closed.append(handle)
-        original_close(handle)
+        return original_close(handle)
 
     monkeypatch.setattr(run_evidence, "_windows_write_chunk", lambda _handle, _data: 0)
     monkeypatch.setattr(
@@ -974,6 +1072,59 @@ def test_windows_delete_disposition_exception_still_closes_every_handle(
         write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
 
     assert len(closed) >= 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows close failure semantics")
+@pytest.mark.parametrize("failed_close_index", (1, 2))
+def test_windows_close_failure_after_success_is_terminal_and_all_handles_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_close_index: int
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    original_close = run_evidence._windows_close
+    close_calls: list[int] = []
+
+    def fail_selected_close(handle: int) -> bool:
+        close_calls.append(handle)
+        original_close(handle)
+        return len(close_calls) != failed_close_index
+
+    monkeypatch.setattr(run_evidence, "_windows_close", fail_selected_close)
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert len(close_calls) >= 2
+    assert destination.is_file()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows close failure semantics")
+def test_windows_close_failure_after_delete_disposition_overrides_prior_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    original_close = run_evidence._windows_close
+    original_delete = run_evidence._windows_set_delete_disposition
+    close_calls: list[int] = []
+    delete_calls: list[int] = []
+
+    def fail_write(_handle: int, _content: bytes) -> int:
+        raise run_evidence._PublicationError("PRIOR_FAILURE")
+
+    def record_delete(handle: int) -> bool:
+        delete_calls.append(handle)
+        return original_delete(handle)
+
+    def fail_first_close(handle: int) -> bool:
+        close_calls.append(handle)
+        original_close(handle)
+        return len(close_calls) != 1
+
+    monkeypatch.setattr(run_evidence, "_windows_write_chunk", fail_write)
+    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", record_delete)
+    monkeypatch.setattr(run_evidence, "_windows_close", fail_first_close)
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert len(delete_calls) == 1
+    assert len(close_calls) >= 2
+    assert not destination.exists()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows final identity semantics")

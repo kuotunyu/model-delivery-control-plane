@@ -459,6 +459,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic", "StrictInt"),
             ("pydantic", "field_validator"),
             ("pydantic", "model_validator"),
+            ("stat", None),
             ("typing", "Annotated"),
             ("typing", "Literal"),
             ("unicodedata", None),
@@ -606,6 +607,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ctypes.windll.kernel32.GetFileInformationByHandle",
             "ctypes.windll.kernel32.GetFinalPathNameByHandleW",
             "ctypes.windll.kernel32.GetLastError",
+            "ctypes.windll.kernel32.ReadFile",
             "ctypes.windll.kernel32.SetFileInformationByHandle",
             "ctypes.windll.kernel32.WriteFile",
             "ctypes.windll.ntdll",
@@ -623,6 +625,13 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "json.loads",
             "math.isfinite",
             "os.name",
+            "os.O_NOFOLLOW",
+            "os.O_RDONLY",
+            "os.close",
+            "os.fstat",
+            "os.open",
+            "os.read",
+            "stat.S_ISREG",
             "unicodedata.normalize",
         }
     ),
@@ -683,13 +692,14 @@ _ALLOWED_FILE_ACCESS_CALLS = {
     ),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
+            ("_read_private_container_posix", "open", "name:os"),
             (
                 "_checked_in_schema",
                 "read_text",
                 "Path:schemas/v2/development-result-index.schema.json",
             ),
             ("verify_development_result", "read_bytes", "name:path"),
-            ("verify_private_container", "read_bytes", "name:path"),
+            ("_read_private_container_posix", "read", "name:os"),
         }
     ),
 }
@@ -784,6 +794,7 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
     "src/mdcp/temporal/runner.py": frozenset(
         {"_record_final", "_record_replay", "_record_selection", "_records", "_replay_trial_id"}
     ),
+    "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths"}),
 }
 _ALLOWED_SUBPROCESS_CALLS = {
     "src/mdcp/temporal/runtime_guards.py": {
