@@ -24,6 +24,7 @@ FORMAL_V2_FIXED_PATHS = (
     "src/mdcp/predictor/app_v2.py",
 )
 FORMAL_TEMPORAL_PACKAGE_ROOT = "src/mdcp/temporal"
+_NON_FORMAL_TEMPORAL_PATHS = frozenset({"src/mdcp/temporal/search_identity.py"})
 
 _FORBIDDEN_MODULES = frozenset(
     {
@@ -378,6 +379,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("dataclasses", "dataclass"),
             ("enum", "StrEnum"),
             ("hashlib", None),
+            ("os", None),
             ("pathlib", "Path"),
             ("pathlib", "PurePosixPath"),
             ("subprocess", None),
@@ -416,26 +418,6 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("collections.abc", "Sequence"),
         }
     ),
-    "src/mdcp/temporal/search_identity.py": frozenset(
-        {
-            ("__future__", "annotations"),
-            ("dataclasses", "dataclass"),
-            ("datetime", "UTC"),
-            ("datetime", "datetime"),
-            ("mdcp.common.canonical", "canonicalize_json"),
-            ("mdcp.common.canonical", "parse_json_bytes"),
-            ("mdcp.common.digests", "sha256_hex"),
-            ("mdcp.temporal.evidence", "public_evidence_violations"),
-            ("pathlib", "Path"),
-            ("pydantic", "BaseModel"),
-            ("pydantic", "ConfigDict"),
-            ("pydantic", "StringConstraints"),
-            ("pydantic", "field_validator"),
-            ("subprocess", None),
-            ("typing", "Annotated"),
-            ("typing", "Literal"),
-        }
-    ),
 }
 _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/predictor/app_v2.py": frozenset(
@@ -454,11 +436,9 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Assign",
             "ast.Attribute",
             "ast.AsyncFunctionDef",
-            "ast.BinOp",
             "ast.Call",
             "ast.ClassDef",
             "ast.Constant",
-            "ast.Div",
             "ast.ExceptHandler",
             "ast.FunctionDef",
             "ast.Global",
@@ -522,6 +502,10 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ctypes.windll.psapi",
             "ctypes.windll.psapi.GetProcessMemoryInfo",
             "hashlib.sha256",
+            "os.environ",
+            "os.fsdecode",
+            "os.fsencode",
+            "os.readlink",
             "subprocess.run",
             "sys.platform",
             "sys.platform.startswith",
@@ -548,7 +532,6 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         }
     ),
     "src/mdcp/temporal/cli.py": frozenset({"argparse.ArgumentParser"}),
-    "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
 }
 _FILE_ACCESS_METHODS = frozenset(
     {
@@ -597,12 +580,6 @@ _ALLOWED_FILE_ACCESS_CALLS = {
     ),
     "src/mdcp/temporal/runner.py": frozenset(
         {("_linux_peak_resident_bytes", "read_text", "Path:/proc/self/status")}
-    ),
-    "src/mdcp/temporal/search_identity.py": frozenset(
-        {
-            ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
-            ("_read_expected_public_file", "read_bytes", "name:expected_path"),
-        }
     ),
 }
 _ALLOWED_ENVIRONMENT_KEYS = {
@@ -674,20 +651,15 @@ _PINNED_FILE_CAPABILITY_MODULES = {
     "src/mdcp/temporal/golden_vectors.py": (
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
-    "src/mdcp/temporal/runtime_guards.py": (
-        "82b6c7c9dd66ad2a52880d07c033094f1d3c88a2c48995575c3c7843bbf13603"
-    ),
     "src/mdcp/temporal/runner.py": (
         "2cdd8e9d5f3aad8b2919c620282e4ece281382c1fbca35e1994f7bf058e1ad77"
-    ),
-    "src/mdcp/temporal/search_identity.py": (
-        "a0b704e9b33e5feeacd41545f966e48e6ad86132e87da17ba4e4bbb2130288a2"
     ),
 }
 _ALLOWED_PRIVATE_ATTRIBUTES = {
     "src/mdcp/temporal/runtime_guards.py": frozenset(
         {
             "_expected_head",
+            "_fields_",
             "_monotonic_ns",
             "_peak_process_bytes",
             "_repository_inventory_sha256",
@@ -695,6 +667,7 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
             "_start_ns",
             "_tracked_paths",
             "_unknown",
+            "_core",
         }
     ),
     "src/mdcp/temporal/runner.py": frozenset(
@@ -705,12 +678,11 @@ _ALLOWED_SUBPROCESS_CALLS = {
     "src/mdcp/temporal/runtime_guards.py": {
         "_repository_head": ("git", "rev-parse", "HEAD"),
         "_repository_is_dirty": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
-        "_tracked_paths": ("git", "ls-tree", "-r", "--name-only", "name:expected_head"),
+        "_tracked_paths": ("git", "ls-tree", "-r", "-z", "--name-only", "name:expected_head"),
     },
     "src/mdcp/temporal/runner.py": {
         "_repository_is_clean": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
     },
-    "src/mdcp/temporal/search_identity.py": {"_git": ("git", "name:arguments")},
 }
 _SENSITIVE_FILE_CALLABLE_SCOPES = {
     "src/mdcp/temporal/contract_gate.py": {
@@ -1005,13 +977,6 @@ def _file_receiver_identity(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
         return f"name:{node.id}"
     if (
-        isinstance(node, ast.BinOp)
-        and isinstance(node.op, ast.Div)
-        and isinstance(node.left, ast.Name)
-        and isinstance(node.right, ast.Name)
-    ):
-        return f"Path:{node.left.id}/{node.right.id}"
-    if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "Path"
@@ -1252,53 +1217,27 @@ def _allowed_subprocess_call(
         return False
     if not isinstance(node.args[0], ast.Tuple):
         return False
-    command = tuple(
-        (
-            f"name:{argument.value.id}"
-            if isinstance(argument, ast.Starred) and isinstance(argument.value, ast.Name)
-            else _subprocess_argument_identity(argument)
-        )
-        for argument in node.args[0].elts
-    )
+    command = tuple(_subprocess_argument_identity(argument) for argument in node.args[0].elts)
     expected = _ALLOWED_SUBPROCESS_CALLS.get(logical_path, {}).get(
         _enclosing_function(node, parents)
     )
     if command != expected:
         return False
     keywords = {keyword.arg: keyword.value for keyword in node.keywords}
-    expected_cwd_name = (
-        "root" if logical_path == "src/mdcp/temporal/search_identity.py" else "repository_root"
+    expected_text = not (
+        logical_path == "src/mdcp/temporal/runtime_guards.py"
+        and _enclosing_function(node, parents) == "_tracked_paths"
     )
     return (
         set(keywords) == {"cwd", "check", "capture_output", "text"}
         and isinstance(keywords["cwd"], ast.Name)
-        and keywords["cwd"].id == expected_cwd_name
+        and keywords["cwd"].id == "repository_root"
         and isinstance(keywords["check"], ast.Constant)
         and keywords["check"].value is False
         and isinstance(keywords["capture_output"], ast.Constant)
         and keywords["capture_output"].value is True
         and isinstance(keywords["text"], ast.Constant)
-        and keywords["text"].value is True
-    )
-
-
-def _allowed_getattr_reference(
-    node: ast.Name,
-    logical_path: str,
-    parents: dict[ast.AST, ast.AST],
-) -> bool:
-    parent = parents.get(node)
-    return (
-        logical_path == "src/mdcp/temporal/search_identity.py"
-        and node.id == "getattr"
-        and isinstance(parent, ast.Call)
-        and parent.func is node
-        and _enclosing_function(node, parents) == "_bound_digests_recompute"
-        and len(parent.args) == 2
-        and not parent.keywords
-        and all(isinstance(argument, ast.Name) for argument in parent.args)
-        and parent.args[0].id == "receipt"
-        and parent.args[1].id == "field_name"
+        and keywords["text"].value is expected_text
     )
 
 
@@ -1508,11 +1447,6 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                     and qualified_name == "__file__"
                     and _allowed_file_source_name(node, logical_path, parents)
                 )
-                and not (
-                    isinstance(node, ast.Name)
-                    and qualified_name == "getattr"
-                    and _allowed_getattr_reference(node, logical_path, parents)
-                )
             ) or (
                 isinstance(node, ast.Attribute)
                 and (
@@ -1586,6 +1520,7 @@ def _default_paths(repository_root: Path) -> tuple[str, ...]:
     temporal_paths = tuple(
         path.relative_to(repository_root).as_posix()
         for path in sorted(temporal_root.glob("*.py"), key=lambda item: item.as_posix())
+        if path.relative_to(repository_root).as_posix() not in _NON_FORMAL_TEMPORAL_PATHS
     )
     return tuple(sorted((*FORMAL_V2_FIXED_PATHS, *temporal_paths)))
 

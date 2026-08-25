@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
+import mdcp.temporal.runtime_guards as runtime_guards
 from mdcp.temporal.runtime_guards import (
+    RuntimeGuard,
     RuntimeStage,
     _build_synthetic_runtime_guard,
     build_production_runtime_guard,
@@ -88,6 +90,121 @@ def guarded_fixture(tmp_path: Path, mutation: str):
 def test_production_guard_has_no_public_probe_injection() -> None:
     signature = inspect.signature(build_production_runtime_guard)
     assert tuple(signature.parameters) == ("repository_root", "expected_head")
+
+
+def test_synthetic_guard_is_not_a_production_runtime_guard(tmp_path: Path) -> None:
+    guard = guarded_fixture(tmp_path, "clean")
+
+    assert not isinstance(guard, RuntimeGuard)
+
+
+def test_runtime_guard_detects_a_tracked_filename_containing_a_newline(tmp_path: Path) -> None:
+    _committed_repository(tmp_path)
+    tracked_path = tmp_path / "tracked\nname.txt"
+    try:
+        tracked_path.write_text("initial\n", encoding="utf-8")
+    except OSError:
+        pytest.skip("newline-containing filenames are unavailable in this test environment")
+    _git(tmp_path, "add", tracked_path.name)
+    _git(
+        tmp_path,
+        "-c",
+        "user.name=runtime-guard-test",
+        "-c",
+        "user.email=runtime-guard-test@example.invalid",
+        "commit",
+        "-m",
+        "newline-path",
+    )
+    expected_head = _git(tmp_path, "rev-parse", "HEAD")
+    guard = _build_synthetic_runtime_guard(
+        tmp_path,
+        expected_head,
+        monotonic_ns=iter((0, 1)).__next__,
+        peak_process_bytes=lambda: 0,
+    )
+    tracked_path.write_text("changed\n", encoding="utf-8")
+
+    result = guard.checkpoint(RuntimeStage.POST_FIT)
+
+    assert result.verdict == "UNKNOWN"
+    assert result.reason_codes == ("REPOSITORY_BYTES_CHANGED",)
+
+
+def test_runtime_guard_inventories_tracked_symlink_bytes(
+    tmp_path: Path,
+) -> None:
+    expected_head = _committed_repository(tmp_path)
+    target_path = tmp_path / "first.txt"
+    link_path = tmp_path / "tracked-link.txt"
+    try:
+        link_path.symlink_to(target_path.name)
+    except OSError:
+        pytest.skip("creating a symlink is unavailable in this test environment")
+    _git(tmp_path, "add", link_path.name)
+    _git(
+        tmp_path,
+        "-c",
+        "user.name=runtime-guard-test",
+        "-c",
+        "user.email=runtime-guard-test@example.invalid",
+        "commit",
+        "-m",
+        "symlink-path",
+    )
+    expected_head = _git(tmp_path, "rev-parse", "HEAD")
+    guard = _build_synthetic_runtime_guard(
+        tmp_path,
+        expected_head,
+        monotonic_ns=iter((0, 1)).__next__,
+        peak_process_bytes=lambda: 0,
+    )
+    link_path.unlink()
+    link_path.symlink_to("second.txt")
+
+    result = guard.checkpoint(RuntimeStage.POST_FIT)
+
+    assert result.verdict == "UNKNOWN"
+    assert result.reason_codes == ("REPOSITORY_BYTES_CHANGED",)
+
+
+def test_runtime_guard_fails_closed_when_construction_inventory_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_head = _committed_repository(tmp_path)
+    monkeypatch.setattr(runtime_guards, "_tracked_paths", lambda *_: None)
+    guard = _build_synthetic_runtime_guard(
+        tmp_path,
+        expected_head,
+        monotonic_ns=iter((0, 1)).__next__,
+        peak_process_bytes=lambda: 0,
+    )
+
+    result = guard.checkpoint(RuntimeStage.POST_FIT)
+
+    assert result.verdict == "UNKNOWN"
+    assert result.reason_codes == ("REPOSITORY_BYTES_UNAVAILABLE",)
+
+
+def test_runtime_guard_rechecks_head_after_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_head = _committed_repository(tmp_path)
+    guard = _build_synthetic_runtime_guard(
+        tmp_path,
+        expected_head,
+        monotonic_ns=iter((0, 1)).__next__,
+        peak_process_bytes=lambda: 0,
+    )
+    heads = iter((expected_head, "moved-after-inventory"))
+    monkeypatch.setattr(runtime_guards, "_repository_head", lambda _: next(heads))
+
+    result = guard.checkpoint(RuntimeStage.POST_FIT)
+
+    assert result.verdict == "UNKNOWN"
+    assert result.reason_codes == ("REPOSITORY_IDENTITY_CHANGED",)
 
 
 @pytest.mark.parametrize(

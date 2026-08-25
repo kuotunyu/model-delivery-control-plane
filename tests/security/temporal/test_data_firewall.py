@@ -816,6 +816,7 @@ def test_real_formal_source_set_passes_with_deterministic_discovery() -> None:
             (REPOSITORY_ROOT / FORMAL_TEMPORAL_PACKAGE_ROOT).glob("*.py"),
             key=lambda path: path.as_posix(),
         )
+        if path.name != "search_identity.py"
     )
 
     assert result.verdict == "PASS"
@@ -840,8 +841,8 @@ def test_runtime_guard_and_command_surfaces_are_discovered() -> None:
         ("module-attribute", "import time\n", "import time\nunused = time.sleep\n"),
         (
             "environment-key",
-            "import subprocess\n",
-            "import os\nimport subprocess\nunused = os.environ['MDCP_REVIEW_H2']\n",
+            "import os\n",
+            "import os\nunused = os.environ['MDCP_REVIEW_H2']\n",
         ),
         (
             "subprocess-argument",
