@@ -166,6 +166,30 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("typing", "TypeVar"),
         }
     ),
+    "src/mdcp/temporal/evaluation.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Mapping"),
+            ("collections.abc", "Sequence"),
+            ("dataclasses", "dataclass"),
+            ("datetime", "date"),
+            ("datetime", "datetime"),
+            ("math", None),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.policy.cluster_bootstrap", "BootstrapResult"),
+            ("mdcp.policy.cluster_bootstrap", "PairedQualityRow"),
+            ("mdcp.policy.cluster_bootstrap", "RatioMetric"),
+            ("mdcp.policy.cluster_bootstrap", "cluster_bootstrap_ratios"),
+            ("mdcp.temporal.completeness", "ADAPTER_REASON_CODES"),
+            ("mdcp.temporal.completeness", "LABEL_REASON_CODES"),
+            ("mdcp.temporal.completeness", "PREDICTION_REASON_CODES"),
+            ("mdcp.temporal.completeness", "CompletenessReceipt"),
+            ("mdcp.temporal.completeness", "LayerAccounting"),
+            ("mdcp.temporal.folds", "SourceRowIdentity"),
+        }
+    ),
     "src/mdcp/temporal/constants.py": frozenset({("datetime", "datetime")}),
     "src/mdcp/temporal/contract_gate.py": frozenset(
         {
@@ -330,6 +354,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         {"math.cos", "math.isfinite", "math.pi", "math.sin", "re.compile"}
     ),
     "src/mdcp/temporal/completeness.py": frozenset({"math.isfinite"}),
+    "src/mdcp/temporal/evaluation.py": frozenset({"math.isclose", "math.isfinite"}),
     "src/mdcp/temporal/evidence.py": frozenset({"re.IGNORECASE", "re.MULTILINE", "re.compile"}),
     _TRUSTED_FIREWALL_PATH: frozenset(
         {
