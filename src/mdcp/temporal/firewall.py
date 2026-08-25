@@ -440,6 +440,9 @@ _FORMAL_IMPORT_ALLOWLIST = {
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
             ("__future__", "annotations"),
+            ("ctypes", None),
+            ("ctypes", "wintypes"),
+            ("errno", None),
             ("json", None),
             ("math", None),
             ("mdcp.common.canonical", "canonicalize_json"),
@@ -452,8 +455,11 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic", "BaseModel"),
             ("pydantic", "ConfigDict"),
             ("pydantic", "StringConstraints"),
+            ("pydantic", "StrictFloat"),
+            ("pydantic", "StrictInt"),
             ("pydantic", "field_validator"),
             ("pydantic", "model_validator"),
+            ("stat", None),
             ("typing", "Annotated"),
             ("typing", "Literal"),
         }
@@ -577,20 +583,66 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
+            "ctypes.CDLL",
+            "ctypes.POINTER",
+            "ctypes.Structure",
+            "ctypes.addressof",
+            "ctypes.byref",
+            "ctypes.c_char_p",
+            "ctypes.c_int",
+            "ctypes.c_uint",
+            "ctypes.c_void_p",
+            "ctypes.create_string_buffer",
+            "ctypes.get_errno",
+            "ctypes.memmove",
+            "ctypes.sizeof",
+            "ctypes.windll",
+            "ctypes.windll.kernel32",
+            "ctypes.windll.kernel32.CloseHandle",
+            "ctypes.windll.kernel32.CreateDirectoryW",
+            "ctypes.windll.kernel32.CreateFileW",
+            "ctypes.windll.kernel32.DeleteFileW",
+            "ctypes.windll.kernel32.FlushFileBuffers",
+            "ctypes.windll.kernel32.GetFileInformationByHandle",
+            "ctypes.windll.kernel32.GetLastError",
+            "ctypes.windll.kernel32.RemoveDirectoryW",
+            "ctypes.windll.kernel32.SetFileInformationByHandle",
+            "ctypes.windll.kernel32.WriteFile",
+            "ctypes.wintypes.BOOL",
+            "ctypes.wintypes.DWORD",
+            "ctypes.wintypes.FILETIME",
+            "ctypes.wintypes.HANDLE",
+            "ctypes.wintypes.LPCWSTR",
+            "ctypes.wintypes.WCHAR",
+            "errno.EEXIST",
+            "errno.ENOTEMPTY",
             "json.JSONDecodeError",
             "json.loads",
             "math.isfinite",
-            "os.O_BINARY",
+            "os.O_CLOEXEC",
             "os.O_CREAT",
+            "os.O_DIRECTORY",
             "os.O_EXCL",
+            "os.O_NOFOLLOW",
+            "os.O_RDONLY",
             "os.O_WRONLY",
             "os.close",
+            "os.fsencode",
+            "os.fspath",
+            "os.fstat",
             "os.fsync",
+            "os.listdir",
+            "os.mkdir",
+            "os.name",
             "os.open",
             "os.path",
-            "os.path.isjunction",
-            "os.rename",
+            "os.path.abspath",
+            "os.rmdir",
+            "os.stat",
+            "os.stat_result",
+            "os.unlink",
             "os.write",
+            "stat.S_ISDIR",
         }
     ),
 }
@@ -656,8 +708,13 @@ _ALLOWED_FILE_ACCESS_CALLS = {
                 "Path:schemas/v2/development-result-index.schema.json",
             ),
             ("verify_development_result", "read_bytes", "name:path"),
-            ("_write_exclusive_canonical_file", "open", "name:os"),
-            ("_write_exclusive_canonical_file", "write", "name:os"),
+            ("_open_posix_trusted_parent", "open", "name:os"),
+            ("_posix_open_owned_staging", "open", "name:os"),
+            ("_posix_write_file", "open", "name:os"),
+            ("_posix_write_file", "write", "name:os"),
+            ("_posix_write_layout", "open", "name:os"),
+            ("_posix_clear_directory", "open", "name:os"),
+            ("_cleanup_posix_staging", "open", "name:os"),
         }
     ),
 }
@@ -1405,6 +1462,28 @@ def _allowed_getattr_reference(
     )
 
 
+def _allowed_run_evidence_cdll_call(
+    node: ast.Call,
+    bindings: dict[str, str],
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    parent = parents.get(node)
+    return (
+        _attribute_name(node.func, bindings) == "ctypes.CDLL"
+        and _enclosing_function(node, parents) == "_load_posix_renameat2"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value is None
+        and len(node.keywords) == 1
+        and node.keywords[0].arg == "use_errno"
+        and isinstance(node.keywords[0].value, ast.Constant)
+        and node.keywords[0].value.value is True
+        and isinstance(parent, ast.Attribute)
+        and parent.value is node
+        and parent.attr == "renameat2"
+    )
+
+
 def _import_allowed(logical_path: str, module: str, imported_name: str | None) -> bool:
     if imported_name is not None and module in _ALLOWED_DIRECT_IMPORTS:
         return imported_name in _ALLOWED_DIRECT_IMPORTS[module]
@@ -1508,12 +1587,21 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     pandas_reader_references = 0
     previous_reader_references = 0
     descriptor_path_references = 0
+    run_evidence_cdll_calls = 0
     protected_function_counts = {
         name: 0 for name in _PROTECTED_PATH_PARAMETER_FUNCTIONS.get(logical_path, frozenset())
     }
     for node in ast.walk(tree):
         if _shadows_imported_binding(node, bindings):
             _fail()
+        if (
+            logical_path == "src/mdcp/temporal/run_evidence.py"
+            and isinstance(node, ast.Call)
+            and _attribute_name(node.func, bindings) == "ctypes.CDLL"
+        ):
+            run_evidence_cdll_calls += 1
+            if not _allowed_run_evidence_cdll_call(node, bindings, parents):
+                _fail()
         if (
             logical_path == "src/mdcp/temporal/search_identity.py"
             and isinstance(node, ast.Name)
@@ -1683,6 +1771,8 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     if logical_path == "src/mdcp/predictor/app_v2.py" and descriptor_path_references != 2:
         _fail()
     if any(count != 1 for count in protected_function_counts.values()):
+        _fail()
+    if logical_path == "src/mdcp/temporal/run_evidence.py" and run_evidence_cdll_calls != 1:
         _fail()
 
 

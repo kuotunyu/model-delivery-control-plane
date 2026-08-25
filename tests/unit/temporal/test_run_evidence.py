@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
+import mdcp.temporal.run_evidence as run_evidence
 from mdcp.common.canonical import canonicalize_json
 from mdcp.temporal.evidence import public_evidence_violations
 from mdcp.temporal.run_evidence import (
+    PrivateBundleIdentity,
     PrivateFoldEvidence,
     PrivateRunBundle,
     PublicDevelopmentResult,
+    canonical_public_result_bytes,
     verify_development_result,
     write_synthetic_bundle_no_clobber,
 )
@@ -242,3 +248,301 @@ def test_private_writer_rejects_natural_development_without_permit(tmp_path: Pat
         write_synthetic_bundle_no_clobber(tmp_path / "new-run", natural)
 
     assert str(error.value) == "FORMAL_RUN_PERMIT_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    "logical_path",
+    [
+        "private/CON.json",
+        "private/CON .json",
+        "private/com1.payload",
+        "private/LPT9",
+        "private/a:.json",
+        "private/x.",
+        "private/x ",
+    ],
+)
+def test_private_logical_paths_reject_windows_aliases(logical_path: str) -> None:
+    with pytest.raises(ValueError, match="LOGICAL_PATH_INVALID"):
+        PrivateFoldEvidence(logical_path=logical_path, canonical_bytes=b"{}")
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("trials.0.folds.0.metrics.row_count", True),
+        ("selection_fit_count", True),
+        ("h2_loaded_rows", False),
+    ],
+)
+def test_public_result_rejects_boolean_numeric_coercion(path: str, value: bool) -> None:
+    document = valid_public_result()
+    if path in {"selection_fit_count", "h2_loaded_rows"}:
+        document[path] = value
+    else:
+        document["trials"][0]["folds"][0]["metrics"]["row_count"] = value
+
+    with pytest.raises(ValueError):
+        PublicDevelopmentResult.model_validate(document)
+
+
+def test_verifier_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate.json"
+    path.write_bytes(b'{"schema_version":"one","schema_version":"two"}')
+
+    assert verify_development_result(path).verdict == "FAIL"
+
+
+def test_canonical_public_result_bytes_returns_rfc8785_bytes() -> None:
+    result = PublicDevelopmentResult.model_validate(valid_public_result())
+
+    assert canonical_public_result_bytes(result) == canonicalize_json(
+        result.model_dump(mode="json")
+    )
+
+
+def test_private_writer_cleans_staging_after_raced_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "new-run"
+    if os.name == "nt":
+        original_publish = run_evidence._windows_rename_noreplace
+
+        def race(staging_handle: int, target: Path) -> None:
+            target.mkdir()
+            original_publish(staging_handle, target)
+
+        monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", race)
+    else:
+        original_publish_posix = run_evidence._posix_rename_noreplace
+
+        def race_posix(
+            old_directory: int,
+            old_name: str,
+            new_directory: int,
+            new_name: str,
+        ) -> None:
+            os.mkdir(new_name, dir_fd=new_directory)
+            original_publish_posix(old_directory, old_name, new_directory, new_name)
+
+        monkeypatch.setattr(run_evidence, "_posix_rename_noreplace", race_posix)
+
+    with pytest.raises(ValueError, match="^DESTINATION_EXISTS$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert destination.is_dir()
+    assert not (tmp_path / ".new-run.staging").exists()
+
+
+def test_writer_does_not_fall_back_to_path_based_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden_path_rename(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("path-based rename is not an approved publication primitive")
+
+    monkeypatch.setattr(run_evidence.os, "rename", forbidden_path_rename)
+
+    identity = write_synthetic_bundle_no_clobber(tmp_path / "new-run", synthetic_private_bundle())
+
+    assert identity.file_count == 2
+    assert (tmp_path / "new-run" / "manifest.json").is_file()
+
+
+def test_posix_renameat2_is_handle_relative_and_no_replace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class RenameAt2:
+        argtypes: list[object] = []
+        restype: object = None
+
+        def __call__(self, *args: object) -> int:
+            calls.append(args)
+            return 0
+
+    renameat2 = RenameAt2()
+    monkeypatch.setattr(run_evidence, "_load_posix_renameat2", lambda: renameat2)
+
+    run_evidence._posix_rename_noreplace(41, ".new-run.staging", 41, "new-run")
+
+    assert calls == [(41, b".new-run.staging", 41, b"new-run", 1)]
+
+
+def test_posix_renameat2_collision_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RenameAt2:
+        argtypes: list[object] = []
+        restype: object = None
+
+        def __call__(self, *_args: object) -> int:
+            ctypes.set_errno(errno.EEXIST)
+            return -1
+
+    monkeypatch.setattr(run_evidence, "_load_posix_renameat2", lambda: RenameAt2())
+
+    with pytest.raises(ValueError) as caught:
+        run_evidence._posix_rename_noreplace(41, ".private-path", 41, "private-path")
+
+    assert str(caught.value) == "DESTINATION_EXISTS"
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+
+
+def test_posix_renameat2_unsupported_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_evidence.ctypes, "CDLL", lambda *_args, **_kwargs: object())
+
+    with pytest.raises(ValueError) as caught:
+        run_evidence._load_posix_renameat2()
+
+    assert str(caught.value) == "PUBLICATION_FAILED"
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+
+
+def test_posix_staging_handle_is_closed_when_identity_check_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[int] = []
+    monkeypatch.setattr(run_evidence, "_posix_directory_flags", lambda: 0)
+    monkeypatch.setattr(run_evidence.os, "open", lambda *_args, **_kwargs: 41)
+    monkeypatch.setattr(
+        run_evidence.os,
+        "fstat",
+        lambda _descriptor: (_ for _ in ()).throw(OSError("sensitive path")),
+    )
+    monkeypatch.setattr(run_evidence.os, "close", closed.append)
+
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        run_evidence._posix_open_owned_staging(40, ".new-run.staging")
+
+    assert closed == [41]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows protected-handle semantics")
+def test_windows_holds_parent_and_staging_against_replacement_until_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trusted_parent = tmp_path / "trusted"
+    trusted_parent.mkdir()
+    destination = trusted_parent / "new-run"
+    staging = trusted_parent / ".new-run.staging"
+    original = run_evidence._windows_rename_noreplace
+
+    def probe(staging_handle: int, target: Path) -> None:
+        with pytest.raises(OSError):
+            os.rename(trusted_parent, tmp_path / "redirected-parent")
+        with pytest.raises(OSError):
+            os.rename(staging, trusted_parent / "redirected-staging")
+        original(staging_handle, target)
+
+    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", probe)
+
+    write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert destination.is_dir()
+    assert not staging.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows protected-handle semantics")
+def test_windows_cleans_owned_staging_after_file_flush_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "new-run"
+    staging = tmp_path / ".new-run.staging"
+    original_flush = run_evidence._windows_flush
+    calls = 0
+
+    def fail_first_file_flush(handle: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise OSError("sensitive path")
+        original_flush(handle)
+
+    monkeypatch.setattr(run_evidence, "_windows_flush", fail_first_file_flush)
+
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert str(caught.value) == "PUBLICATION_FAILED"
+    assert not staging.exists()
+
+
+def test_private_writer_rejects_linked_ancestor_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "linked-target"
+    target.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    if os.name == "nt":
+        completed = subprocess.run(
+            ("cmd", "/c", "mklink", "/J", str(linked_parent), str(target)),
+            capture_output=True,
+            check=False,
+        )
+        assert completed.returncode == 0
+    else:
+        linked_parent.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(linked_parent / "new-run", synthetic_private_bundle())
+
+    assert str(caught.value) == "TRUSTED_PARENT_REQUIRED"
+    assert tuple(target.iterdir()) == ()
+
+
+def test_preexisting_staging_link_is_not_cleaned_as_owned(tmp_path: Path) -> None:
+    target = tmp_path / "attacker-owned"
+    target.mkdir()
+    sentinel = target / "sentinel.json"
+    sentinel.write_text("{}", encoding="utf-8")
+    staging = tmp_path / ".new-run.staging"
+    if os.name == "nt":
+        completed = subprocess.run(
+            ("cmd", "/c", "mklink", "/J", str(staging), str(target)),
+            capture_output=True,
+            check=False,
+        )
+        assert completed.returncode == 0
+    else:
+        staging.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(tmp_path / "new-run", synthetic_private_bundle())
+
+    assert str(caught.value) == "STAGING_EXISTS"
+    assert sentinel.read_text(encoding="utf-8") == "{}"
+
+
+@pytest.mark.parametrize("name", ["CON", "run.", "run ", "run:stream"])
+def test_private_writer_rejects_windows_alias_destination_names(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(tmp_path / name, synthetic_private_bundle())
+
+    assert str(caught.value) == "TRUSTED_PARENT_REQUIRED"
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_private_model_validation_does_not_echo_sensitive_input() -> None:
+    sensitive_path = "private/CON .secret.json"
+
+    with pytest.raises(ValueError) as caught:
+        PrivateFoldEvidence(logical_path=sensitive_path, canonical_bytes=b"{}")
+
+    assert sensitive_path not in str(caught.value)
+
+
+def test_private_identity_rejects_boolean_counts_without_echoing_input() -> None:
+    with pytest.raises(ValueError) as caught:
+        PrivateBundleIdentity(
+            file_count=True,
+            total_bytes=2,
+            inventory_sha256="a" * 64,
+            manifest_sha256="b" * 64,
+        )
+
+    assert "True" not in str(caught.value)
