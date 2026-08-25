@@ -391,23 +391,45 @@ _FORMAL_IMPORT_ALLOWLIST = {
         {
             ("__future__", "annotations"),
             ("collections.abc", "Callable"),
-            ("collections.abc", "Mapping"),
-            ("ctypes", None),
+            ("contextlib", "suppress"),
+            ("dataclasses", "asdict"),
             ("dataclasses", "dataclass"),
             ("dataclasses", "field"),
             ("enum", "StrEnum"),
             ("mdcp.common.canonical", "canonicalize_json"),
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.temporal.completeness", "AdapterOutcome"),
+            ("mdcp.temporal.completeness", "CompletenessReceipt"),
+            ("mdcp.temporal.completeness", "LabelOutcome"),
+            ("mdcp.temporal.completeness", "PredictionOutcome"),
+            ("mdcp.temporal.completeness", "assemble_development_pairs"),
+            ("mdcp.temporal.evaluation", "DevelopmentQualityReport"),
+            ("mdcp.temporal.evaluation", "FoldQualificationContext"),
+            ("mdcp.temporal.evaluation", "QualificationContext"),
+            ("mdcp.temporal.evaluation", "QualificationEvidence"),
+            ("mdcp.temporal.evaluation", "QualificationFoldDigests"),
+            ("mdcp.temporal.evaluation", "QualificationResult"),
+            ("mdcp.temporal.evaluation", "evaluate_pooled"),
+            ("mdcp.temporal.evaluation", "qualify_trial"),
+            ("mdcp.temporal.folds", "SourceRowIdentity"),
+            ("mdcp.temporal.run_evidence", "ClosedMetrics"),
+            ("mdcp.temporal.run_evidence", "PrivateFoldEvidence"),
+            ("mdcp.temporal.run_evidence", "PrivateRunBundle"),
+            ("mdcp.temporal.run_evidence", "PublicDevelopmentResult"),
+            ("mdcp.temporal.run_evidence", "PublicFoldReceipt"),
+            ("mdcp.temporal.run_evidence", "PublicTrialReceipt"),
+            ("mdcp.temporal.runtime_guards", "RuntimeGuard"),
+            ("mdcp.temporal.runtime_guards", "RuntimeObservation"),
+            ("mdcp.temporal.runtime_guards", "RuntimeStage"),
+            ("mdcp.temporal.selection", "ProvisionalWinner"),
             ("mdcp.temporal.selection", "ReplayFoldDigests"),
             ("mdcp.temporal.selection", "ReplayResult"),
+            ("mdcp.temporal.selection", "ReplaySelectionSession"),
+            ("mdcp.temporal.selection", "SelectionDecision"),
+            ("mdcp.temporal.selection", "finalize_selection"),
             ("mdcp.temporal.trials", "canonical_trial_identity"),
-            ("os", None),
-            ("pathlib", "Path"),
-            ("subprocess", None),
-            ("sys", None),
-            ("time", None),
-            ("typing", "Literal"),
+            ("threading", "Lock"),
         }
     ),
     "src/mdcp/temporal/cli.py": frozenset(
@@ -561,25 +583,6 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "time.monotonic_ns",
         }
     ),
-    "src/mdcp/temporal/runner.py": frozenset(
-        {
-            "ctypes.Structure",
-            "ctypes.byref",
-            "ctypes.c_size_t",
-            "ctypes.c_ulong",
-            "ctypes.sizeof",
-            "ctypes.windll",
-            "ctypes.windll.kernel32",
-            "ctypes.windll.kernel32.GetCurrentProcess",
-            "ctypes.windll.psapi",
-            "ctypes.windll.psapi.GetProcessMemoryInfo",
-            "os.environ",
-            "subprocess.run",
-            "sys.platform",
-            "sys.platform.startswith",
-            "time.monotonic_ns",
-        }
-    ),
     "src/mdcp/temporal/cli.py": frozenset({"argparse.ArgumentParser"}),
     "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
     "src/mdcp/temporal/run_evidence.py": frozenset(
@@ -682,9 +685,6 @@ _ALLOWED_FILE_ACCESS_CALLS = {
             ("_repository_inventory", "read_bytes", "name:working_path"),
         }
     ),
-    "src/mdcp/temporal/runner.py": frozenset(
-        {("_linux_peak_resident_bytes", "read_text", "Path:/proc/self/status")}
-    ),
     "src/mdcp/temporal/search_identity.py": frozenset(
         {
             ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
@@ -711,17 +711,6 @@ _ALLOWED_ENVIRONMENT_KEYS = {
             "MDCP_ONNX_PATH",
             "MDCP_RELEASE_ID",
             "MDCP_ROUTE_REVISION",
-        }
-    ),
-    "src/mdcp/temporal/runner.py": frozenset(
-        {
-            "OMP_NUM_THREADS",
-            "OPENBLAS_NUM_THREADS",
-            "MKL_NUM_THREADS",
-            "BLIS_NUM_THREADS",
-            "NUMEXPR_NUM_THREADS",
-            "LOKY_MAX_CPU_COUNT",
-            "JOBLIB_MULTIPROCESSING",
         }
     ),
 }
@@ -774,7 +763,7 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
     "src/mdcp/temporal/runner.py": (
-        "2cdd8e9d5f3aad8b2919c620282e4ece281382c1fbca35e1994f7bf058e1ad77"
+        "e8b9b0b35afa13949965f29744b81ffc0212d14b0b2763ddef89ea6937ba8346"
     ),
 }
 _ALLOWED_PRIVATE_ATTRIBUTES = {
@@ -792,9 +781,7 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
             "_core",
         }
     ),
-    "src/mdcp/temporal/runner.py": frozenset(
-        {"_record_final", "_record_replay", "_record_selection", "_records", "_replay_trial_id"}
-    ),
+    "src/mdcp/temporal/runner.py": frozenset({"_provisional", "_records", "_state"}),
     "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths"}),
 }
 _ALLOWED_SUBPROCESS_CALLS = {
@@ -802,9 +789,6 @@ _ALLOWED_SUBPROCESS_CALLS = {
         "_repository_head": ("git", "rev-parse", "HEAD"),
         "_repository_is_dirty": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
         "_tracked_paths": ("git", "ls-tree", "-r", "-z", "--name-only", "name:expected_head"),
-    },
-    "src/mdcp/temporal/runner.py": {
-        "_repository_is_clean": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
     },
 }
 _ALLOWED_SEARCH_IDENTITY_GIT_CALLS = {
@@ -1335,12 +1319,6 @@ def _environment_access_allowed(
     allowed_keys = _ALLOWED_ENVIRONMENT_KEYS.get(logical_path, frozenset())
     parent = parents.get(node)
     if qualified_name == "os.environ":
-        if logical_path == "src/mdcp/temporal/runner.py" and isinstance(parent, ast.Subscript):
-            return isinstance(parent.ctx, ast.Store) and (
-                isinstance(parent.slice, ast.Name)
-                and parent.slice.id == "_thread_environment_name"
-                or _constant_string(parent.slice) == "JOBLIB_MULTIPROCESSING"
-            )
         return (
             isinstance(parent, ast.Subscript)
             and parent.value is node
@@ -1476,7 +1454,6 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                         not in {
                             _TRUSTED_FIREWALL_PATH,
                             "src/mdcp/temporal/runtime_guards.py",
-                            "src/mdcp/temporal/runner.py",
                         }
                     )
                     or _is_forbidden_module(alias.name)
@@ -1499,7 +1476,6 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                 not in {
                     _TRUSTED_FIREWALL_PATH,
                     "src/mdcp/temporal/runtime_guards.py",
-                    "src/mdcp/temporal/runner.py",
                 }
             ):
                 _fail()

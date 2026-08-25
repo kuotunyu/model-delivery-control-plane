@@ -1,41 +1,51 @@
-# ruff: noqa: E402
-"""Bounded, CPU-only formal temporal-development execution primitives.
-
-This module deliberately accepts fold execution as an injected boundary.  It never opens an
-archive itself, so the formal ledger can be exercised with synthetic material without granting
-this layer any H2 or network capability.
-"""
+"""One-shot serial orchestration for bounded temporal development."""
 
 from __future__ import annotations
 
-import os
-
-# These assignments must precede every import that can transitively load an estimator.
-for _thread_environment_name in (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "BLIS_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-    "LOKY_MAX_CPU_COUNT",
-):
-    os.environ[_thread_environment_name] = "1"
-os.environ["JOBLIB_MULTIPROCESSING"] = "0"
-
-import ctypes
-import subprocess
-import sys
-import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
-from pathlib import Path
-from typing import Literal
+from threading import Lock
 
 from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
-from mdcp.temporal.selection import ReplayFoldDigests, ReplayResult
+from mdcp.temporal.completeness import (
+    AdapterOutcome,
+    CompletenessReceipt,
+    LabelOutcome,
+    PredictionOutcome,
+    assemble_development_pairs,
+)
+from mdcp.temporal.evaluation import (
+    DevelopmentQualityReport,
+    FoldQualificationContext,
+    QualificationContext,
+    QualificationEvidence,
+    QualificationFoldDigests,
+    QualificationResult,
+    evaluate_pooled,
+    qualify_trial,
+)
+from mdcp.temporal.folds import SourceRowIdentity
+from mdcp.temporal.run_evidence import (
+    ClosedMetrics,
+    PrivateFoldEvidence,
+    PrivateRunBundle,
+    PublicDevelopmentResult,
+    PublicFoldReceipt,
+    PublicTrialReceipt,
+)
+from mdcp.temporal.runtime_guards import RuntimeGuard, RuntimeObservation, RuntimeStage
+from mdcp.temporal.selection import (
+    ProvisionalWinner,
+    ReplayFoldDigests,
+    ReplayResult,
+    ReplaySelectionSession,
+    SelectionDecision,
+    finalize_selection,
+)
 from mdcp.temporal.trials import canonical_trial_identity
 
 EXACT_FOLD_IDS = ("F1", "F2", "F3", "F4")
@@ -61,26 +71,26 @@ EXACT_TRIAL_IDS = (
     "NL-E128-R0.07-D2",
     "NL-E128-R0.07-D3",
 )
-_SELECTION_LIMIT = 80
-_REPLAY_LIMIT = 4
-_FINAL_LIMIT = 1
-_MAXIMUM_LIMIT = 85
-_WALL_CLOCK_NS = 21_600 * 1_000_000_000
-_PEAK_MEMORY_BYTES = 4_294_967_296
+_SELECTION_LIMIT = len(EXACT_TRIAL_IDS) * len(EXACT_FOLD_IDS)
+_REPLAY_LIMIT = len(EXACT_FOLD_IDS)
+_SHA256_ALPHABET = frozenset("0123456789abcdef")
 
 
 class FitPhase(StrEnum):
     SELECTION = "SELECTION"
     REPLAY = "REPLAY"
-    FINAL = "FINAL"
 
 
 class FitBudgetError(RuntimeError):
-    """Raised before an attempt can exceed the immutable formal fit plan."""
+    """Raised before an attempt can violate the frozen Wave 3 fit plan."""
 
 
-class ExecutionConfigurationError(ValueError):
-    """Raised before execution for a non-CPU, networked, or unsafe context."""
+class DevelopmentRunError(RuntimeError):
+    """Fixed-code terminal result for an unsealable synthetic run."""
+
+    def __init__(self, *reason_codes: str) -> None:
+        self.reason_codes = reason_codes or ("DEVELOPMENT_RUN_UNKNOWN",)
+        super().__init__(self.reason_codes[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,10 +102,10 @@ class FitRecord:
 
 @dataclass(slots=True)
 class FitLedger:
-    """Append-only exact-order accounting for selection, replay, and final fitting."""
+    """Append-only exact-order accounting for 80 selection and at most four replay fits."""
 
     _records: list[FitRecord] = field(default_factory=list, init=False, repr=False)
-    _replay_trial_id: str | None = field(default=None, init=False, repr=False)
+    _provisional: ProvisionalWinner | None = field(default=None, init=False, repr=False)
 
     @property
     def records(self) -> tuple[FitRecord, ...]:
@@ -111,482 +121,568 @@ class FitLedger:
 
     @property
     def final_count(self) -> int:
-        return sum(record.phase is FitPhase.FINAL for record in self._records)
+        return 0
 
     @property
     def total_count(self) -> int:
         return len(self._records)
 
-    def record(self, phase: FitPhase, trial_id: str, fold_id: str) -> None:
-        """Reserve exactly one declared fit, failing before any excess execution starts."""
-        if not isinstance(phase, FitPhase):
-            raise FitBudgetError("fit phase is invalid")
-        if self.total_count >= _MAXIMUM_LIMIT:
-            raise FitBudgetError("maximum fits frozen at 85")
-        if phase is FitPhase.SELECTION:
-            self._record_selection(trial_id, fold_id)
-        elif phase is FitPhase.REPLAY:
-            self._record_replay(trial_id, fold_id)
-        else:
-            self._record_final(trial_id, fold_id)
-        self._records.append(FitRecord(phase, trial_id, fold_id))
+    def record_selection(self, trial_id: str, fold_id: str) -> None:
+        """Reserve the next exact trial/fold selection fit."""
+        if self._provisional is not None or self.selection_count >= _SELECTION_LIMIT:
+            raise FitBudgetError("SELECTION_ALREADY_CONSUMED")
+        trial_index, fold_index = divmod(self.selection_count, len(EXACT_FOLD_IDS))
+        if (trial_id, fold_id) != (
+            EXACT_TRIAL_IDS[trial_index],
+            EXACT_FOLD_IDS[fold_index],
+        ):
+            raise FitBudgetError("SELECTION_ORDER_INVALID")
+        self._records.append(FitRecord(FitPhase.SELECTION, trial_id, fold_id))
 
-    def _record_selection(self, trial_id: str, fold_id: str) -> None:
-        if self.selection_count >= _SELECTION_LIMIT:
-            raise FitBudgetError("selection fits frozen at 80")
-        expected = divmod(self.selection_count, len(EXACT_FOLD_IDS))
-        expected_trial = EXACT_TRIAL_IDS[expected[0]]
-        expected_fold = EXACT_FOLD_IDS[expected[1]]
-        if (trial_id, fold_id) != (expected_trial, expected_fold):
-            raise FitBudgetError("selection fit violates frozen order")
-
-    def _record_replay(self, trial_id: str, fold_id: str) -> None:
+    def bind_provisional(self, provisional: ProvisionalWinner) -> None:
+        """Bind replay accounting once to the existing selection session's rank one."""
+        if self._provisional is not None:
+            raise FitBudgetError("PROVISIONAL_ALREADY_BOUND")
         if self.selection_count != _SELECTION_LIMIT:
-            raise FitBudgetError("replay requires the complete frozen selection inventory")
+            raise FitBudgetError("SELECTION_INCOMPLETE")
+        if type(provisional) is not ProvisionalWinner:
+            raise FitBudgetError("PROVISIONAL_WINNER_INVALID")
+        try:
+            identity = canonical_trial_identity(provisional.trial_id)
+        except ValueError as error:
+            raise FitBudgetError("PROVISIONAL_WINNER_INVALID") from error
+        if (
+            provisional.trial_id not in EXACT_TRIAL_IDS[1:]
+            or provisional.family_id != identity.family_id
+            or provisional.configuration_sha256 != identity.configuration_sha256
+            or type(provisional.fold_digests) is not tuple
+            or tuple(digest.fold_id for digest in provisional.fold_digests) != EXACT_FOLD_IDS
+        ):
+            raise FitBudgetError("PROVISIONAL_WINNER_INVALID")
+        self._provisional = provisional
+
+    def record_replay(self, trial_id: str, fold_id: str) -> None:
+        """Reserve the next exact replay fold for the sole bound provisional winner."""
+        if self._provisional is None:
+            raise FitBudgetError("PROVISIONAL_WINNER_REQUIRED")
         if self.replay_count >= _REPLAY_LIMIT:
-            raise FitBudgetError("replay fits frozen at 4")
-        expected_fold = EXACT_FOLD_IDS[self.replay_count]
-        if fold_id != expected_fold or trial_id not in EXACT_TRIAL_IDS[1:]:
-            raise FitBudgetError("replay fit violates frozen order")
-        if self._replay_trial_id is None:
-            self._replay_trial_id = trial_id
-        if trial_id != self._replay_trial_id:
-            raise FitBudgetError("replay trial is frozen")
-
-    def _record_final(self, trial_id: str, fold_id: str) -> None:
-        if self.selection_count != _SELECTION_LIMIT or self.replay_count != _REPLAY_LIMIT:
-            raise FitBudgetError("final fit requires complete selection and replay")
-        if self.final_count >= _FINAL_LIMIT:
-            raise FitBudgetError("final fits frozen at 1")
-        if trial_id != self._replay_trial_id or fold_id != "FINAL":
-            raise FitBudgetError("final fit violates frozen order")
+            raise FitBudgetError("REPLAY_ALREADY_CONSUMED")
+        if trial_id != self._provisional.trial_id:
+            raise FitBudgetError("REPLAY_TARGET_INVALID")
+        if fold_id != EXACT_FOLD_IDS[self.replay_count]:
+            raise FitBudgetError("REPLAY_FOLD_INVALID")
+        self._records.append(FitRecord(FitPhase.REPLAY, trial_id, fold_id))
 
 
 @dataclass(frozen=True, slots=True)
-class FoldFitResult:
-    """Private fold evidence supplied by an approved bounded-development loader."""
-
-    fold_id: str
-    train_identity_digests: tuple[str, ...]
-    validation_identity_digests: tuple[str, ...]
-    preprocessing_state_sha256: str
-    feature_vector_sha256: str
-    stable_prediction_digest: str
-    candidate_prediction_digest: str
-    completeness_verdict: Literal["PASS", "FAIL", "UNKNOWN"]
-    quality_verdict: Literal["PASS", "FAIL", "UNKNOWN"]
-    metric_values: Mapping[str, float]
-    receipt_sha256: str
-    contract_valid: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class PublicFoldReceipt:
-    """Public-safe aggregate evidence for one attempted fold; no rows or predictions."""
-
-    fold_id: str
-    train_row_count: int
-    validation_row_count: int
-    preprocessing_state_sha256: str
-    feature_vector_sha256: str
-    completeness_verdict: str
-    quality_verdict: str
-    metric_values: tuple[tuple[str, float], ...]
-    receipt_sha256: str
-
-
-@dataclass(frozen=True, slots=True)
-class TrialRunReceipt:
-    """Public-safe four-fold trial summary; private evidence stays in the injected boundary."""
+class _DevelopmentFoldResult:
+    """Exact private typed output of one synthetic fold execution."""
 
     trial_id: str
-    contract_valid: bool
-    reason_codes: tuple[str, ...]
-    fold_receipts: tuple[PublicFoldReceipt, ...]
-    quality_verdict: Literal["PASS", "FAIL", "UNKNOWN"]
+    fold_id: str
+    inventory: tuple[SourceRowIdentity, ...]
+    adapters: tuple[AdapterOutcome, ...]
+    predictions: tuple[PredictionOutcome, ...]
+    labels: tuple[LabelOutcome, ...]
+    contract_verdict: GateVerdict
+    preprocessing_state_sha256: str
+    feature_vector_sha256: str
+    prediction_vector_sha256: str
+    metric_sha256: str
     receipt_sha256: str
 
 
-@dataclass(frozen=True, slots=True)
-class DevelopmentRunReceipt:
-    """Sanitized terminal formal-development selection result."""
+@dataclass(slots=True)
+class _DevelopmentRunState:
+    lock: Lock = field(default_factory=Lock)
+    consumed: bool = False
 
-    status: Literal["NO_ELIGIBLE_CANDIDATE", "UNKNOWN/COMPUTE_BUDGET_EXCEEDED"]
-    retry_allowed: Literal[False]
-    reason_codes: tuple[str, ...]
-    trials: tuple[TrialRunReceipt, ...]
+
+@dataclass(frozen=True, slots=True)
+class _DevelopmentExecutionPlan:
+    """Private synthetic seam; Task 4 supplies the permit-bearing natural composition."""
+
+    fit_fold: Callable[[FitPhase, str, str], object]
+    _state: _DevelopmentRunState = field(default_factory=_DevelopmentRunState, init=False)
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentRunBundle:
+    public_result: PublicDevelopmentResult
+    private_bundle: PrivateRunBundle
     fit_ledger: FitLedger
-    h2_status: Literal["SEALED_NOT_LOADED"]
-    h2_loaded_rows: Literal[0]
-
-    def public_document(self) -> dict[str, object]:
-        """Return counts, metrics, and digests only; never row identities or predictions."""
-        return {
-            "status": self.status,
-            "retry_allowed": self.retry_allowed,
-            "reason_codes": list(self.reason_codes),
-            "selection_fit_count": self.fit_ledger.selection_count,
-            "replay_fit_count": self.fit_ledger.replay_count,
-            "final_fit_count": self.fit_ledger.final_count,
-            "h2_status": self.h2_status,
-            "h2_loaded_rows": self.h2_loaded_rows,
-            "trials": [
-                {
-                    "trial_id": trial.trial_id,
-                    "contract_valid": trial.contract_valid,
-                    "reason_codes": list(trial.reason_codes),
-                    "quality_verdict": trial.quality_verdict,
-                    "receipt_sha256": trial.receipt_sha256,
-                    "folds": [
-                        {
-                            "fold_id": fold.fold_id,
-                            "train_row_count": fold.train_row_count,
-                            "validation_row_count": fold.validation_row_count,
-                            "preprocessing_state_sha256": fold.preprocessing_state_sha256,
-                            "feature_vector_sha256": fold.feature_vector_sha256,
-                            "completeness_verdict": fold.completeness_verdict,
-                            "quality_verdict": fold.quality_verdict,
-                            "metric_values": dict(fold.metric_values),
-                            "receipt_sha256": fold.receipt_sha256,
-                        }
-                        for fold in trial.fold_receipts
-                    ],
-                }
-                for trial in self.trials
-            ],
-        }
+    selection: SelectionDecision
 
 
 @dataclass(frozen=True, slots=True)
-class FormalRunContext:
-    """Explicit, dependency-injected boundary for one selection or replay attempt."""
-
-    repository_root: Path
-    output_root: Path
-    fit_fold: Callable[[str, str], FoldFitResult]
-    process_memory_probe: Callable[[], int | None] | None = None
-    repository_is_clean: Callable[[Path], bool] | None = None
-    monotonic_ns: Callable[[], int] = time.monotonic_ns
-    h2_status: Literal["SEALED_NOT_LOADED"] = "SEALED_NOT_LOADED"
-    h2_loaded_rows: Literal[0] = 0
-    execution_providers: tuple[str, ...] = ("CPUExecutionProvider",)
-    network_mode: str = "none"
-    socket_configuration: Mapping[str, object] | None = None
+class _ProcessedFold:
+    result: _DevelopmentFoldResult
+    completeness: CompletenessReceipt
+    context: FoldQualificationContext
+    digest: QualificationFoldDigests
 
 
-def run_selection(context: FormalRunContext) -> DevelopmentRunReceipt:
-    """Run the fixed 20-by-4 selection schedule once, with no automatic replay or final fit."""
-    _validate_context(context)
-    ledger = FitLedger()
-    start_ns = context.monotonic_ns()
-    trials: list[TrialRunReceipt] = []
-    for trial_id in EXACT_TRIAL_IDS:
-        fold_receipts: list[PublicFoldReceipt] = []
-        contract_valid = True
-        reason_codes: list[str] = []
-        for fold_id in EXACT_FOLD_IDS:
-            ledger.record(FitPhase.SELECTION, trial_id, fold_id)
-            result = _fit_without_replacement(context, trial_id, fold_id)
-            receipt = _public_fold_receipt(result)
-            fold_receipts.append(receipt)
-            if not result.contract_valid:
-                contract_valid = False
-                if "CONTRACT_INVALID" not in reason_codes:
-                    reason_codes.append("CONTRACT_INVALID")
-            terminal = _budget_terminal(context, start_ns)
-            if terminal:
-                return _terminal_budget_receipt(
-                    ledger,
-                    trials,
-                    trial_id,
-                    contract_valid,
-                    reason_codes,
-                    fold_receipts,
-                )
-        quality_verdict = _trial_quality_verdict(fold_receipts)
-        if quality_verdict != "PASS" and "QUALITY_NOT_QUALIFIED" not in reason_codes:
-            reason_codes.append("QUALITY_NOT_QUALIFIED")
-        trials.append(
-            _trial_receipt(
-                trial_id,
-                contract_valid,
-                tuple(reason_codes),
-                tuple(fold_receipts),
-                quality_verdict,
+def _valid_sha256(value: object) -> bool:
+    return type(value) is str and len(value) == 64 and set(value).issubset(_SHA256_ALPHABET)
+
+
+def _valid_fold_result(result: object, trial_id: str, fold_id: str) -> bool:
+    return (
+        type(result) is _DevelopmentFoldResult
+        and result.trial_id == trial_id
+        and result.fold_id == fold_id
+        and type(result.inventory) is tuple
+        and all(type(item) is SourceRowIdentity for item in result.inventory)
+        and type(result.adapters) is tuple
+        and all(type(item) is AdapterOutcome for item in result.adapters)
+        and type(result.predictions) is tuple
+        and all(type(item) is PredictionOutcome for item in result.predictions)
+        and type(result.labels) is tuple
+        and all(type(item) is LabelOutcome for item in result.labels)
+        and type(result.contract_verdict) is GateVerdict
+        and all(
+            _valid_sha256(value)
+            for value in (
+                result.preprocessing_state_sha256,
+                result.feature_vector_sha256,
+                result.prediction_vector_sha256,
+                result.metric_sha256,
+                result.receipt_sha256,
             )
         )
-    return DevelopmentRunReceipt(
-        status="NO_ELIGIBLE_CANDIDATE",
-        retry_allowed=False,
-        reason_codes=("NO_QUALIFIED_TRIAL",),
-        trials=tuple(trials),
-        fit_ledger=ledger,
-        h2_status="SEALED_NOT_LOADED",
-        h2_loaded_rows=0,
     )
 
 
-def replay_provisional(context: FormalRunContext, provisional_id: str) -> ReplayResult:
-    """Replay exactly four folds of one declared candidate without any fallback surface."""
-    _validate_context(context)
-    if provisional_id not in EXACT_TRIAL_IDS[1:]:
-        raise ExecutionConfigurationError("provisional trial is invalid")
-    ledger = FitLedger()
-    for trial_id in EXACT_TRIAL_IDS:
-        for fold_id in EXACT_FOLD_IDS:
-            ledger.record(FitPhase.SELECTION, trial_id, fold_id)
-    digests: list[ReplayFoldDigests] = []
-    start_ns = context.monotonic_ns()
-    for fold_id in EXACT_FOLD_IDS:
-        ledger.record(FitPhase.REPLAY, provisional_id, fold_id)
-        result = _fit_without_replacement(context, provisional_id, fold_id)
-        if _budget_terminal(context, start_ns):
-            return _replay_unknown(provisional_id, digests)
-        identity = canonical_trial_identity(provisional_id)
-        digests.append(
-            ReplayFoldDigests(
-                fold_id=fold_id,
-                verdict=GateVerdict.PASS if result.contract_valid else GateVerdict.UNKNOWN,
-                configuration_sha256=identity.configuration_sha256,
-                preprocessing_state_sha256=result.preprocessing_state_sha256,
-                feature_vector_sha256=result.feature_vector_sha256,
-                prediction_vector_sha256=sha256_hex(
-                    canonicalize_json(
-                        {
-                            "stable": result.stable_prediction_digest,
-                            "candidate": result.candidate_prediction_digest,
-                        }
-                    )
-                ),
-                metric_sha256=sha256_hex(canonicalize_json(dict(result.metric_values))),
-                receipt_sha256=result.receipt_sha256,
-            )
-        )
-    identity = canonical_trial_identity(provisional_id)
-    ranking_key = (0.0, 0.0, 0.0, 0, provisional_id)
-    inventory_sha256 = sha256_hex(canonicalize_json([record.trial_id for record in ledger.records]))
-    return ReplayResult(
-        trial_id=provisional_id,
-        family_id=identity.family_id,
-        ranking_key=ranking_key,
-        qualification_inventory_sha256=inventory_sha256,
-        session_sha256=sha256_hex(canonicalize_json([digest.receipt_sha256 for digest in digests])),
-        verdict=GateVerdict.PASS,
-        digests=tuple(digests),
-    )
-
-
-def _validate_context(context: FormalRunContext) -> None:
-    if not isinstance(context, FormalRunContext):
-        raise ExecutionConfigurationError("formal run context is invalid")
-    if context.h2_status != "SEALED_NOT_LOADED" or context.h2_loaded_rows != 0:
-        raise ExecutionConfigurationError("H2 must remain sealed and unloaded")
-    if context.execution_providers != ("CPUExecutionProvider",):
-        raise ExecutionConfigurationError("GPU providers are forbidden")
-    if context.network_mode != "none" or context.socket_configuration:
-        raise ExecutionConfigurationError("network/socket configuration is forbidden")
+def _checkpoint(guard: RuntimeGuard, stage: RuntimeStage) -> None:
     try:
-        repository_root = context.repository_root.resolve(strict=False)
-        output_root = context.output_root.resolve(strict=False)
-        output_root.relative_to(repository_root)
-    except ValueError:
-        pass
-    except OSError as error:
-        raise ExecutionConfigurationError("output root is invalid") from error
+        observation = guard.checkpoint(stage)
+    except Exception as error:
+        raise DevelopmentRunError("RUNTIME_GUARD_INVALID") from error
+    if type(observation) is not RuntimeObservation or observation.verdict not in (
+        "PASS",
+        "UNKNOWN",
+    ):
+        raise DevelopmentRunError("RUNTIME_GUARD_INVALID")
+    if observation.verdict != "PASS":
+        if type(observation.reason_codes) is not tuple or not observation.reason_codes:
+            raise DevelopmentRunError("RUNTIME_GUARD_INVALID")
+        raise DevelopmentRunError(*observation.reason_codes)
+
+
+def _execute_fit(
+    plan: _DevelopmentExecutionPlan,
+    guard: RuntimeGuard,
+    ledger: FitLedger,
+    phase: FitPhase,
+    trial_id: str,
+    fold_id: str,
+) -> _DevelopmentFoldResult:
+    _checkpoint(guard, RuntimeStage.PRE_FIT)
+    if phase is FitPhase.SELECTION:
+        ledger.record_selection(trial_id, fold_id)
     else:
-        raise ExecutionConfigurationError("output root must be outside repository")
-    clean_check = context.repository_is_clean or _repository_is_clean
-    if not clean_check(repository_root):
-        raise ExecutionConfigurationError("repository must be clean and read-only")
-
-
-def _repository_is_clean(repository_root: Path) -> bool:
+        ledger.record_replay(trial_id, fold_id)
+    callback_error: Exception | None = None
+    result: object = None
     try:
-        completed = subprocess.run(
-            ("git", "status", "--porcelain=v1", "--untracked-files=all"),
-            cwd=repository_root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return False
-    return completed.returncode == 0 and completed.stdout == ""
-
-
-def _fit_without_replacement(
-    context: FormalRunContext, trial_id: str, fold_id: str
-) -> FoldFitResult:
-    try:
-        result = context.fit_fold(trial_id, fold_id)
-    except Exception:
-        return _invalid_fold_result(fold_id)
-    if not isinstance(result, FoldFitResult) or result.fold_id != fold_id:
-        return _invalid_fold_result(fold_id)
+        result = plan.fit_fold(phase, trial_id, fold_id)
+    except Exception as error:
+        callback_error = error
+    _checkpoint(guard, RuntimeStage.POST_FIT)
+    if callback_error is not None:
+        raise DevelopmentRunError("FOLD_EXECUTION_FAILED") from callback_error
+    if not _valid_fold_result(result, trial_id, fold_id):
+        raise DevelopmentRunError("FOLD_RESULT_INVALID")
     return result
 
 
-def _invalid_fold_result(fold_id: str) -> FoldFitResult:
-    digest = sha256_hex(f"invalid:{fold_id}".encode())
-    return FoldFitResult(
-        fold_id=fold_id,
-        train_identity_digests=(),
-        validation_identity_digests=(),
-        preprocessing_state_sha256=digest,
-        feature_vector_sha256=digest,
-        stable_prediction_digest=digest,
-        candidate_prediction_digest=digest,
-        completeness_verdict="UNKNOWN",
-        quality_verdict="UNKNOWN",
-        metric_values={},
-        receipt_sha256=digest,
-        contract_valid=False,
+def _prediction_material(
+    outcomes: tuple[PredictionOutcome, ...],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "identity_sha256": outcome.identity.identity_sha256,
+            "succeeded": outcome.succeeded,
+            "value": outcome.value,
+            "reason_code": outcome.reason_code,
+        }
+        for outcome in outcomes
+    ]
+
+
+def _qualification_digest(
+    result: _DevelopmentFoldResult,
+    stable: tuple[PredictionOutcome, ...],
+) -> QualificationFoldDigests:
+    identity = canonical_trial_identity(result.trial_id)
+    prediction_vector_sha256 = sha256_hex(
+        canonicalize_json(
+            {
+                "declared_prediction_vector_sha256": result.prediction_vector_sha256,
+                "stable": _prediction_material(stable),
+                "candidate": _prediction_material(result.predictions),
+            }
+        )
     )
-
-
-def _public_fold_receipt(result: FoldFitResult) -> PublicFoldReceipt:
-    return PublicFoldReceipt(
+    return QualificationFoldDigests(
         fold_id=result.fold_id,
-        train_row_count=len(result.train_identity_digests),
-        validation_row_count=len(result.validation_identity_digests),
+        configuration_sha256=identity.configuration_sha256,
         preprocessing_state_sha256=result.preprocessing_state_sha256,
         feature_vector_sha256=result.feature_vector_sha256,
-        completeness_verdict=result.completeness_verdict,
-        quality_verdict=result.quality_verdict,
-        metric_values=tuple(sorted(result.metric_values.items())),
+        prediction_vector_sha256=prediction_vector_sha256,
+        metric_sha256=result.metric_sha256,
         receipt_sha256=result.receipt_sha256,
     )
 
 
-def _trial_quality_verdict(receipts: list[PublicFoldReceipt]) -> Literal["PASS", "FAIL", "UNKNOWN"]:
-    verdicts = {receipt.quality_verdict for receipt in receipts}
-    if "UNKNOWN" in verdicts:
-        return "UNKNOWN"
-    if "FAIL" in verdicts:
-        return "FAIL"
-    return "PASS"
-
-
-def _trial_receipt(
-    trial_id: str,
-    contract_valid: bool,
-    reason_codes: tuple[str, ...],
-    fold_receipts: tuple[PublicFoldReceipt, ...],
-    quality_verdict: Literal["PASS", "FAIL", "UNKNOWN"],
-) -> TrialRunReceipt:
-    document = {
-        "trial_id": trial_id,
-        "contract_valid": contract_valid,
-        "reason_codes": list(reason_codes),
-        "fold_receipt_digests": [receipt.receipt_sha256 for receipt in fold_receipts],
-        "quality_verdict": quality_verdict,
-    }
-    return TrialRunReceipt(
-        trial_id=trial_id,
-        contract_valid=contract_valid,
-        reason_codes=reason_codes,
-        fold_receipts=fold_receipts,
-        quality_verdict=quality_verdict,
-        receipt_sha256=sha256_hex(canonicalize_json(document)),
+def _process_fold(
+    result: _DevelopmentFoldResult,
+    stable: tuple[PredictionOutcome, ...],
+) -> _ProcessedFold:
+    completeness, pairs = assemble_development_pairs(
+        result.inventory,
+        result.adapters,
+        stable,
+        result.predictions,
+        result.labels,
+    )
+    return _ProcessedFold(
+        result=result,
+        completeness=completeness,
+        context=FoldQualificationContext(
+            fold_id=result.fold_id,
+            inventory=result.inventory,
+            paired_rows=pairs,
+        ),
+        digest=_qualification_digest(result, stable),
     )
 
 
-def _budget_terminal(context: FormalRunContext, start_ns: int) -> bool:
-    elapsed = context.monotonic_ns() - start_ns
-    if elapsed > _WALL_CLOCK_NS:
-        return True
-    probe = context.process_memory_probe or _authoritative_process_high_water_mark
-    try:
-        peak_bytes = probe()
-    except Exception:
-        return True
-    return type(peak_bytes) is not int or peak_bytes < 0 or peak_bytes > _PEAK_MEMORY_BYTES
+def _qualification_evidence(folds: tuple[_ProcessedFold, ...]) -> QualificationEvidence:
+    evidence_verdict = (
+        GateVerdict.PASS
+        if all(fold.result.contract_verdict is GateVerdict.PASS for fold in folds)
+        else GateVerdict.UNKNOWN
+    )
+    return QualificationEvidence(
+        lineage=GateVerdict.PASS,
+        converter=GateVerdict.PASS,
+        evidence=evidence_verdict,
+        budget=GateVerdict.PASS,
+    )
 
 
-def _terminal_budget_receipt(
-    ledger: FitLedger,
-    completed_trials: list[TrialRunReceipt],
+def _evaluate_trial(
     trial_id: str,
-    contract_valid: bool,
-    reason_codes: list[str],
-    fold_receipts: list[PublicFoldReceipt],
-) -> DevelopmentRunReceipt:
-    if fold_receipts:
-        completed_trials.append(
-            _trial_receipt(
-                trial_id,
-                contract_valid,
-                tuple((*reason_codes, "COMPUTE_BUDGET_EXCEEDED")),
-                tuple(fold_receipts),
-                _trial_quality_verdict(fold_receipts),
+    folds: tuple[_ProcessedFold, ...],
+) -> tuple[DevelopmentQualityReport, QualificationContext]:
+    identity = canonical_trial_identity(trial_id)
+    context = QualificationContext(
+        folds=tuple(fold.context for fold in folds),
+        trial_identity=identity,
+        fold_digests=tuple(fold.digest for fold in folds),
+    )
+    report = evaluate_pooled(
+        context,
+        {fold.result.fold_id: fold.completeness for fold in folds},
+        _qualification_evidence(folds),
+    )
+    return report, context
+
+
+def _replay_digest(
+    result: _DevelopmentFoldResult,
+    stable: tuple[PredictionOutcome, ...],
+) -> ReplayFoldDigests:
+    qualification = _qualification_digest(result, stable)
+    return ReplayFoldDigests(
+        fold_id=qualification.fold_id,
+        verdict=result.contract_verdict,
+        configuration_sha256=qualification.configuration_sha256,
+        preprocessing_state_sha256=qualification.preprocessing_state_sha256,
+        feature_vector_sha256=qualification.feature_vector_sha256,
+        prediction_vector_sha256=qualification.prediction_vector_sha256,
+        metric_sha256=qualification.metric_sha256,
+        receipt_sha256=qualification.receipt_sha256,
+    )
+
+
+def _private_fold_evidence(
+    sequence: int,
+    phase: FitPhase,
+    result: _DevelopmentFoldResult,
+) -> PrivateFoldEvidence:
+    document = {
+        "phase": phase.value,
+        "trial_id": result.trial_id,
+        "fold_id": result.fold_id,
+        "contract_verdict": result.contract_verdict.value,
+        "inventory": [asdict(identity) for identity in result.inventory],
+        "adapters": [
+            {
+                "identity": asdict(outcome.identity),
+                "succeeded": outcome.succeeded,
+                "calendar_day": (
+                    outcome.calendar_day.isoformat() if outcome.calendar_day is not None else None
+                ),
+                "groups": list(outcome.groups),
+                "reason_code": outcome.reason_code,
+            }
+            for outcome in result.adapters
+        ],
+        "predictions": [
+            {
+                "identity": asdict(outcome.identity),
+                "succeeded": outcome.succeeded,
+                "value": outcome.value,
+                "reason_code": outcome.reason_code,
+            }
+            for outcome in result.predictions
+        ],
+        "labels": [
+            {
+                "identity": asdict(outcome.identity),
+                "succeeded": outcome.succeeded,
+                "value": outcome.value,
+                "reason_code": outcome.reason_code,
+            }
+            for outcome in result.labels
+        ],
+        "preprocessing_state_sha256": result.preprocessing_state_sha256,
+        "feature_vector_sha256": result.feature_vector_sha256,
+        "prediction_vector_sha256": result.prediction_vector_sha256,
+        "metric_sha256": result.metric_sha256,
+        "receipt_sha256": result.receipt_sha256,
+    }
+    return PrivateFoldEvidence(
+        logical_path=(
+            f"{phase.value.lower()}/{sequence:03d}-{result.trial_id}-{result.fold_id}.json"
+        ),
+        canonical_bytes=canonicalize_json(document),
+    )
+
+
+def _closed_metrics(report: object) -> ClosedMetrics:
+    if report is None:
+        return ClosedMetrics(
+            row_count=None,
+            stable_mae=None,
+            candidate_mae=None,
+            point_ratio=None,
+            ucb95=None,
+        )
+    return ClosedMetrics(
+        row_count=float(report.row_count),
+        stable_mae=float(report.stable_mae),
+        candidate_mae=float(report.candidate_mae),
+        point_ratio=float(report.point_ratio),
+        ucb95=float(report.ucb95),
+    )
+
+
+def _public_trial_receipt(
+    index: int,
+    report: DevelopmentQualityReport,
+    qualification: QualificationResult | None,
+) -> PublicTrialReceipt:
+    status = "PASS" if qualification is None else qualification.verdict.value
+    folds: list[PublicFoldReceipt] = []
+    for fold in report.folds:
+        if status == "UNKNOWN":
+            metrics = _closed_metrics(None)
+            reasons = ("METRICS_UNAVAILABLE",)
+        else:
+            metrics = _closed_metrics(fold.overall)
+            reasons = ("QUALITY_THRESHOLD_EXCEEDED",) if status == "FAIL" else ()
+        folds.append(
+            PublicFoldReceipt(
+                fold_id=fold.fold_id,
+                status=status,
+                metrics=metrics,
+                reason_codes=reasons,
             )
         )
-    return DevelopmentRunReceipt(
-        status="UNKNOWN/COMPUTE_BUDGET_EXCEEDED",
-        retry_allowed=False,
-        reason_codes=("COMPUTE_BUDGET_EXCEEDED",),
-        trials=tuple(completed_trials),
-        fit_ledger=ledger,
-        h2_status="SEALED_NOT_LOADED",
-        h2_loaded_rows=0,
+    return PublicTrialReceipt(
+        trial_id=f"TRIAL-{index:02d}",
+        selection_fit_count=4,
+        folds=tuple(folds),
     )
 
 
-def _authoritative_process_high_water_mark() -> int | None:
-    if sys.platform == "win32":
-        return _windows_peak_working_set_size()
-    if sys.platform.startswith("linux"):
-        return _linux_peak_resident_bytes()
-    return None
-
-
-def _linux_peak_resident_bytes() -> int | None:
-    try:
-        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
-            if line.startswith("VmHWM:"):
-                parts = line.split()
-                if len(parts) == 3 and parts[2] == "kB":
-                    return int(parts[1]) * 1024
-    except (OSError, ValueError):
-        return None
-    return None
-
-
-def _windows_peak_working_set_size() -> int | None:
-    class ProcessMemoryCounters(ctypes.Structure):
-        _fields_ = [
-            ("cb", ctypes.c_ulong),
-            ("PageFaultCount", ctypes.c_ulong),
-            ("PeakWorkingSetSize", ctypes.c_size_t),
-            ("WorkingSetSize", ctypes.c_size_t),
-            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-            ("PagefileUsage", ctypes.c_size_t),
-            ("PeakPagefileUsage", ctypes.c_size_t),
-        ]
-
-    try:
-        counters = ProcessMemoryCounters()
-        counters.cb = ctypes.sizeof(counters)
-        process = ctypes.windll.kernel32.GetCurrentProcess()
-        success = ctypes.windll.psapi.GetProcessMemoryInfo(
-            process, ctypes.byref(counters), counters.cb
+def _public_result(
+    reports: tuple[DevelopmentQualityReport, ...],
+    qualifications: tuple[QualificationResult, ...],
+    selection: SelectionDecision,
+    ledger: FitLedger,
+) -> PublicDevelopmentResult:
+    qualification_by_trial = {item.trial_id: item for item in qualifications}
+    trials = tuple(
+        _public_trial_receipt(
+            index,
+            report,
+            qualification_by_trial.get(EXACT_TRIAL_IDS[index - 1]),
         )
-    except (AttributeError, OSError):
-        return None
-    return int(counters.PeakWorkingSetSize) if success else None
-
-
-def _replay_unknown(provisional_id: str, digests: list[ReplayFoldDigests]) -> ReplayResult:
-    identity = canonical_trial_identity(provisional_id)
-    return ReplayResult(
-        trial_id=provisional_id,
-        family_id=identity.family_id,
-        ranking_key=(0.0, 0.0, 0.0, 0, provisional_id),
-        qualification_inventory_sha256=sha256_hex(b"COMPUTE_BUDGET_EXCEEDED"),
-        session_sha256=sha256_hex(b"COMPUTE_BUDGET_EXCEEDED"),
-        verdict=GateVerdict.UNKNOWN,
-        digests=tuple(digests),
+        for index, report in enumerate(reports, start=1)
     )
+    status = (
+        "PASS"
+        if selection.status == "PASS"
+        else "FAIL"
+        if selection.status == "NO_ELIGIBLE_CANDIDATE"
+        else "UNKNOWN"
+    )
+    result_sha256 = sha256_hex(
+        canonicalize_json(
+            {
+                "status": status,
+                "selection": {
+                    "status": selection.status,
+                    "reason_codes": list(selection.reason_codes),
+                },
+                "fits": [asdict(record) for record in ledger.records],
+                "qualification_reports": [item.report_sha256 for item in qualifications],
+            }
+        )
+    )
+    return PublicDevelopmentResult(
+        schema_version="mdcp.development-result-index.v1",
+        canonicalization_version="RFC8785",
+        evidence_class="synthetic_test",
+        status=status,
+        h1_role="OBSERVED_DEVELOPMENT_ONLY",
+        h2_state="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+        selection_fit_count=80,
+        result_sha256=result_sha256,
+        trials=trials,
+    )
+
+
+def _run_development_core(
+    plan: _DevelopmentExecutionPlan,
+    guard: RuntimeGuard,
+) -> DevelopmentRunBundle:
+    """Execute the exact synthetic 80+4 state machine once with one replay session."""
+    if type(plan) is not _DevelopmentExecutionPlan or not callable(plan.fit_fold):
+        raise DevelopmentRunError("DEVELOPMENT_PLAN_INVALID")
+    with plan._state.lock:
+        if plan._state.consumed:
+            raise DevelopmentRunError("RUN_ALREADY_CONSUMED")
+        plan._state.consumed = True
+
+    pre_seal_checked = False
+    exit_checked = False
+    try:
+        _checkpoint(guard, RuntimeStage.PRE_LOAD)
+        ledger = FitLedger()
+        private_files: list[PrivateFoldEvidence] = []
+        baseline: dict[str, tuple[PredictionOutcome, ...]] = {}
+        reports: list[DevelopmentQualityReport] = []
+        qualifications: list[QualificationResult] = []
+
+        for trial_id in EXACT_TRIAL_IDS:
+            processed: list[_ProcessedFold] = []
+            for fold_id in EXACT_FOLD_IDS:
+                result = _execute_fit(
+                    plan,
+                    guard,
+                    ledger,
+                    FitPhase.SELECTION,
+                    trial_id,
+                    fold_id,
+                )
+                private_files.append(
+                    _private_fold_evidence(
+                        len(private_files),
+                        FitPhase.SELECTION,
+                        result,
+                    )
+                )
+                if trial_id == EXACT_TRIAL_IDS[0]:
+                    baseline[fold_id] = result.predictions
+                stable = baseline.get(fold_id)
+                if stable is None:
+                    raise DevelopmentRunError("STABLE_BASELINE_MISSING")
+                processed.append(_process_fold(result, stable))
+            fold_tuple = tuple(processed)
+            report, context = _evaluate_trial(trial_id, fold_tuple)
+            reports.append(report)
+            if trial_id != EXACT_TRIAL_IDS[0]:
+                qualifications.append(qualify_trial(report, context))
+
+        qualification_tuple = tuple(qualifications)
+        session = ReplaySelectionSession(qualification_tuple)
+        provisional = session.ranked_provisional()
+        if provisional is None:
+            selection = finalize_selection(session, None, None)
+        else:
+            ledger.bind_provisional(provisional)
+            replay_digests: list[ReplayFoldDigests] = []
+            for fold_id in EXACT_FOLD_IDS:
+                result = _execute_fit(
+                    plan,
+                    guard,
+                    ledger,
+                    FitPhase.REPLAY,
+                    provisional.trial_id,
+                    fold_id,
+                )
+                private_files.append(
+                    _private_fold_evidence(
+                        len(private_files),
+                        FitPhase.REPLAY,
+                        result,
+                    )
+                )
+                replay_digests.append(_replay_digest(result, baseline[fold_id]))
+            replay = ReplayResult(
+                trial_id=provisional.trial_id,
+                family_id=provisional.family_id,
+                ranking_key=provisional.ranking_key,
+                qualification_inventory_sha256=provisional.qualification_inventory_sha256,
+                session_sha256=session.session_sha256,
+                verdict=(
+                    GateVerdict.PASS
+                    if all(digest.verdict is GateVerdict.PASS for digest in replay_digests)
+                    else GateVerdict.UNKNOWN
+                ),
+                digests=tuple(replay_digests),
+            )
+            selection = finalize_selection(session, provisional, replay)
+
+        private_bundle = PrivateRunBundle(
+            evidence_class="synthetic_test",
+            files=tuple(sorted(private_files, key=lambda item: item.logical_path.encode("ascii"))),
+        )
+        public_result = _public_result(
+            tuple(reports),
+            qualification_tuple,
+            selection,
+            ledger,
+        )
+        pre_seal_checked = True
+        _checkpoint(guard, RuntimeStage.PRE_SEAL)
+        exit_checked = True
+        _checkpoint(guard, RuntimeStage.EXIT)
+        return DevelopmentRunBundle(
+            public_result=public_result,
+            private_bundle=private_bundle,
+            fit_ledger=ledger,
+            selection=selection,
+        )
+    except DevelopmentRunError as original:
+        if not pre_seal_checked:
+            with suppress(DevelopmentRunError):
+                _checkpoint(guard, RuntimeStage.PRE_SEAL)
+        if not exit_checked:
+            with suppress(DevelopmentRunError):
+                _checkpoint(guard, RuntimeStage.EXIT)
+        raise original
+    except Exception as error:
+        if not pre_seal_checked:
+            with suppress(DevelopmentRunError):
+                _checkpoint(guard, RuntimeStage.PRE_SEAL)
+        if not exit_checked:
+            with suppress(DevelopmentRunError):
+                _checkpoint(guard, RuntimeStage.EXIT)
+        raise DevelopmentRunError("DEVELOPMENT_RUN_UNKNOWN") from error

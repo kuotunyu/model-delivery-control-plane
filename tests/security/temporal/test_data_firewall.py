@@ -899,6 +899,36 @@ def test_real_formal_source_set_passes_with_deterministic_discovery() -> None:
     assert len(result.implementation_sha256) == 64
 
 
+def test_static_firewall_allows_only_committed_one_shot_runner(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/runner.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, source)
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
+    assert result.checked_paths == (logical_path,)
+
+
+@pytest.mark.parametrize(
+    "recovered_authority",
+    (
+        "\nimport os\nunused = os.environ\n",
+        "\ndef replay_provisional(target):\n    return target\n",
+        "\ndef record_final(ledger, trial_id):\n    return ledger, trial_id\n",
+    ),
+)
+def test_static_firewall_rejects_runner_authority_recovery(
+    tmp_path: Path, recovered_authority: str
+) -> None:
+    logical_path = "src/mdcp/temporal/runner.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, source + recovered_authority)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 def test_runtime_guard_and_command_surfaces_are_discovered() -> None:
     result = audit_static_h2_firewall(REPOSITORY_ROOT)
 
