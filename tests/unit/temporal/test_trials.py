@@ -40,9 +40,7 @@ def _synthetic_development_frame() -> pd.DataFrame:
 
 @pytest.fixture
 def f4() -> FoldRows:
-    return materialize_folds(
-        _synthetic_development_frame(), load_fold_specs(PROTOCOL)
-    )[-1]
+    return materialize_folds(_synthetic_development_frame(), load_fold_specs(PROTOCOL))[-1]
 
 
 @pytest.fixture
@@ -134,9 +132,7 @@ def test_trial_protocol_is_fail_closed_for_unknown_or_mutated_values(mutation: s
         load_trial_specs(protocol)
 
 
-def test_recency_never_pads_from_future(
-    specs: tuple[TrialSpec, ...], f4: FoldRows
-) -> None:
+def test_recency_never_pads_from_future(specs: tuple[TrialSpec, ...], f4: FoldRows) -> None:
     rows = training_rows_for_trial(_spec(specs, "REC-180-L4"), f4)
 
     assert rows.index.min() == pd.Timestamp("2011-10-04")
