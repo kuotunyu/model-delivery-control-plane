@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from threading import Lock
 from typing import Literal
+from weakref import WeakKeyDictionary
 
 from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
@@ -328,21 +329,22 @@ class _ReplaySessionState:
     consumed: bool
 
 
-_REPLAY_SESSION_STATES: dict[object, _ReplaySessionState] = {}
+_REPLAY_SESSION_STATES: WeakKeyDictionary[object, _ReplaySessionState] = WeakKeyDictionary()
 _REPLAY_SESSION_REGISTRY_LOCK = Lock()
 
 
 def _replay_session_state(session: object) -> _ReplaySessionState:
-    try:
-        return _REPLAY_SESSION_STATES[session]
-    except KeyError as error:
-        raise ValueError("replay selection session state is invalid") from error
+    with _REPLAY_SESSION_REGISTRY_LOCK:
+        try:
+            return _REPLAY_SESSION_STATES[session]
+        except KeyError as error:
+            raise ValueError("replay selection session state is invalid") from error
 
 
 class ReplaySelectionSession:
     """Transient one-shot authorization with a closed, immutable public surface."""
 
-    __slots__ = ()
+    __slots__ = ("__weakref__",)
 
     def __init__(
         self,

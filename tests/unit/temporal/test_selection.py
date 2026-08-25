@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import gc
 import pickle
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+from weakref import ref
 
 import pytest
 
@@ -574,6 +576,25 @@ def test_session_consumption_operations_cannot_be_replaced_or_reset() -> None:
 
     assert first.status == "PASS"
     assert second.status == "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+
+
+@pytest.mark.parametrize("consume", [False, True])
+def test_registry_does_not_retain_transient_session_after_last_caller_reference(
+    consume: bool,
+) -> None:
+    results = _inventory()
+    provisional = rank_qualified(results)
+    assert provisional is not None
+    session = _session(results)
+    session_reference = ref(session)
+    if consume:
+        decision = finalize_selection(session, provisional, _replay(provisional, session))
+        assert decision.status == "PASS"
+
+    del session
+    gc.collect()
+
+    assert session_reference() is None
 
 
 def test_concurrent_replay_attempts_have_exactly_one_atomic_winner() -> None:
