@@ -1293,7 +1293,8 @@ def _environment_access_allowed(
     if qualified_name == "os.environ":
         if logical_path == "src/mdcp/temporal/runner.py" and isinstance(parent, ast.Subscript):
             return isinstance(parent.ctx, ast.Store) and (
-                isinstance(parent.slice, ast.Name) and parent.slice.id == "_thread_environment_name"
+                isinstance(parent.slice, ast.Name)
+                and parent.slice.id == "_thread_environment_name"
                 or _constant_string(parent.slice) == "JOBLIB_MULTIPROCESSING"
             )
         return (
