@@ -743,6 +743,43 @@ def test_static_firewall_allows_committed_evaluation_module(tmp_path: Path) -> N
     assert len(result.implementation_sha256) == 64
 
 
+@pytest.mark.parametrize(
+    ("case_id", "source"),
+    (
+        ("unknown-direct", "from pathlib import Path\ntarget = Path"),
+        ("unknown-alias", "from pathlib import Path as HiddenPath\ntarget = HiddenPath"),
+        ("unknown-qualified", "import math\ntarget = math.sqrt"),
+        ("dynamic-import", "target = __import__('math')"),
+    ),
+)
+def test_static_firewall_keeps_selection_path_closed_to_unapproved_capabilities(
+    tmp_path: Path,
+    case_id: str,
+    source: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/selection.py"
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$") as caught:
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert case_id not in str(caught.value)
+    assert source not in str(caught.value)
+    assert str(tmp_path) not in str(caught.value)
+
+
+def test_static_firewall_allows_committed_selection_module(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/selection.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, source)
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
+    assert result.checked_paths == (logical_path,)
+    assert len(result.implementation_sha256) == 64
+
+
 def test_static_firewall_allows_exact_fold_timestamp_normalization(tmp_path: Path) -> None:
     logical_path = "src/mdcp/temporal/folds.py"
     _write_logical_module(

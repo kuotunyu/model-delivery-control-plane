@@ -190,6 +190,20 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.folds", "SourceRowIdentity"),
         }
     ),
+    "src/mdcp/temporal/selection.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("dataclasses", "dataclass"),
+            ("math", None),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.temporal.evaluation", "QualificationResult"),
+            ("threading", "Lock"),
+            ("typing", "Literal"),
+            ("weakref", "WeakKeyDictionary"),
+        }
+    ),
     "src/mdcp/temporal/constants.py": frozenset({("datetime", "datetime")}),
     "src/mdcp/temporal/contract_gate.py": frozenset(
         {
@@ -355,6 +369,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     ),
     "src/mdcp/temporal/completeness.py": frozenset({"math.isfinite"}),
     "src/mdcp/temporal/evaluation.py": frozenset({"math.isclose", "math.isfinite"}),
+    "src/mdcp/temporal/selection.py": frozenset({"math.isfinite"}),
     "src/mdcp/temporal/evidence.py": frozenset({"re.IGNORECASE", "re.MULTILINE", "re.compile"}),
     _TRUSTED_FIREWALL_PATH: frozenset(
         {
