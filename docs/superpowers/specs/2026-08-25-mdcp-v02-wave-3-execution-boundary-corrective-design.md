@@ -1,6 +1,6 @@
 # MDCP v0.2 Wave 3 Execution-Boundary Corrective Design
 
-**Status:** DRAFT — OWNER WRITTEN-SPEC REVIEW REQUIRED
+**Status:** OWNER APPROVED — IMPLEMENTATION PLANNING AUTHORIZED
 
 **Date:** 2026-08-25
 
@@ -290,8 +290,8 @@ amend, reset, rebase, delete evidence, relax a gate, or reuse an authorization/o
 
 ## 11. Checkpoints and terminal outcomes
 
-Approval of this document authorizes only creation of a new corrective implementation plan. It does
-not authorize implementation.
+Owner approval of this document authorizes only creation of a new corrective implementation plan.
+It does not authorize implementation.
 
 The implementation checkpoint is:
 
@@ -310,9 +310,9 @@ After a future one-shot formal run:
   rejection evidence; and
 - neither outcome authorizes H2, delivery Wave 3, external publication, or another search.
 
-The written-spec terminal state is:
+The approved written-spec terminal state is:
 
 ```text
-W3_CORRECTIVE_DESIGN_COMMITTED / H2_SEALED_NOT_LOADED /
-OWNER_WRITTEN_SPEC_REVIEW_REQUIRED
+W3_CORRECTIVE_DESIGN_APPROVED / H2_SEALED_NOT_LOADED /
+IMPLEMENTATION_PLANNING_AUTHORIZED
 ```
