@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import runpy
 from pathlib import Path
 
 import pytest
@@ -587,6 +588,59 @@ def test_static_firewall_fails_closed_on_missing_path_and_syntax(tmp_path: Path)
     logical_path = _write_formal_module(tmp_path, "from mdcp.workload import (")
     with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+def test_static_firewall_rejects_executable_source_encoding_polyglot(
+    tmp_path: Path,
+) -> None:
+    logical_path = "src/mdcp/temporal/contract_gate.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    sentinel_path = tmp_path / "synthetic-sentinel.json"
+    sentinel_path.write_text('{"sentinel":"UTF7_ROW_RECOVERED"}', encoding="utf-8")
+    target = tmp_path / logical_path
+    target.parent.mkdir(parents=True)
+    polyglot = (
+        b"# coding: utf-7\n"
+        + source.encode("ascii")
+        + b"\n#+AAo-RECOVERED = _checked_json(Path("
+        + repr(sentinel_path.as_posix()).encode("ascii")
+        + b"))\n"
+    )
+    target.write_bytes(polyglot)
+
+    executed = runpy.run_path(str(target))
+    assert executed["RECOVERED"] == {"sentinel": "UTF7_ROW_RECOVERED"}
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    (
+        b"# coding: latin-1\n",
+        b"# coding: utf_8\n",
+        b"\xef\xbb\xbf# coding: utf-8\n",
+    ),
+)
+def test_static_firewall_rejects_noncanonical_source_encoding_markers(
+    tmp_path: Path,
+    prefix: bytes,
+) -> None:
+    logical_path = "formal.py"
+    (tmp_path / logical_path).write_bytes(prefix + b"answer = 1\n")
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+def test_static_firewall_accepts_canonical_utf8_source_cookie(tmp_path: Path) -> None:
+    logical_path = "formal.py"
+    (tmp_path / logical_path).write_bytes(b"# coding: utf-8\nanswer = 1\n")
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
 
 
 def test_real_formal_source_set_passes_with_deterministic_discovery() -> None:

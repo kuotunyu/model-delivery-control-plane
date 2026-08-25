@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import FrameType, FunctionType
@@ -86,6 +87,8 @@ _FORBIDDEN_REFLECTION_ATTRIBUTES = frozenset(
     }
 )
 _TRUSTED_FIREWALL_PATH = "src/mdcp/temporal/firewall.py"
+_ENCODING_COOKIE_PATTERN = re.compile(rb"^[ \t\f]*#.*?coding[:=][ \t]*([-_.a-zA-Z0-9]+)")
+_UTF8_BOM = b"\xef\xbb\xbf"
 _ALLOWED_DIRECT_IMPORTS = {
     "mdcp.workload.dataset": frozenset({"load_uci_development_archive"}),
     "mdcp.workload.splits": frozenset({"DevelopmentPartitions", "split_development_rows"}),
@@ -216,6 +219,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic.dataclasses", "dataclass"),
             ("re", None),
             ("sys", None),
+            ("tokenize", None),
             ("types", "FrameType"),
             ("types", "FunctionType"),
             ("typing", "Annotated"),
@@ -299,6 +303,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "re.compile",
             "sys.getprofile",
             "sys.setprofile",
+            "tokenize.detect_encoding",
         }
     ),
     "src/mdcp/temporal/golden_vectors.py": frozenset(
@@ -337,7 +342,7 @@ _ALLOWED_FILE_ACCESS_CALLS = {
         {
             ("_implementation_sha256", "read_bytes", "Path:code.co_filename"),
             ("audit_static_h2_firewall", "read_bytes", "Path:__file__"),
-            ("audit_static_h2_firewall", "read_text", "name:source_path"),
+            ("audit_static_h2_firewall", "read_bytes", "name:source_path"),
             ("run_behavioral_h2_firewall", "read_bytes", "Path:__file__"),
         }
     ),
@@ -374,11 +379,14 @@ _PINNED_FILE_CAPABILITY_FUNCTIONS = {
         "_path_digest": "306b3c291c806ed597a75f69d52400f9a0850e6c3ef3196e33e287169d8d1195",
     },
     "src/mdcp/temporal/firewall.py": {
+        "_canonical_utf8_source": (
+            "7b12f7345a7f783e6dc9eaca37272ce950378f2a5a3ff4a8ad8b627adcd54614"
+        ),
         "_implementation_sha256": (
             "def57863c42ba3e307708387ad0444828a184aca2b4cb2cd22024dc3ae53908d"
         ),
         "audit_static_h2_firewall": (
-            "f48bb5f9eeb6f8bc4b025593006b62c0351bcd34a382ab7102460740d956089d"
+            "68dcffab9f0d9f8a61231bd8a8cb3c838401e9e438e53fcde62deee7db88f880"
         ),
         "run_behavioral_h2_firewall": (
             "3b9fda1edda8772d9c0cb9abe55bf83fa0f9f80dc20dae5e9e43c9e9d4adbe92"
@@ -512,6 +520,34 @@ class BehavioralFirewallResult:
 
 def _fail() -> None:
     raise StaticFirewallError()
+
+
+def _canonical_utf8_source(raw_source: bytes) -> str:
+    raw_lines = raw_source.splitlines(keepends=True)
+    line_index = 0
+
+    def read_line() -> bytes:
+        nonlocal line_index
+        if line_index >= len(raw_lines):
+            return b""
+        line = raw_lines[line_index]
+        line_index += 1
+        return line
+
+    try:
+        encoding, _ = tokenize.detect_encoding(read_line)
+    except (SyntaxError, UnicodeError):
+        _fail()
+    if encoding != "utf-8" or raw_source.startswith(_UTF8_BOM):
+        _fail()
+    for line in raw_lines[:2]:
+        cookie = _ENCODING_COOKIE_PATTERN.match(line)
+        if cookie is not None and cookie.group(1) != b"utf-8":
+            _fail()
+    try:
+        return raw_source.decode("utf-8")
+    except UnicodeDecodeError:
+        _fail()
 
 
 def _is_forbidden_module(qualified_name: str) -> bool:
@@ -1113,9 +1149,15 @@ def audit_static_h2_firewall(
     for logical_path in checked_paths:
         source_path = repository_root / logical_path
         try:
-            source = source_path.read_text(encoding="utf-8")
+            raw_source = source_path.read_bytes()
+            source = _canonical_utf8_source(raw_source)
             tree = ast.parse(source, filename=logical_path)
+            executable_tree = ast.parse(raw_source, filename=logical_path)
         except (OSError, UnicodeError, SyntaxError):
+            _fail()
+        if ast.dump(tree, include_attributes=False) != ast.dump(
+            executable_tree, include_attributes=False
+        ):
             _fail()
         _audit_tree(tree, logical_path)
 
