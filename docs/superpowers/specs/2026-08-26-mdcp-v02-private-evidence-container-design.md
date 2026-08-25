@@ -271,13 +271,17 @@ writer implementation is allowed.
 
 Boundary proofs deny staging directories, multi-file publication, path reopen, rename/replace,
 writer injection, and direct natural publication. The final source inventory binds the container
-builder, verifier, platform primitives, schemas, security tests, this amendment, and the exact
-corrective plan
+builder, verifier, platform primitives, schemas, this amendment, and the exact corrective plan
 `docs/superpowers/plans/2026-08-26-mdcp-v02-wave-3-private-evidence-container-corrective.md`. The
 amended source inventory contains exactly 41 ASCII-ordered paths: the prior exact 39 plus this
 amendment and that corrective plan, inserted in their respective `specs/` and `plans/` ordering.
 Missing, extra, duplicate, reordered, or unknown paths fail closed. Private-output inventory
 identities describe logical entries inside the container, not a physical directory tree.
+
+Security, unit, and integration tests are mandatory fresh completion gates but are intentionally
+not members of the production source identity. Their committed bytes remain reviewable and their
+results are required before freeze; the source archive proves the exact production/config/schema/
+design/plan boundary enumerated below and makes no claim to hash test sources.
 
 The exact 41-path inventory is:
 
