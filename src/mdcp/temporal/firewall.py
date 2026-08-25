@@ -227,6 +227,20 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("typing_extensions", "TypedDict"),
         }
     ),
+    "src/mdcp/temporal/folds.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Iterable"),
+            ("collections.abc", "Mapping"),
+            ("collections.abc", "Sequence"),
+            ("dataclasses", "dataclass"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.workload.splits", "DevelopmentPartitions"),
+            ("pandas", None),
+            ("typing", "Any"),
+        }
+    ),
     "src/mdcp/temporal/golden_vectors.py": frozenset(
         {
             ("__future__", "annotations"),
@@ -259,6 +273,33 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.adapter", "TemporalFeatureVector"),
             ("mdcp.temporal.adapter", "adapt_v2"),
             ("pydantic", "ValidationError"),
+        }
+    ),
+    "src/mdcp/temporal/trials.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Mapping"),
+            ("dataclasses", "dataclass"),
+            ("datetime", "date"),
+            ("enum", "StrEnum"),
+            ("math", None),
+            ("mdcp.temporal.constants", "TEMPORAL_FEATURE_COLUMNS"),
+            ("mdcp.temporal.folds", "FoldRows"),
+            ("numpy", None),
+            ("pandas", None),
+            ("sklearn.base", "BaseEstimator"),
+            ("sklearn.base", "TransformerMixin"),
+            ("sklearn.compose", "ColumnTransformer"),
+            ("sklearn.ensemble", "GradientBoostingRegressor"),
+            ("sklearn.ensemble", "RandomForestRegressor"),
+            ("sklearn.linear_model", "Ridge"),
+            ("sklearn.pipeline", "Pipeline"),
+            ("sklearn.preprocessing", "OneHotEncoder"),
+            ("sklearn.utils.validation", "check_array"),
+            ("sklearn.utils.validation", "check_is_fitted"),
+            ("types", "MappingProxyType"),
+            ("typing", "Any"),
+            ("typing", "Literal"),
         }
     ),
 }
@@ -306,8 +347,30 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "tokenize.detect_encoding",
         }
     ),
+    "src/mdcp/temporal/folds.py": frozenset(
+        {"pandas.DataFrame", "pandas.DatetimeIndex", "pandas.Timestamp", "pandas.concat"}
+    ),
     "src/mdcp/temporal/golden_vectors.py": frozenset(
         {"hashlib.sha256", "math.isfinite", "struct.error", "struct.pack"}
+    ),
+    "src/mdcp/temporal/trials.py": frozenset(
+        {
+            "math.pi",
+            "numpy.any",
+            "numpy.array",
+            "numpy.asarray",
+            "numpy.cos",
+            "numpy.isfinite",
+            "numpy.maximum",
+            "numpy.mean",
+            "numpy.ndarray",
+            "numpy.sin",
+            "numpy.std",
+            "pandas.DataFrame",
+            "pandas.DatetimeIndex",
+            "pandas.Timedelta",
+            "pandas.Timestamp",
+        }
     ),
 }
 _FILE_ACCESS_METHODS = frozenset(
@@ -576,7 +639,11 @@ def _attribute_name(node: ast.expr, bindings: dict[str, str]) -> str | None:
     return None
 
 
-def _allowed_dunder_attribute(node: ast.Attribute, logical_path: str) -> bool:
+def _allowed_dunder_attribute(
+    node: ast.Attribute,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
     if node.attr == "__init__":
         return (
             isinstance(node.value, ast.Call)
@@ -596,6 +663,37 @@ def _allowed_dunder_attribute(node: ast.Attribute, logical_path: str) -> bool:
             "_DEVELOPMENT_SPLITTER",
             "function",
         }
+    if (
+        node.attr == "__setattr__"
+        and logical_path == "src/mdcp/temporal/folds.py"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "object"
+    ):
+        call = parents.get(node)
+        if not (
+            isinstance(call, ast.Call)
+            and call.func is node
+            and len(call.args) == 3
+            and not call.keywords
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == "self"
+            and isinstance(call.args[1], ast.Constant)
+            and isinstance(call.args[1].value, str)
+            and call.args[1].value
+            in {"train_start", "train_end", "validation_start", "validation_end"}
+            and isinstance(call.args[2], ast.Name)
+            and call.args[2].id == call.args[1].value
+        ):
+            return False
+        function = parents.get(call)
+        while function is not None and not isinstance(function, ast.FunctionDef):
+            function = parents.get(function)
+        return (
+            isinstance(function, ast.FunctionDef)
+            and function.name == "__post_init__"
+            and isinstance(parents.get(function), ast.ClassDef)
+            and parents[function].name == "FoldSpec"
+        )
     return False
 
 
@@ -1066,7 +1164,7 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 and (
                     (
                         node.attr.startswith("_")
-                        and not _allowed_dunder_attribute(node, logical_path)
+                        and not _allowed_dunder_attribute(node, logical_path, parents)
                     )
                     or node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
                     or (qualified_name is not None and _is_forbidden_module(qualified_name))

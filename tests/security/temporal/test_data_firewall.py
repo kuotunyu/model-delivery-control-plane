@@ -643,6 +643,60 @@ def test_static_firewall_accepts_canonical_utf8_source_cookie(tmp_path: Path) ->
     assert result.verdict == "PASS"
 
 
+@pytest.mark.parametrize(
+    ("logical_path", "source"),
+    (
+        ("src/mdcp/temporal/folds.py", "from pathlib import Path\ntarget = Path"),
+        ("src/mdcp/temporal/trials.py", "from pathlib import Path\ntarget = Path"),
+        ("src/mdcp/temporal/folds.py", "import pandas as pd\ntarget = pd.read_csv"),
+        ("src/mdcp/temporal/trials.py", "import math\ntarget = math.sqrt"),
+    ),
+    ids=(
+        "folds-unknown-import",
+        "trials-unknown-import",
+        "folds-unapproved-module-attribute",
+        "trials-unapproved-module-attribute",
+    ),
+)
+def test_static_firewall_keeps_new_temporal_paths_closed_to_unapproved_capabilities(
+    tmp_path: Path,
+    logical_path: str,
+    source: str,
+) -> None:
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+def test_static_firewall_allows_exact_fold_timestamp_normalization(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/folds.py"
+    _write_logical_module(
+        tmp_path,
+        logical_path,
+        "from dataclasses import dataclass\n"
+        "@dataclass(frozen=True)\n"
+        "class FoldSpec:\n"
+        "    train_start: object\n"
+        "    train_end: object\n"
+        "    validation_start: object\n"
+        "    validation_end: object\n"
+        "    def __post_init__(self) -> None:\n"
+        "        train_start = self.train_start\n"
+        "        train_end = self.train_end\n"
+        "        validation_start = self.validation_start\n"
+        "        validation_end = self.validation_end\n"
+        "        object.__setattr__(self, 'train_start', train_start)\n"
+        "        object.__setattr__(self, 'train_end', train_end)\n"
+        "        object.__setattr__(self, 'validation_start', validation_start)\n"
+        "        object.__setattr__(self, 'validation_end', validation_end)",
+    )
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
+
+
 def test_real_formal_source_set_passes_with_deterministic_discovery() -> None:
     result = audit_static_h2_firewall(REPOSITORY_ROOT)
     expected_temporal_paths = tuple(
