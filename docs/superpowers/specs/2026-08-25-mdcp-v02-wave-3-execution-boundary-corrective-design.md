@@ -1,8 +1,11 @@
 # MDCP v0.2 Wave 3 Execution-Boundary Corrective Design
 
-**Status:** DRAFT — OWNER WRITTEN-SPEC REVIEW REQUIRED  
-**Date:** 2026-08-25  
-**Applies to:** Wave 3 formal-development Tasks 3.2, 3.3, and 3.5  
+**Status:** DRAFT — OWNER WRITTEN-SPEC REVIEW REQUIRED
+
+**Date:** 2026-08-25
+
+**Applies to:** Wave 3 formal-development Tasks 3.2, 3.3, and 3.5
+
 **Does not authorize:** implementation, natural-data loading, model fitting, P2 consumption, H2
 access, Docker, GPU, network, or publication
 
