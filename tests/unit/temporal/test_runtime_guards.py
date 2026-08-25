@@ -115,6 +115,12 @@ def test_runtime_guard_rejects_a_forged_authoritative_core(tmp_path: Path) -> No
         RuntimeGuard(forged_core)
 
 
+def test_module_exposes_no_production_builder_accepting_a_caller_core() -> None:
+    missing_name = "_build_authoritative_runtime_guard"
+    with pytest.raises(AttributeError):
+        getattr(runtime_guards, missing_name)
+
+
 def test_production_runtime_guard_core_cannot_be_replaced(tmp_path: Path) -> None:
     expected_head = _committed_repository(tmp_path)
     guard = build_production_runtime_guard(tmp_path, expected_head)

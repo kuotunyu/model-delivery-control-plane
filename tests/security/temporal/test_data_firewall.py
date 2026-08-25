@@ -860,6 +860,27 @@ def test_static_firewall_rejects_unapproved_search_identity_git_call(tmp_path: P
 
 
 @pytest.mark.parametrize(
+    "replacement",
+    (
+        '    alias = _git\n    head = alias(root, "rev-parse", "HEAD")\n',
+        '    holder = {"git": _git}\n    head = holder["git"](root, "rev-parse", "HEAD")\n',
+    ),
+)
+def test_static_firewall_rejects_search_identity_git_alias_recovery(
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/search_identity.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    needle = '    head = _git(root, "rev-parse", "HEAD")\n'
+    assert source.count(needle) == 1
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, replacement, 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
     ("mutation", "needle", "replacement"),
     (
         ("unlisted-import", "import subprocess\n", "import inspect\nimport subprocess\n"),

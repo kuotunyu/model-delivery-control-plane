@@ -1463,6 +1463,18 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
         if _shadows_imported_binding(node, bindings):
             _fail()
         if (
+            logical_path == "src/mdcp/temporal/search_identity.py"
+            and isinstance(node, ast.Name)
+            and node.id == "_git"
+        ):
+            parent = parents.get(node)
+            if not (
+                isinstance(parent, ast.Call)
+                and parent.func is node
+                and _allowed_search_identity_git_call(parent, parents)
+            ):
+                _fail()
+        if (
             isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
             and node.name in protected_function_counts
         ):

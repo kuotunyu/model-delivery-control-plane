@@ -106,7 +106,7 @@ class _CheckpointGuard:
 
 
 def _make_runtime_guard_type() -> tuple[
-    type[_CheckpointGuard], Callable[[_RuntimeGuardCore], _CheckpointGuard]
+    type[_CheckpointGuard], Callable[[Path, str], _CheckpointGuard]
 ]:
     construction_token = object()
 
@@ -118,13 +118,20 @@ def _make_runtime_guard_type() -> tuple[
                 raise TypeError("production guard requires authoritative runtime evidence")
             super().__init__(core)
 
-    def build(core: _RuntimeGuardCore) -> _CheckpointGuard:
+    def build(repository_root: Path, expected_head: str) -> _CheckpointGuard:
+        core = _build_runtime_guard_core(
+            repository_root,
+            expected_head,
+            evidence_class="authoritative_runtime",
+            monotonic_ns=time.monotonic_ns,
+            peak_process_bytes=_authoritative_peak_process_bytes,
+        )
         return ProductionRuntimeGuard(core, construction_token)
 
     return ProductionRuntimeGuard, build
 
 
-RuntimeGuard, _build_authoritative_runtime_guard = _make_runtime_guard_type()
+RuntimeGuard, build_production_runtime_guard = _make_runtime_guard_type()
 
 
 class _SyntheticRuntimeGuard(_CheckpointGuard):
@@ -132,18 +139,6 @@ class _SyntheticRuntimeGuard(_CheckpointGuard):
         if core.evidence_class != "synthetic_test":
             raise ValueError("synthetic guard requires synthetic test evidence")
         super().__init__(core)
-
-
-def build_production_runtime_guard(repository_root: Path, expected_head: str) -> RuntimeGuard:
-    return _build_authoritative_runtime_guard(
-        _build_runtime_guard_core(
-            repository_root,
-            expected_head,
-            evidence_class="authoritative_runtime",
-            monotonic_ns=time.monotonic_ns,
-            peak_process_bytes=_authoritative_peak_process_bytes,
-        )
-    )
 
 
 def _build_synthetic_runtime_guard(
