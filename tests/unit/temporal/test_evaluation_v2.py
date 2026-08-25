@@ -37,6 +37,7 @@ from mdcp.temporal.evaluation import (
     qualify_trial as production_qualify_trial,
 )
 from mdcp.temporal.folds import SourceRowIdentity
+from mdcp.temporal.trials import canonical_trial_identity
 
 
 def _layer(count: int, reason_codes: tuple[str, ...]) -> LayerAccounting:
@@ -93,7 +94,8 @@ def _context(
                 paired_rows=fold_rows[fold_id],
             )
             for fold_id in FOLD_IDS
-        )
+        ),
+        trial_identity=canonical_trial_identity("STAT-A1"),
     )
 
 
@@ -815,7 +817,13 @@ def test_attacker_coordinated_context_replacement_cannot_reuse_unchanged_report(
             )
         )
 
-    result = qualify_trial(report, QualificationContext(folds=tuple(changed_folds)))
+    result = qualify_trial(
+        report,
+        QualificationContext(
+            folds=tuple(changed_folds),
+            trial_identity=context.trial_identity,
+        ),
+    )
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)
@@ -870,6 +878,27 @@ def test_changed_context_rows_are_unknown_even_when_identity_order_is_unchanged(
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)
+
+
+def test_one_report_and_context_cannot_be_relabelled_as_another_trial() -> None:
+    report, context = _bound_report()
+
+    original = production_qualify_trial(
+        report,
+        context,
+        trial_id="STAT-A1",
+        family_id="STAT",
+    )
+    relabelled = production_qualify_trial(
+        report,
+        context,
+        trial_id="REC-180-L4",
+        family_id="REC",
+    )
+
+    assert original.verdict is GateVerdict.PASS
+    assert relabelled.verdict is GateVerdict.UNKNOWN
+    assert relabelled.reason_codes == ("TRIAL_IDENTITY_MISMATCH",)
 
 
 def test_context_identity_outside_its_frozen_validation_interval_is_invalid() -> None:

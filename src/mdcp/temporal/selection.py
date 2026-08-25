@@ -12,6 +12,7 @@ from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.temporal.evaluation import QualificationResult
+from mdcp.temporal.trials import canonical_trial_identity
 
 type RankingKey = tuple[float, float, float, int, str]
 
@@ -47,6 +48,8 @@ class RankedTrial:
 
     trial_id: str
     family_id: str
+    configuration_sha256: str
+    report_sha256: str
     pooled_ucb95: float
     worst_fold_point: float
     worst_subgroup_ucb95: float
@@ -112,7 +115,17 @@ def _valid_qualification(result: object) -> bool:
     expected_family = _FINAL_ELIGIBLE_FAMILIES.get(result.trial_id)
     if expected_family is None:
         return False
-    if result.family_id != expected_family or type(result.verdict) is not GateVerdict:
+    try:
+        identity = canonical_trial_identity(result.trial_id)
+    except ValueError:
+        return False
+    if (
+        result.family_id != expected_family
+        or result.family_id != identity.family_id
+        or result.configuration_sha256 != identity.configuration_sha256
+        or not _valid_sha256(result.report_sha256)
+        or type(result.verdict) is not GateVerdict
+    ):
         return False
     if type(result.qualified) is not bool:
         return False
@@ -146,6 +159,8 @@ def _qualification_inventory_digest(results: tuple[QualificationResult, ...]) ->
         {
             "trial_id": result.trial_id,
             "family_id": result.family_id,
+            "configuration_sha256": result.configuration_sha256,
+            "report_sha256": result.report_sha256,
             "verdict": result.verdict.value,
             "qualified": result.qualified,
             "reason_codes": list(result.reason_codes),
@@ -211,6 +226,8 @@ def rank_qualified(results: tuple[QualificationResult, ...]) -> ProvisionalWinne
         RankedTrial(
             trial_id=result.trial_id,
             family_id=result.family_id,
+            configuration_sha256=result.configuration_sha256,
+            report_sha256=result.report_sha256,
             pooled_ucb95=result.pooled_ucb95,
             worst_fold_point=result.worst_fold_point,
             worst_subgroup_ucb95=result.worst_subgroup_ucb95,
@@ -222,6 +239,8 @@ def rank_qualified(results: tuple[QualificationResult, ...]) -> ProvisionalWinne
     return ProvisionalWinner(
         trial_id=first.trial_id,
         family_id=first.family_id,
+        configuration_sha256=first.configuration_sha256,
+        report_sha256=first.report_sha256,
         pooled_ucb95=first.pooled_ucb95,
         worst_fold_point=first.worst_fold_point,
         worst_subgroup_ucb95=first.worst_subgroup_ucb95,
@@ -274,6 +293,8 @@ def _valid_provisional(provisional: object) -> bool:
             metrics=metrics,
         )
         and _valid_sha256(provisional.qualification_inventory_sha256)
+        and _valid_sha256(provisional.configuration_sha256)
+        and _valid_sha256(provisional.report_sha256)
     )
 
 
@@ -352,8 +373,16 @@ class ReplaySelectionSession:
         expected_digests: tuple[ReplayFoldDigests, ...],
     ) -> None:
         provisional = rank_qualified(qualification_results)
-        if not _valid_replay_digests(expected_digests) or any(
-            digest.verdict is not GateVerdict.PASS for digest in expected_digests
+        if provisional is None:
+            if expected_digests != ():
+                raise ValueError("expected replay digest inventory is invalid")
+        elif (
+            not _valid_replay_digests(expected_digests)
+            or any(digest.verdict is not GateVerdict.PASS for digest in expected_digests)
+            or any(
+                digest.configuration_sha256 != provisional.configuration_sha256
+                for digest in expected_digests
+            )
         ):
             raise ValueError("expected replay digest inventory is invalid")
         qualification_inventory_sha256 = (

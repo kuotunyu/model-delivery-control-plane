@@ -28,6 +28,7 @@ from mdcp.temporal.evaluation import (
     qualify_trial,
 )
 from mdcp.temporal.folds import SourceRowIdentity
+from mdcp.temporal.trials import canonical_trial_identity
 
 
 def _layer(count: int, reasons: tuple[str, ...]) -> LayerAccounting:
@@ -139,7 +140,8 @@ def _context(fold_rows: dict[str, tuple[PairedQualityRow, ...]]) -> Qualificatio
                 paired_rows=fold_rows[fold_id],
             )
             for fold_id in FOLD_IDS
-        )
+        ),
+        trial_identity=canonical_trial_identity("STAT-A1"),
     )
 
 

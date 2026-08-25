@@ -18,6 +18,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.utils.validation import check_array, check_is_fitted
 
+from mdcp.common.canonical import canonicalize_json
+from mdcp.common.digests import sha256_hex
 from mdcp.contracts.workload import BikeRequest
 from mdcp.temporal.adapter import adapt_local_v2
 from mdcp.temporal.constants import TEMPORAL_FEATURE_COLUMNS
@@ -59,6 +61,15 @@ class TrialSpec:
     preprocessing: PreprocessingSpec
     random_state: int | None
     estimator_threads: int
+
+
+@dataclass(frozen=True, slots=True)
+class TrialIdentity:
+    """Public-safe identity of one exact canonical trial configuration."""
+
+    trial_id: str
+    family_id: str
+    configuration_sha256: str
 
 
 class _PopulationStandardScaler(BaseEstimator, TransformerMixin):
@@ -458,6 +469,60 @@ _CANONICAL_TRIAL_SPECS = _canonical_trial_specs()
 
 def _is_canonical_trial_spec(spec: object) -> bool:
     return any(spec is candidate for candidate in _CANONICAL_TRIAL_SPECS)
+
+
+def _trial_configuration_material(spec: TrialSpec) -> dict[str, object]:
+    return {
+        "trial_id": spec.trial_id,
+        "family_id": spec.family.value,
+        "final_eligible": spec.final_eligible,
+        "training_mode": spec.training_mode,
+        "recency_days": spec.recency_days,
+        "feature_positions": list(spec.feature_positions),
+        "model_kind": spec.model_kind,
+        "model_parameters": dict(spec.model_parameters),
+        "preprocessing": {
+            "categorical_positions": list(spec.preprocessing.categorical_positions),
+            "fixed_categorical_domains": [
+                list(domain) for domain in spec.preprocessing.fixed_categorical_domains
+            ],
+            "standardized_positions": list(spec.preprocessing.standardized_positions),
+            "standardization_ddof": spec.preprocessing.standardization_ddof,
+            "zero_variance_policy": spec.preprocessing.zero_variance_policy,
+        },
+        "random_state": spec.random_state,
+        "estimator_threads": spec.estimator_threads,
+        "model_feature_schema": list(TEMPORAL_FEATURE_COLUMNS),
+    }
+
+
+def trial_identity(spec: TrialSpec) -> TrialIdentity:
+    """Return the immutable configuration identity for one canonical trial object."""
+    if not _is_canonical_trial_spec(spec):
+        raise ValueError("trial specification is invalid")
+    return TrialIdentity(
+        trial_id=spec.trial_id,
+        family_id=spec.family.value,
+        configuration_sha256=sha256_hex(canonicalize_json(_trial_configuration_material(spec))),
+    )
+
+
+def canonical_trial_identity(trial_id: str) -> TrialIdentity:
+    """Resolve one exact declared trial ID to its immutable configuration identity."""
+    matching = tuple(spec for spec in _CANONICAL_TRIAL_SPECS if spec.trial_id == trial_id)
+    if len(matching) != 1:
+        raise ValueError("trial identity is invalid")
+    return trial_identity(matching[0])
+
+
+def is_canonical_trial_identity(identity: object) -> bool:
+    """Fail closed unless an identity equals the canonical declaration for its trial ID."""
+    if type(identity) is not TrialIdentity or type(identity.trial_id) is not str:
+        return False
+    try:
+        return identity == canonical_trial_identity(identity.trial_id)
+    except ValueError:
+        return False
 
 
 def load_trial_specs(protocol: Mapping[str, Any]) -> tuple[TrialSpec, ...]:

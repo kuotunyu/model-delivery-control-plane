@@ -26,6 +26,7 @@ from mdcp.temporal.selection import (
     finalize_selection,
     rank_qualified,
 )
+from mdcp.temporal.trials import canonical_trial_identity
 
 FINAL_TRIAL_FAMILIES = {
     "REC-180-L4": "REC",
@@ -132,23 +133,35 @@ def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_forma
     source = _generated_source()
     folds = materialize_folds(source, FOLD_SPECS)
     contexts_and_receipts = tuple(_fold_context(fold) for fold in folds)
-    context = QualificationContext(folds=tuple(item[0] for item in contexts_and_receipts))
+    fold_contexts = tuple(item[0] for item in contexts_and_receipts)
     completeness = {
         fold.spec.fold_id: item[1] for fold, item in zip(folds, contexts_and_receipts, strict=True)
     }
-    report = evaluate_pooled(
-        context,
-        completeness,
-        QualificationEvidence(
-            lineage=GateVerdict.PASS,
-            converter=GateVerdict.PASS,
-            evidence=GateVerdict.PASS,
-            budget=GateVerdict.PASS,
-        ),
+    evidence = QualificationEvidence(
+        lineage=GateVerdict.PASS,
+        converter=GateVerdict.PASS,
+        evidence=GateVerdict.PASS,
+        budget=GateVerdict.PASS,
+    )
+    reports_and_contexts = tuple(
+        (
+            evaluate_pooled(
+                QualificationContext(
+                    folds=fold_contexts,
+                    trial_identity=canonical_trial_identity(trial_id),
+                ),
+                completeness,
+                evidence,
+            ),
+            QualificationContext(
+                folds=fold_contexts,
+                trial_identity=canonical_trial_identity(trial_id),
+            ),
+        )
+        for trial_id in FINAL_TRIAL_FAMILIES
     )
     qualifications = tuple(
-        qualify_trial(report, context, trial_id=trial_id, family_id=family_id)
-        for trial_id, family_id in FINAL_TRIAL_FAMILIES.items()
+        qualify_trial(report, context) for report, context in reports_and_contexts
     )
     provisional = rank_qualified(qualifications)
     assert provisional is not None
@@ -156,7 +169,7 @@ def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_forma
         ReplayFoldDigests(
             fold_id=fold.spec.fold_id,
             verdict=GateVerdict.PASS,
-            configuration_sha256="a" * 64,
+            configuration_sha256=provisional.configuration_sha256,
             preprocessing_state_sha256="b" * 64,
             feature_vector_sha256="c" * 64,
             prediction_vector_sha256="d" * 64,
@@ -191,7 +204,7 @@ def test_generated_four_fold_dry_run_reaches_sole_replay_selection_without_forma
 
     assert [fold.spec.fold_id for fold in folds] == ["F1", "F2", "F3", "F4"]
     assert [len(fold.inventory) for fold in folds] == [300, 300, 300, 300]
-    assert report.pooled_row_count == 1_200
+    assert reports_and_contexts[0][0].pooled_row_count == 1_200
     assert all(result.qualified for result in qualifications)
     assert decision.status == "PASS"
     assert decision.final_winner is not None

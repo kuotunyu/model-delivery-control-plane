@@ -8,6 +8,7 @@ from weakref import ref
 
 import pytest
 
+from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.temporal.evaluation import QualificationResult
 from mdcp.temporal.selection import (
@@ -17,6 +18,7 @@ from mdcp.temporal.selection import (
     finalize_selection,
     rank_qualified,
 )
+from mdcp.temporal.trials import canonical_trial_identity
 
 FINAL_TRIAL_FAMILIES = {
     "REC-180-L4": "REC",
@@ -51,9 +53,12 @@ def _result(
     worst_fold_point: float | None = 0.90,
     worst_subgroup_ucb95: float | None = 0.90,
 ) -> QualificationResult:
+    identity = canonical_trial_identity(trial_id)
     return QualificationResult(
         trial_id=trial_id,
         family_id=family_id or FINAL_TRIAL_FAMILIES[trial_id],
+        configuration_sha256=identity.configuration_sha256,
+        report_sha256=sha256_hex(f"qualification-report:{trial_id}".encode()),
         verdict=verdict,
         qualified=qualified,
         reason_codes=() if verdict is GateVerdict.PASS else ("NOT_QUALIFIED",),
@@ -70,13 +75,19 @@ def _inventory(
     return tuple(replacements.get(trial_id, _result(trial_id)) for trial_id in FINAL_TRIAL_FAMILIES)
 
 
-def _digests(verdict: GateVerdict = GateVerdict.PASS) -> tuple[ReplayFoldDigests, ...]:
+def _digests(
+    verdict: GateVerdict = GateVerdict.PASS,
+    configuration_sha256: str | None = None,
+) -> tuple[ReplayFoldDigests, ...]:
     fields = ("a", "b", "c", "d", "e", "f")
+    configuration_sha256 = (
+        configuration_sha256 or canonical_trial_identity("STAT-A0.1").configuration_sha256
+    )
     return tuple(
         ReplayFoldDigests(
             fold_id=fold_id,
             verdict=verdict,
-            configuration_sha256=fields[0] * 64,
+            configuration_sha256=configuration_sha256,
             preprocessing_state_sha256=fields[1] * 64,
             feature_vector_sha256=fields[2] * 64,
             prediction_vector_sha256=fields[3] * 64,
@@ -94,9 +105,17 @@ def _session(
     results: tuple[QualificationResult, ...] | None = None,
     expected_digests: tuple[ReplayFoldDigests, ...] | None = None,
 ) -> ReplaySelectionSession:
+    inventory = results or _inventory()
+    provisional = rank_qualified(inventory)
+    if expected_digests is None:
+        expected_digests = (
+            ()
+            if provisional is None
+            else _digests(configuration_sha256=provisional.configuration_sha256)
+        )
     return ReplaySelectionSession(
-        results or _inventory(),
-        expected_digests or _digests(),
+        inventory,
+        expected_digests,
     )
 
 
@@ -114,7 +133,11 @@ def _replay(
         qualification_inventory_sha256=provisional.qualification_inventory_sha256,
         session_sha256=session.session_sha256,
         verdict=verdict,
-        digests=_digests() if digests is _DEFAULT_DIGESTS else digests,
+        digests=(
+            _digests(configuration_sha256=provisional.configuration_sha256)
+            if digests is _DEFAULT_DIGESTS
+            else digests
+        ),
     )
 
 
@@ -211,6 +234,8 @@ def test_ranking_rejects_noncanonical_final_eligible_inventory(mutation: str) ->
         results[-1] = QualificationResult(
             trial_id="CTRL-01",
             family_id="CTRL",
+            configuration_sha256=canonical_trial_identity("CTRL-01").configuration_sha256,
+            report_sha256="a" * 64,
             verdict=GateVerdict.PASS,
             qualified=True,
             reason_codes=(),
@@ -228,6 +253,26 @@ def test_ranking_rejects_family_mismatch() -> None:
 
     with pytest.raises(ValueError, match="qualification inventory"):
         rank_qualified(_inventory({"STAT-A0.1": changed}))
+
+
+def test_ranking_rejects_configuration_identity_from_another_trial() -> None:
+    changed = replace(
+        _result("STAT-A0.1"),
+        configuration_sha256=canonical_trial_identity("STAT-A1").configuration_sha256,
+    )
+
+    with pytest.raises(ValueError, match="qualification result is invalid"):
+        rank_qualified(_inventory({"STAT-A0.1": changed}))
+
+
+def test_qualification_inventory_digest_binds_each_report_identity() -> None:
+    original = rank_qualified(_inventory())
+    changed = replace(_result("STAT-A0.1"), report_sha256="0" * 64)
+    mutated = rank_qualified(_inventory({"STAT-A0.1": changed}))
+
+    assert original is not None
+    assert mutated is not None
+    assert original.qualification_inventory_sha256 != mutated.qualification_inventory_sha256
 
 
 @pytest.mark.parametrize(
@@ -444,6 +489,17 @@ def test_replay_requires_exact_four_fold_lowercase_digest_inventory(mutation: st
 
     assert decision.status == "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
     assert decision.final_winner is None
+
+
+def test_replay_session_rejects_digests_for_a_different_configuration() -> None:
+    results = _inventory()
+    wrong_configuration = canonical_trial_identity("STAT-A1").configuration_sha256
+
+    with pytest.raises(ValueError, match="expected replay digest inventory is invalid"):
+        ReplaySelectionSession(
+            results,
+            _digests(configuration_sha256=wrong_configuration),
+        )
 
 
 def test_top_level_pass_cannot_hide_a_nonpass_fold_replay() -> None:

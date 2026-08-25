@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 
 from mdcp.common.canonical import canonicalize_json
@@ -24,6 +24,7 @@ from mdcp.temporal.completeness import (
     LayerAccounting,
 )
 from mdcp.temporal.folds import SourceRowIdentity, is_frozen_validation_timestamp
+from mdcp.temporal.trials import TrialIdentity, is_canonical_trial_identity
 
 FOLD_IDS = ("F1", "F2", "F3", "F4")
 FIXED_SUBGROUPS = (
@@ -81,6 +82,7 @@ class QualificationContext:
     """Transient exact four-fold source inventory and paired-row binding."""
 
     folds: tuple[FoldQualificationContext, ...]
+    trial_identity: TrialIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +123,7 @@ class DevelopmentQualityReport:
     reason_codes: tuple[str, ...]
     pooled_inventory_sha256: str
     pooled_pairing_sha256: str
+    trial_identity: TrialIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +132,8 @@ class QualificationResult:
 
     trial_id: str
     family_id: str
+    configuration_sha256: str | None
+    report_sha256: str | None
     verdict: GateVerdict
     qualified: bool
     reason_codes: tuple[str, ...]
@@ -297,6 +302,7 @@ def _valid_fold_context(context: object) -> bool:
 def _valid_qualification_context(context: object) -> bool:
     if (
         type(context) is not QualificationContext
+        or not is_canonical_trial_identity(context.trial_identity)
         or type(context.folds) is not tuple
         or len(context.folds) != len(FOLD_IDS)
         or any(not _valid_fold_context(fold) for fold in context.folds)
@@ -525,6 +531,7 @@ def evaluate_pooled(
         reason_codes=tuple(dict.fromkeys(reasons)),
         pooled_inventory_sha256=_pooled_digest([report.inventory_sha256 for report in reports]),
         pooled_pairing_sha256=_pooled_digest([report.pairing_sha256 for report in reports]),
+        trial_identity=context.trial_identity,
     )
 
 
@@ -619,6 +626,8 @@ def _exact_subgroup_inventory(entries: object) -> bool:
 
 
 def _report_shape_reasons(report: DevelopmentQualityReport) -> list[str]:
+    if not is_canonical_trial_identity(report.trial_identity):
+        return ["INVALID_TRIAL_IDENTITY"]
     if (
         type(report.folds) is not tuple
         or len(report.folds) != len(FOLD_IDS)
@@ -794,15 +803,63 @@ def _evidence_unknown_reasons(evidence: object) -> list[str]:
     return reasons
 
 
+def _metric_identity_material(metric: QualityMetricReport) -> dict[str, object]:
+    return asdict(metric)
+
+
+def _subgroup_identity_material(entries: tuple[NamedQualityMetric, ...]) -> list[dict[str, object]]:
+    return [
+        {"name": entry.name, "metric": _metric_identity_material(entry.metric)} for entry in entries
+    ]
+
+
+def _report_sha256(report: DevelopmentQualityReport) -> str:
+    material = {
+        "trial_identity": asdict(report.trial_identity),
+        "folds": [
+            {
+                "fold_id": fold.fold_id,
+                "completeness": asdict(fold.completeness),
+                "paired_row_count": fold.paired_row_count,
+                "overall": _metric_identity_material(fold.overall),
+                "subgroups": _subgroup_identity_material(fold.subgroups),
+                "bootstrap": fold.bootstrap.model_dump(mode="json"),
+                "reason_codes": list(fold.reason_codes),
+                "inventory_sha256": fold.inventory_sha256,
+                "pairing_sha256": fold.pairing_sha256,
+            }
+            for fold in report.folds
+        ],
+        "pooled_row_count": report.pooled_row_count,
+        "pooled_overall": _metric_identity_material(report.pooled_overall),
+        "pooled_subgroups": _subgroup_identity_material(report.pooled_subgroups),
+        "pooled_bootstrap": report.pooled_bootstrap.model_dump(mode="json"),
+        "qualification_evidence": {
+            "lineage": report.qualification_evidence.lineage.value,
+            "converter": report.qualification_evidence.converter.value,
+            "evidence": report.qualification_evidence.evidence.value,
+            "budget": report.qualification_evidence.budget.value,
+        },
+        "reason_codes": list(report.reason_codes),
+        "pooled_inventory_sha256": report.pooled_inventory_sha256,
+        "pooled_pairing_sha256": report.pooled_pairing_sha256,
+    }
+    return sha256_hex(canonicalize_json(material))
+
+
 def _qualification_result(
     report: DevelopmentQualityReport | None,
     *,
-    trial_id: str,
-    family_id: str,
+    report_sha256: str | None,
     verdict: GateVerdict,
     qualified: bool,
     reason_codes: tuple[str, ...],
 ) -> QualificationResult:
+    identity = (
+        report.trial_identity
+        if report is not None and is_canonical_trial_identity(report.trial_identity)
+        else None
+    )
     metrics_available = (
         report is not None
         and _valid_metric(report.pooled_overall)
@@ -819,8 +876,10 @@ def _qualification_result(
         )
     )
     return QualificationResult(
-        trial_id=trial_id,
-        family_id=family_id,
+        trial_id=identity.trial_id if identity is not None else "",
+        family_id=identity.family_id if identity is not None else "",
+        configuration_sha256=identity.configuration_sha256 if identity is not None else None,
+        report_sha256=report_sha256,
         verdict=verdict,
         qualified=qualified,
         reason_codes=reason_codes,
@@ -847,8 +906,7 @@ def qualify_trial(
     if type(report) is not DevelopmentQualityReport:
         return _qualification_result(
             None,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=None,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
             reason_codes=("INVALID_DEVELOPMENT_REPORT",),
@@ -858,18 +916,30 @@ def qualify_trial(
     if shape_reasons:
         return _qualification_result(
             report,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=None,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
             reason_codes=tuple(shape_reasons),
         )
 
+    report_sha256 = _report_sha256(report)
+    if (bool(trial_id) is not bool(family_id)) or (
+        trial_id
+        and (trial_id, family_id)
+        != (report.trial_identity.trial_id, report.trial_identity.family_id)
+    ):
+        return _qualification_result(
+            report,
+            report_sha256=report_sha256,
+            verdict=GateVerdict.UNKNOWN,
+            qualified=False,
+            reason_codes=("TRIAL_IDENTITY_MISMATCH",),
+        )
+
     if context is None:
         return _qualification_result(
             report,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=report_sha256,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
             reason_codes=("QUALIFICATION_CONTEXT_REQUIRED",),
@@ -877,8 +947,7 @@ def qualify_trial(
     if not _valid_qualification_context(context):
         return _qualification_result(
             report,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=report_sha256,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
             reason_codes=("QUALIFICATION_CONTEXT_INVALID",),
@@ -892,8 +961,7 @@ def qualify_trial(
     if completeness_reasons:
         return _qualification_result(
             report,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=report_sha256,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
             reason_codes=tuple(completeness_reasons),
@@ -902,8 +970,7 @@ def qualify_trial(
     if not _report_matches_context(report, context):
         return _qualification_result(
             report,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=report_sha256,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
             reason_codes=("QUALIFICATION_CONTEXT_MISMATCH",),
@@ -916,8 +983,7 @@ def qualify_trial(
     if unknown:
         return _qualification_result(
             report,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=report_sha256,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
             reason_codes=tuple(unknown),
@@ -943,16 +1009,14 @@ def qualify_trial(
     if failures:
         return _qualification_result(
             report,
-            trial_id=trial_id,
-            family_id=family_id,
+            report_sha256=report_sha256,
             verdict=GateVerdict.FAIL,
             qualified=False,
             reason_codes=tuple(failures),
         )
     return _qualification_result(
         report,
-        trial_id=trial_id,
-        family_id=family_id,
+        report_sha256=report_sha256,
         verdict=GateVerdict.PASS,
         qualified=True,
         reason_codes=(),

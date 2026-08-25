@@ -172,6 +172,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("__future__", "annotations"),
             ("collections.abc", "Mapping"),
             ("collections.abc", "Sequence"),
+            ("dataclasses", "asdict"),
             ("dataclasses", "dataclass"),
             ("datetime", "date"),
             ("datetime", "datetime"),
@@ -190,6 +191,8 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.completeness", "LayerAccounting"),
             ("mdcp.temporal.folds", "SourceRowIdentity"),
             ("mdcp.temporal.folds", "is_frozen_validation_timestamp"),
+            ("mdcp.temporal.trials", "TrialIdentity"),
+            ("mdcp.temporal.trials", "is_canonical_trial_identity"),
         }
     ),
     "src/mdcp/temporal/selection.py": frozenset(
@@ -201,6 +204,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.common.enums", "GateVerdict"),
             ("mdcp.temporal.evaluation", "QualificationResult"),
+            ("mdcp.temporal.trials", "canonical_trial_identity"),
             ("threading", "Lock"),
             ("typing", "Literal"),
             ("weakref", "WeakKeyDictionary"),
@@ -340,6 +344,8 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("collections.abc", "Mapping"),
             ("dataclasses", "dataclass"),
             ("enum", "StrEnum"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.contracts.workload", "BikeRequest"),
             ("mdcp.temporal.adapter", "adapt_local_v2"),
             ("mdcp.temporal.constants", "TEMPORAL_FEATURE_COLUMNS"),
