@@ -823,6 +823,53 @@ def test_real_formal_source_set_passes_with_deterministic_discovery() -> None:
     assert len(result.implementation_sha256) == 64
 
 
+def test_runtime_guard_and_command_surfaces_are_discovered() -> None:
+    result = audit_static_h2_firewall(REPOSITORY_ROOT)
+
+    assert {
+        "src/mdcp/temporal/runtime_guards.py",
+        "src/mdcp/temporal/runner.py",
+        "src/mdcp/temporal/cli.py",
+    }.issubset(result.checked_paths)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "needle", "replacement"),
+    (
+        ("unlisted-import", "import subprocess\n", "import inspect\nimport subprocess\n"),
+        ("module-attribute", "import time\n", "import time\nunused = time.sleep\n"),
+        (
+            "environment-key",
+            "import subprocess\n",
+            "import os\nimport subprocess\nunused = os.environ['MDCP_REVIEW_H2']\n",
+        ),
+        (
+            "subprocess-argument",
+            '("git", "rev-parse", "HEAD")',
+            '("git", "rev-parse", "--show-toplevel")',
+        ),
+        (
+            "file-path",
+            'Path("/proc/self/status")',
+            'Path("/etc/passwd")',
+        ),
+    ),
+)
+def test_runtime_guard_capabilities_remain_exact(
+    tmp_path: Path,
+    mutation: str,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) == 1, mutation
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, replacement, 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 def test_development_partition_type_has_no_h2_capability() -> None:
     assert tuple(DevelopmentPartitions.__dataclass_fields__) == ("train", "h1")
     assert "h2" not in vars(DevelopmentPartitions)

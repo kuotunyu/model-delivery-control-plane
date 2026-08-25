@@ -370,6 +370,72 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("zoneinfo", "ZoneInfo"),
         }
     ),
+    "src/mdcp/temporal/runtime_guards.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Callable"),
+            ("ctypes", None),
+            ("dataclasses", "dataclass"),
+            ("enum", "StrEnum"),
+            ("hashlib", None),
+            ("pathlib", "Path"),
+            ("pathlib", "PurePosixPath"),
+            ("subprocess", None),
+            ("sys", None),
+            ("time", None),
+            ("typing", "Literal"),
+        }
+    ),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Callable"),
+            ("collections.abc", "Mapping"),
+            ("ctypes", None),
+            ("dataclasses", "dataclass"),
+            ("dataclasses", "field"),
+            ("enum", "StrEnum"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.temporal.selection", "ReplayFoldDigests"),
+            ("mdcp.temporal.selection", "ReplayResult"),
+            ("mdcp.temporal.trials", "canonical_trial_identity"),
+            ("os", None),
+            ("pathlib", "Path"),
+            ("subprocess", None),
+            ("sys", None),
+            ("time", None),
+            ("typing", "Literal"),
+        }
+    ),
+    "src/mdcp/temporal/cli.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("argparse", None),
+            ("collections.abc", "Sequence"),
+        }
+    ),
+    "src/mdcp/temporal/search_identity.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("dataclasses", "dataclass"),
+            ("datetime", "UTC"),
+            ("datetime", "datetime"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.canonical", "parse_json_bytes"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("pathlib", "Path"),
+            ("pydantic", "BaseModel"),
+            ("pydantic", "ConfigDict"),
+            ("pydantic", "StringConstraints"),
+            ("pydantic", "field_validator"),
+            ("subprocess", None),
+            ("typing", "Annotated"),
+            ("typing", "Literal"),
+        }
+    ),
 }
 _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/predictor/app_v2.py": frozenset(
@@ -388,9 +454,11 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Assign",
             "ast.Attribute",
             "ast.AsyncFunctionDef",
+            "ast.BinOp",
             "ast.Call",
             "ast.ClassDef",
             "ast.Constant",
+            "ast.Div",
             "ast.ExceptHandler",
             "ast.FunctionDef",
             "ast.Global",
@@ -403,7 +471,9 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Name",
             "ast.Nonlocal",
             "ast.Starred",
+            "ast.Store",
             "ast.Subscript",
+            "ast.Tuple",
             "ast.arg",
             "ast.dump",
             "ast.expr",
@@ -439,6 +509,46 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "pandas.Timestamp",
         }
     ),
+    "src/mdcp/temporal/runtime_guards.py": frozenset(
+        {
+            "ctypes.Structure",
+            "ctypes.byref",
+            "ctypes.c_size_t",
+            "ctypes.c_ulong",
+            "ctypes.sizeof",
+            "ctypes.windll",
+            "ctypes.windll.kernel32",
+            "ctypes.windll.kernel32.GetCurrentProcess",
+            "ctypes.windll.psapi",
+            "ctypes.windll.psapi.GetProcessMemoryInfo",
+            "hashlib.sha256",
+            "subprocess.run",
+            "sys.platform",
+            "sys.platform.startswith",
+            "time.monotonic_ns",
+        }
+    ),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {
+            "ctypes.Structure",
+            "ctypes.byref",
+            "ctypes.c_size_t",
+            "ctypes.c_ulong",
+            "ctypes.sizeof",
+            "ctypes.windll",
+            "ctypes.windll.kernel32",
+            "ctypes.windll.kernel32.GetCurrentProcess",
+            "ctypes.windll.psapi",
+            "ctypes.windll.psapi.GetProcessMemoryInfo",
+            "os.environ",
+            "subprocess.run",
+            "sys.platform",
+            "sys.platform.startswith",
+            "time.monotonic_ns",
+        }
+    ),
+    "src/mdcp/temporal/cli.py": frozenset({"argparse.ArgumentParser"}),
+    "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
 }
 _FILE_ACCESS_METHODS = frozenset(
     {
@@ -479,6 +589,21 @@ _ALLOWED_FILE_ACCESS_CALLS = {
     "src/mdcp/temporal/golden_vectors.py": frozenset(
         {("verify_golden_vector_manifest", "read_bytes", "name:path")}
     ),
+    "src/mdcp/temporal/runtime_guards.py": frozenset(
+        {
+            ("_linux_peak_process_bytes", "read_text", "Path:/proc/self/status"),
+            ("_repository_inventory", "read_bytes", "name:working_path"),
+        }
+    ),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {("_linux_peak_resident_bytes", "read_text", "Path:/proc/self/status")}
+    ),
+    "src/mdcp/temporal/search_identity.py": frozenset(
+        {
+            ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
+            ("_read_expected_public_file", "read_bytes", "name:expected_path"),
+        }
+    ),
 }
 _ALLOWED_ENVIRONMENT_KEYS = {
     "src/mdcp/predictor/app_v2.py": frozenset(
@@ -488,7 +613,18 @@ _ALLOWED_ENVIRONMENT_KEYS = {
             "MDCP_RELEASE_ID",
             "MDCP_ROUTE_REVISION",
         }
-    )
+    ),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "BLIS_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "LOKY_MAX_CPU_COUNT",
+            "JOBLIB_MULTIPROCESSING",
+        }
+    ),
 }
 _PROTECTED_PATH_PARAMETER_FUNCTIONS = {
     "src/mdcp/temporal/contract_gate.py": frozenset({"_checked_json", "_path_digest"}),
@@ -538,6 +674,43 @@ _PINNED_FILE_CAPABILITY_MODULES = {
     "src/mdcp/temporal/golden_vectors.py": (
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
+    "src/mdcp/temporal/runtime_guards.py": (
+        "82b6c7c9dd66ad2a52880d07c033094f1d3c88a2c48995575c3c7843bbf13603"
+    ),
+    "src/mdcp/temporal/runner.py": (
+        "2cdd8e9d5f3aad8b2919c620282e4ece281382c1fbca35e1994f7bf058e1ad77"
+    ),
+    "src/mdcp/temporal/search_identity.py": (
+        "a0b704e9b33e5feeacd41545f966e48e6ad86132e87da17ba4e4bbb2130288a2"
+    ),
+}
+_ALLOWED_PRIVATE_ATTRIBUTES = {
+    "src/mdcp/temporal/runtime_guards.py": frozenset(
+        {
+            "_expected_head",
+            "_monotonic_ns",
+            "_peak_process_bytes",
+            "_repository_inventory_sha256",
+            "_repository_root",
+            "_start_ns",
+            "_tracked_paths",
+            "_unknown",
+        }
+    ),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {"_record_final", "_record_replay", "_record_selection", "_records", "_replay_trial_id"}
+    ),
+}
+_ALLOWED_SUBPROCESS_CALLS = {
+    "src/mdcp/temporal/runtime_guards.py": {
+        "_repository_head": ("git", "rev-parse", "HEAD"),
+        "_repository_is_dirty": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+        "_tracked_paths": ("git", "ls-tree", "-r", "--name-only", "name:expected_head"),
+    },
+    "src/mdcp/temporal/runner.py": {
+        "_repository_is_clean": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+    },
+    "src/mdcp/temporal/search_identity.py": {"_git": ("git", "name:arguments")},
 }
 _SENSITIVE_FILE_CALLABLE_SCOPES = {
     "src/mdcp/temporal/contract_gate.py": {
@@ -832,6 +1005,13 @@ def _file_receiver_identity(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
         return f"name:{node.id}"
     if (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Div)
+        and isinstance(node.left, ast.Name)
+        and isinstance(node.right, ast.Name)
+    ):
+        return f"Path:{node.left.id}/{node.right.id}"
+    if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "Path"
@@ -839,6 +1019,8 @@ def _file_receiver_identity(node: ast.expr) -> str | None:
         and not node.keywords
     ):
         argument = node.args[0]
+        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            return f"Path:{argument.value}"
         if isinstance(argument, ast.Name) and argument.id == "__file__":
             return "Path:__file__"
         if (
@@ -1025,6 +1207,11 @@ def _environment_access_allowed(
     allowed_keys = _ALLOWED_ENVIRONMENT_KEYS.get(logical_path, frozenset())
     parent = parents.get(node)
     if qualified_name == "os.environ":
+        if logical_path == "src/mdcp/temporal/runner.py" and isinstance(parent, ast.Subscript):
+            return isinstance(parent.ctx, ast.Store) and (
+                isinstance(parent.slice, ast.Name) and parent.slice.id == "_thread_environment_name"
+                or _constant_string(parent.slice) == "JOBLIB_MULTIPROCESSING"
+            )
         return (
             isinstance(parent, ast.Subscript)
             and parent.value is node
@@ -1040,6 +1227,79 @@ def _environment_access_allowed(
             and _constant_string(parent.args[0]) in allowed_keys
         )
     return True
+
+
+def _subprocess_argument_identity(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return f"name:{node.id}"
+    return None
+
+
+def _allowed_subprocess_call(
+    node: ast.Call,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    if not isinstance(node.func, ast.Attribute) or node.func.attr != "run":
+        return False
+    if (
+        not isinstance(node.func.value, ast.Name)
+        or node.func.value.id != "subprocess"
+        or len(node.args) != 1
+    ):
+        return False
+    if not isinstance(node.args[0], ast.Tuple):
+        return False
+    command = tuple(
+        (
+            f"name:{argument.value.id}"
+            if isinstance(argument, ast.Starred) and isinstance(argument.value, ast.Name)
+            else _subprocess_argument_identity(argument)
+        )
+        for argument in node.args[0].elts
+    )
+    expected = _ALLOWED_SUBPROCESS_CALLS.get(logical_path, {}).get(
+        _enclosing_function(node, parents)
+    )
+    if command != expected:
+        return False
+    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+    expected_cwd_name = (
+        "root" if logical_path == "src/mdcp/temporal/search_identity.py" else "repository_root"
+    )
+    return (
+        set(keywords) == {"cwd", "check", "capture_output", "text"}
+        and isinstance(keywords["cwd"], ast.Name)
+        and keywords["cwd"].id == expected_cwd_name
+        and isinstance(keywords["check"], ast.Constant)
+        and keywords["check"].value is False
+        and isinstance(keywords["capture_output"], ast.Constant)
+        and keywords["capture_output"].value is True
+        and isinstance(keywords["text"], ast.Constant)
+        and keywords["text"].value is True
+    )
+
+
+def _allowed_getattr_reference(
+    node: ast.Name,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    parent = parents.get(node)
+    return (
+        logical_path == "src/mdcp/temporal/search_identity.py"
+        and node.id == "getattr"
+        and isinstance(parent, ast.Call)
+        and parent.func is node
+        and _enclosing_function(node, parents) == "_bound_digests_recompute"
+        and len(parent.args) == 2
+        and not parent.keywords
+        and all(isinstance(argument, ast.Name) for argument in parent.args)
+        and parent.args[0].id == "receipt"
+        and parent.args[1].id == "field_name"
+    )
 
 
 def _import_allowed(logical_path: str, module: str, imported_name: str | None) -> bool:
@@ -1063,7 +1323,15 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                 root_module = alias.name.split(".", 1)[0]
                 if (
                     root_module in _DYNAMIC_IMPORT_MODULES | _REFLECTION_MODULES
-                    or (root_module == "sys" and logical_path != _TRUSTED_FIREWALL_PATH)
+                    or (
+                        root_module == "sys"
+                        and logical_path
+                        not in {
+                            _TRUSTED_FIREWALL_PATH,
+                            "src/mdcp/temporal/runtime_guards.py",
+                            "src/mdcp/temporal/runner.py",
+                        }
+                    )
                     or _is_forbidden_module(alias.name)
                 ):
                     _fail()
@@ -1079,7 +1347,13 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                 _fail()
             root_module = module.split(".", 1)[0]
             if root_module in _DYNAMIC_IMPORT_MODULES | _REFLECTION_MODULES or (
-                root_module == "sys" and logical_path != _TRUSTED_FIREWALL_PATH
+                root_module == "sys"
+                and logical_path
+                not in {
+                    _TRUSTED_FIREWALL_PATH,
+                    "src/mdcp/temporal/runtime_guards.py",
+                    "src/mdcp/temporal/runner.py",
+                }
             ):
                 _fail()
             if any(alias.name == "*" for alias in node.names):
@@ -1202,6 +1476,14 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
             )
         ):
             _fail()
+        if (
+            isinstance(node, ast.Attribute)
+            and _attribute_name(node, bindings) == "subprocess.run"
+            and isinstance(parents.get(node), ast.Call)
+            and parents[node].func is node
+            and not _allowed_subprocess_call(parents[node], logical_path, parents)
+        ):
+            _fail()
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
             if qualified_name in _SENSITIVE_FILE_CALLABLE_SCOPES.get(
@@ -1226,12 +1508,19 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                     and qualified_name == "__file__"
                     and _allowed_file_source_name(node, logical_path, parents)
                 )
+                and not (
+                    isinstance(node, ast.Name)
+                    and qualified_name == "getattr"
+                    and _allowed_getattr_reference(node, logical_path, parents)
+                )
             ) or (
                 isinstance(node, ast.Attribute)
                 and (
                     (
                         node.attr.startswith("_")
                         and not _allowed_dunder_attribute(node, logical_path, parents)
+                        and node.attr
+                        not in _ALLOWED_PRIVATE_ATTRIBUTES.get(logical_path, frozenset())
                     )
                     or node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
                     or (qualified_name is not None and _is_forbidden_module(qualified_name))
