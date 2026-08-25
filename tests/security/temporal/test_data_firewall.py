@@ -821,6 +821,23 @@ def test_static_firewall_rejects_unapproved_run_evidence_native_symbol(
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
+def test_static_firewall_rejects_unapproved_windows_native_symbol(
+    tmp_path: Path,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    needle = "ctypes.windll.ntdll.NtCreateFile"
+    assert source.count(needle) == 1
+    _write_logical_module(
+        tmp_path,
+        logical_path,
+        source.replace(needle, "ctypes.windll.ntdll.NtOpenFile", 1),
+    )
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 def test_static_firewall_allows_exact_fold_timestamp_normalization(tmp_path: Path) -> None:
     logical_path = "src/mdcp/temporal/folds.py"
     _write_logical_module(

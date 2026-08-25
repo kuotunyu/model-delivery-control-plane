@@ -4,8 +4,10 @@ import ctypes
 import errno
 import json
 import os
+import stat
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -417,7 +419,7 @@ def test_posix_staging_handle_is_closed_when_identity_check_fails(
     monkeypatch.setattr(run_evidence.os, "close", closed.append)
 
     with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        run_evidence._posix_open_owned_staging(40, ".new-run.staging")
+        run_evidence._posix_open_owned_staging(40, ".new-run.staging", (10, 20))
 
     assert closed == [41]
 
@@ -546,3 +548,167 @@ def test_private_identity_rejects_boolean_counts_without_echoing_input() -> None
         )
 
     assert "True" not in str(caught.value)
+
+
+def test_posix_staging_open_rejects_normal_directory_swapped_after_identity_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_identity = (10, 20)
+    replacement = SimpleNamespace(st_dev=30, st_ino=40, st_mode=stat.S_IFDIR)
+    closed: list[int] = []
+    monkeypatch.setattr(run_evidence, "_posix_directory_flags", lambda: 0)
+    monkeypatch.setattr(run_evidence.os, "open", lambda *_args, **_kwargs: 41)
+    monkeypatch.setattr(run_evidence.os, "fstat", lambda _descriptor: replacement)
+    monkeypatch.setattr(
+        run_evidence.os,
+        "stat",
+        lambda *_args, **_kwargs: replacement,
+    )
+    monkeypatch.setattr(run_evidence.os, "close", closed.append)
+
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        run_evidence._posix_open_owned_staging(
+            40,
+            ".new-run.staging",
+            created_identity,
+        )
+
+    assert closed == [41]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows atomic directory-create semantics")
+def test_windows_normal_directory_swap_cannot_redirect_bundle_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_create = run_evidence._windows_nt_create_relative
+    owned_paths: dict[int, Path] = {}
+    swaps = 0
+
+    def swap_after_create(
+        parent_handle: int,
+        name: str,
+        is_directory: bool,
+        share_mode: int,
+    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
+        nonlocal swaps
+        result = original_create(parent_handle, name, is_directory, share_mode)
+        handle, _, _ = result
+        if handle is None or not is_directory:
+            return result
+        path = owned_paths.get(parent_handle, tmp_path) / name
+        displaced = path.parent / f".invocation-owned-{swaps}"
+        try:
+            os.rename(path, displaced)
+        except OSError:
+            owned_paths[handle] = path
+            return result
+        swaps += 1
+        owned_paths[handle] = displaced
+        path.mkdir()
+        (path / "attacker-sentinel.json").write_text("{}", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(
+        run_evidence,
+        "_windows_nt_create_relative",
+        swap_after_create,
+    )
+
+    destination = tmp_path / "new-run"
+    staging = tmp_path / ".new-run.staging"
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert swaps >= 1
+    assert not destination.exists()
+    assert (staging / "private" / "attacker-sentinel.json").read_text(encoding="utf-8") == "{}"
+    assert not (staging / "private" / "folds" / "F1.json").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows identity-bound cleanup semantics")
+def test_windows_cleanup_does_not_delete_attacker_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "new-run"
+    staging = tmp_path / ".new-run.staging"
+    replacement = b'{"attacker":true}'
+    stolen = tmp_path / "stolen-F1.json"
+    original_publish = run_evidence._windows_rename_noreplace
+
+    def replace_before_cleanup(staging_handle: int, target: Path) -> None:
+        source = staging / "private" / "folds" / "F1.json"
+        os.rename(source, stolen)
+        source.write_bytes(replacement)
+        target.mkdir()
+        original_publish(staging_handle, target)
+
+    monkeypatch.setattr(
+        run_evidence,
+        "_windows_rename_noreplace",
+        replace_before_cleanup,
+    )
+
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert str(caught.value) == "PUBLICATION_FAILED"
+    assert (staging / "private" / "folds" / "F1.json").read_bytes() == replacement
+    assert stolen.is_file()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows identity-bound cleanup semantics")
+def test_windows_cleanup_delete_failure_is_terminal_and_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "new-run"
+    staging = tmp_path / ".new-run.staging"
+    original_publish = run_evidence._windows_rename_noreplace
+
+    def collide(staging_handle: int, target: Path) -> None:
+        target.mkdir()
+        original_publish(staging_handle, target)
+
+    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", collide)
+    monkeypatch.setattr(
+        run_evidence,
+        "_windows_set_delete_disposition",
+        lambda _handle: False,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert str(caught.value) == "PUBLICATION_FAILED"
+    assert staging.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows identity-bound cleanup semantics")
+def test_windows_cleanup_flush_failure_is_terminal_and_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "new-run"
+    original_publish = run_evidence._windows_rename_noreplace
+    original_flush = run_evidence._windows_flush
+    cleanup_started = False
+
+    def collide(staging_handle: int, target: Path) -> None:
+        nonlocal cleanup_started
+        target.mkdir()
+        try:
+            original_publish(staging_handle, target)
+        finally:
+            cleanup_started = True
+
+    def fail_cleanup_flush(handle: int) -> None:
+        if cleanup_started:
+            raise run_evidence._PublicationError("PUBLICATION_FAILED")
+        original_flush(handle)
+
+    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", collide)
+    monkeypatch.setattr(run_evidence, "_windows_flush", fail_cleanup_flush)
+
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert str(caught.value) == "PUBLICATION_FAILED"

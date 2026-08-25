@@ -42,9 +42,18 @@ _WINDOWS_RESERVED_NAMES = frozenset(
 _RENAME_NOREPLACE = 1
 
 _WINDOWS_DELETE = 0x00010000
+_WINDOWS_SYNCHRONIZE = 0x00100000
+_WINDOWS_FILE_LIST_DIRECTORY = 0x00000001
+_WINDOWS_FILE_WRITE_DATA = 0x00000002
+_WINDOWS_FILE_APPEND_DATA = 0x00000004
+_WINDOWS_FILE_ADD_FILE = 0x00000002
+_WINDOWS_FILE_ADD_SUBDIRECTORY = 0x00000004
+_WINDOWS_FILE_TRAVERSE = 0x00000020
 _WINDOWS_FILE_READ_ATTRIBUTES = 0x00000080
+_WINDOWS_FILE_WRITE_ATTRIBUTES = 0x00000100
 _WINDOWS_GENERIC_WRITE = 0x40000000
 _WINDOWS_FILE_SHARE_READ_WRITE = 0x00000003
+_WINDOWS_FILE_SHARE_ALL = 0x00000007
 _WINDOWS_CREATE_NEW = 1
 _WINDOWS_OPEN_EXISTING = 3
 _WINDOWS_FILE_ATTRIBUTE_DIRECTORY = 0x00000010
@@ -60,6 +69,15 @@ _WINDOWS_ERROR_FILE_NOT_FOUND = 2
 _WINDOWS_ERROR_PATH_NOT_FOUND = 3
 _WINDOWS_ERROR_FILE_EXISTS = 80
 _WINDOWS_ERROR_ALREADY_EXISTS = 183
+_WINDOWS_OBJECT_CASE_INSENSITIVE = 0x00000040
+_WINDOWS_FILE_OPEN = 1
+_WINDOWS_FILE_CREATE = 2
+_WINDOWS_FILE_DIRECTORY_FILE = 0x00000001
+_WINDOWS_FILE_WRITE_THROUGH = 0x00000002
+_WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
+_WINDOWS_FILE_NON_DIRECTORY_FILE = 0x00000040
+_WINDOWS_STATUS_OBJECT_NAME_NOT_FOUND = -1073741772
+_WINDOWS_STATUS_OBJECT_NAME_COLLISION = -1073741771
 
 
 class _WindowsFileInformation(ctypes.Structure):
@@ -88,6 +106,36 @@ class _WindowsRenameInformation(ctypes.Structure):
 
 class _WindowsDispositionInformation(ctypes.Structure):
     _fields_ = (("DeleteFile", wintypes.BOOL),)
+
+
+class _WindowsUnicodeString(ctypes.Structure):
+    _fields_ = (
+        ("Length", wintypes.USHORT),
+        ("MaximumLength", wintypes.USHORT),
+        ("Buffer", wintypes.LPWSTR),
+    )
+
+
+class _WindowsObjectAttributes(ctypes.Structure):
+    _fields_ = (
+        ("Length", wintypes.ULONG),
+        ("RootDirectory", wintypes.HANDLE),
+        ("ObjectName", ctypes.POINTER(_WindowsUnicodeString)),
+        ("Attributes", wintypes.ULONG),
+        ("SecurityDescriptor", ctypes.c_void_p),
+        ("SecurityQualityOfService", ctypes.c_void_p),
+    )
+
+
+class _WindowsIoStatusValue(ctypes.Union):
+    _fields_ = (("Status", wintypes.LONG), ("Pointer", ctypes.c_void_p))
+
+
+class _WindowsIoStatusBlock(ctypes.Structure):
+    _fields_ = (
+        ("StatusOrPointer", _WindowsIoStatusValue),
+        ("Information", ctypes.c_size_t),
+    )
 
 
 def _is_windows_alias_component(value: str) -> bool:
@@ -453,7 +501,35 @@ def _posix_identity(info: os.stat_result) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
-def _posix_open_owned_staging(parent: int, name: str) -> tuple[int, tuple[int, int]]:
+def _posix_create_owned_directory(
+    parent: int,
+    name: str,
+    collision_code: str,
+) -> tuple[int, int]:
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent)
+    except FileExistsError:
+        raise _PublicationError(collision_code) from None
+    try:
+        created = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISDIR(created.st_mode):
+            raise _PublicationError("PUBLICATION_FAILED")
+        return _posix_identity(created)
+    except _PublicationError:
+        raise
+    except OSError:
+        raise _PublicationError("PUBLICATION_FAILED") from None
+
+
+def _posix_create_owned_staging(parent: int, name: str) -> tuple[int, int]:
+    return _posix_create_owned_directory(parent, name, "STAGING_EXISTS")
+
+
+def _posix_open_owned_staging(
+    parent: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> tuple[int, tuple[int, int]]:
     descriptor = -1
     try:
         descriptor = os.open(name, _posix_directory_flags(), dir_fd=parent)
@@ -462,6 +538,8 @@ def _posix_open_owned_staging(parent: int, name: str) -> tuple[int, tuple[int, i
         if (
             not stat.S_ISDIR(opened.st_mode)
             or not stat.S_ISDIR(named.st_mode)
+            or _posix_identity(opened) != expected_identity
+            or _posix_identity(named) != expected_identity
             or _posix_identity(opened) != _posix_identity(named)
         ):
             raise _PublicationError("PUBLICATION_FAILED")
@@ -511,9 +589,17 @@ def _posix_write_layout(
                 parent = directories[prefix]
                 prefix = (*prefix, component)
                 if prefix not in directories:
-                    os.mkdir(component, 0o700, dir_fd=parent)
+                    created_identity = _posix_create_owned_directory(
+                        parent,
+                        component,
+                        "PUBLICATION_FAILED",
+                    )
                     os.fsync(parent)
-                    descriptor = os.open(component, _posix_directory_flags(), dir_fd=parent)
+                    descriptor, _ = _posix_open_owned_staging(
+                        parent,
+                        component,
+                        created_identity,
+                    )
                     directories[prefix] = descriptor
                     opened.append(descriptor)
             _posix_write_file(directories[prefix], parts[-1], item.canonical_bytes)
@@ -621,12 +707,13 @@ def _publish_posix_bundle(
     published = False
     try:
         _posix_require_absent(parent, destination.name, "DESTINATION_EXISTS")
-        try:
-            os.mkdir(staging_name, 0o700, dir_fd=parent)
-        except FileExistsError:
-            raise _PublicationError("STAGING_EXISTS") from None
+        created_identity = _posix_create_owned_staging(parent, staging_name)
         os.fsync(parent)
-        staging, staging_identity = _posix_open_owned_staging(parent, staging_name)
+        staging, staging_identity = _posix_open_owned_staging(
+            parent,
+            staging_name,
+            created_identity,
+        )
         _posix_write_layout(staging, files, manifest)
         current = os.stat(staging_name, dir_fd=parent, follow_symlinks=False)
         if _posix_identity(current) != staging_identity:
@@ -705,6 +792,123 @@ def _windows_directory_information(handle: int) -> tuple[int, tuple[int, int, in
         information.dwVolumeSerialNumber,
         information.nFileIndexHigh,
         information.nFileIndexLow,
+    )
+
+
+def _windows_nt_relative_file(
+    parent_handle: int,
+    name: str,
+    is_directory: bool,
+    share_mode: int,
+    create_disposition: int,
+) -> tuple[int | None, tuple[int, int, int] | None, int]:
+    name_buffer = ctypes.create_unicode_buffer(name)
+    name_length = len(name.encode("utf-16-le"))
+    unicode_name = _WindowsUnicodeString(
+        Length=name_length,
+        MaximumLength=name_length + 2,
+        Buffer=ctypes.cast(name_buffer, wintypes.LPWSTR),
+    )
+    attributes = _WindowsObjectAttributes(
+        Length=ctypes.sizeof(_WindowsObjectAttributes),
+        RootDirectory=parent_handle,
+        ObjectName=ctypes.pointer(unicode_name),
+        Attributes=_WINDOWS_OBJECT_CASE_INSENSITIVE,
+        SecurityDescriptor=None,
+        SecurityQualityOfService=None,
+    )
+    io_status = _WindowsIoStatusBlock()
+    output_handle = wintypes.HANDLE()
+    nt_create_file = ctypes.windll.ntdll.NtCreateFile
+    nt_create_file.argtypes = (
+        ctypes.POINTER(wintypes.HANDLE),
+        wintypes.ULONG,
+        ctypes.POINTER(_WindowsObjectAttributes),
+        ctypes.POINTER(_WindowsIoStatusBlock),
+        ctypes.c_void_p,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        ctypes.c_void_p,
+        wintypes.ULONG,
+    )
+    nt_create_file.restype = wintypes.LONG
+    desired_access = (
+        _WINDOWS_SYNCHRONIZE
+        | _WINDOWS_DELETE
+        | _WINDOWS_FILE_READ_ATTRIBUTES
+        | _WINDOWS_FILE_WRITE_ATTRIBUTES
+    )
+    if is_directory:
+        desired_access |= (
+            _WINDOWS_FILE_LIST_DIRECTORY
+            | _WINDOWS_FILE_ADD_FILE
+            | _WINDOWS_FILE_ADD_SUBDIRECTORY
+            | _WINDOWS_FILE_TRAVERSE
+        )
+    else:
+        desired_access |= _WINDOWS_FILE_WRITE_DATA | _WINDOWS_FILE_APPEND_DATA
+    create_options = _WINDOWS_FILE_WRITE_THROUGH | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
+    create_options |= (
+        _WINDOWS_FILE_DIRECTORY_FILE if is_directory else _WINDOWS_FILE_NON_DIRECTORY_FILE
+    )
+    status = int(
+        nt_create_file(
+            ctypes.byref(output_handle),
+            desired_access,
+            ctypes.byref(attributes),
+            ctypes.byref(io_status),
+            None,
+            _WINDOWS_FILE_ATTRIBUTE_NORMAL,
+            share_mode,
+            create_disposition,
+            create_options,
+            None,
+            0,
+        )
+    )
+    if status < 0:
+        return None, None, status
+    handle = int(output_handle.value)
+    try:
+        file_attributes, identity = _windows_directory_information(handle)
+        if bool(file_attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY) != is_directory:
+            raise _PublicationError("PUBLICATION_FAILED")
+        if file_attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT:
+            raise _PublicationError("PUBLICATION_FAILED")
+        return handle, identity, 0
+    except Exception:
+        _windows_close(handle)
+        raise
+
+
+def _windows_nt_create_relative(
+    parent_handle: int,
+    name: str,
+    is_directory: bool,
+    share_mode: int,
+) -> tuple[int | None, tuple[int, int, int] | None, int]:
+    return _windows_nt_relative_file(
+        parent_handle,
+        name,
+        is_directory,
+        share_mode,
+        _WINDOWS_FILE_CREATE,
+    )
+
+
+def _windows_nt_open_relative(
+    parent_handle: int,
+    name: str,
+    is_directory: bool,
+) -> tuple[int | None, tuple[int, int, int] | None, int]:
+    return _windows_nt_relative_file(
+        parent_handle,
+        name,
+        is_directory,
+        _WINDOWS_FILE_SHARE_ALL,
+        _WINDOWS_FILE_OPEN,
     )
 
 
@@ -789,15 +993,6 @@ def _windows_require_destination_absent(destination: Path) -> None:
     raise _PublicationError("DESTINATION_EXISTS")
 
 
-def _windows_create_directory(path: Path) -> tuple[bool, int]:
-    create_directory = ctypes.windll.kernel32.CreateDirectoryW
-    create_directory.argtypes = (wintypes.LPCWSTR, ctypes.c_void_p)
-    create_directory.restype = wintypes.BOOL
-    if create_directory(str(path), None):
-        return True, 0
-    return False, _windows_last_error()
-
-
 def _windows_flush(handle: int) -> None:
     flush_file_buffers = ctypes.windll.kernel32.FlushFileBuffers
     flush_file_buffers.argtypes = (wintypes.HANDLE,)
@@ -806,16 +1001,22 @@ def _windows_flush(handle: int) -> None:
         raise _PublicationError("PUBLICATION_FAILED")
 
 
-def _windows_write_file(path: Path, content: bytes, created_files: list[Path]) -> None:
-    handle, _ = _windows_create_file(
-        path,
-        _WINDOWS_GENERIC_WRITE,
-        _WINDOWS_CREATE_NEW,
-        _WINDOWS_FILE_ATTRIBUTE_NORMAL,
+def _windows_write_file(
+    parent_handle: int,
+    name: str,
+    logical_components: tuple[str, ...],
+    content: bytes,
+    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
+) -> None:
+    handle, identity, _ = _windows_nt_create_relative(
+        parent_handle,
+        name,
+        False,
+        _WINDOWS_FILE_SHARE_ALL,
     )
-    if handle is None:
+    if handle is None or identity is None:
         raise _PublicationError("PUBLICATION_FAILED")
-    created_files.append(path)
+    created_entries.append((logical_components, False, identity))
     try:
         write_file = ctypes.windll.kernel32.WriteFile
         write_file.argtypes = (
@@ -846,42 +1047,48 @@ def _windows_write_file(path: Path, content: bytes, created_files: list[Path]) -
 
 
 def _windows_write_layout(
-    staging_path: Path,
     staging_handle: int,
     files: tuple[PrivateFoldEvidence, ...],
     manifest: bytes,
-    created_files: list[Path],
-    created_directories: list[Path],
+    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
     directory_handles: list[int],
 ) -> None:
-    directories: dict[tuple[str, ...], tuple[Path, int]] = {(): (staging_path, staging_handle)}
+    directories: dict[tuple[str, ...], int] = {(): staging_handle}
     for item in files:
         parts = PurePosixPath(item.logical_path).parts
         prefix: tuple[str, ...] = ()
         for component in parts[:-1]:
-            parent_path, parent_handle = directories[prefix]
+            parent_handle = directories[prefix]
             prefix = (*prefix, component)
             if prefix not in directories:
-                path = parent_path / component
-                created, _ = _windows_create_directory(path)
-                if not created:
-                    raise _PublicationError("PUBLICATION_FAILED")
-                handle, identity, _ = _windows_open_directory(
-                    path,
-                    _WINDOWS_GENERIC_WRITE | _WINDOWS_DELETE | _WINDOWS_FILE_READ_ATTRIBUTES,
+                handle, identity, _ = _windows_nt_create_relative(
+                    parent_handle,
+                    component,
+                    True,
+                    _WINDOWS_FILE_SHARE_ALL,
                 )
                 if handle is None or identity is None:
                     raise _PublicationError("PUBLICATION_FAILED")
-                created_directories.append(path)
+                created_entries.append((prefix, True, identity))
                 directory_handles.append(handle)
-                directories[prefix] = (path, handle)
+                directories[prefix] = handle
                 _windows_flush(parent_handle)
-        parent_path, parent_handle = directories[prefix]
-        path = parent_path / parts[-1]
-        _windows_write_file(path, item.canonical_bytes, created_files)
+        parent_handle = directories[prefix]
+        _windows_write_file(
+            parent_handle,
+            parts[-1],
+            parts,
+            item.canonical_bytes,
+            created_entries,
+        )
         _windows_flush(parent_handle)
-    manifest_path = staging_path / "manifest.json"
-    _windows_write_file(manifest_path, manifest, created_files)
+    _windows_write_file(
+        staging_handle,
+        "manifest.json",
+        ("manifest.json",),
+        manifest,
+        created_entries,
+    )
     _windows_flush(staging_handle)
     for handle in reversed(directory_handles):
         _windows_flush(handle)
@@ -922,21 +1129,7 @@ def _windows_rename_noreplace(staging_handle: int, destination: Path) -> None:
     raise _PublicationError("PUBLICATION_FAILED") from None
 
 
-def _windows_delete_file(path: Path) -> None:
-    delete_file = ctypes.windll.kernel32.DeleteFileW
-    delete_file.argtypes = (wintypes.LPCWSTR,)
-    delete_file.restype = wintypes.BOOL
-    delete_file(str(path))
-
-
-def _windows_remove_directory(path: Path) -> None:
-    remove_directory = ctypes.windll.kernel32.RemoveDirectoryW
-    remove_directory.argtypes = (wintypes.LPCWSTR,)
-    remove_directory.restype = wintypes.BOOL
-    remove_directory(str(path))
-
-
-def _windows_mark_directory_for_deletion(handle: int) -> None:
+def _windows_set_delete_disposition(handle: int) -> bool:
     information = _WindowsDispositionInformation(DeleteFile=True)
     set_information = ctypes.windll.kernel32.SetFileInformationByHandle
     set_information.argtypes = (
@@ -946,31 +1139,100 @@ def _windows_mark_directory_for_deletion(handle: int) -> None:
         wintypes.DWORD,
     )
     set_information.restype = wintypes.BOOL
-    set_information(
-        handle,
-        _WINDOWS_FILE_DISPOSITION_INFO,
-        ctypes.byref(information),
-        ctypes.sizeof(information),
+    return bool(
+        set_information(
+            handle,
+            _WINDOWS_FILE_DISPOSITION_INFO,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        )
     )
+
+
+def _windows_open_verified_layout(
+    staging_handle: int,
+    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
+) -> tuple[list[tuple[tuple[str, ...], int]], list[int]]:
+    directories: dict[tuple[str, ...], int] = {(): staging_handle}
+    opened_directories: list[tuple[tuple[str, ...], int]] = []
+    opened_files: list[int] = []
+    try:
+        for components, is_directory, expected_identity in created_entries:
+            parent_handle = directories[components[:-1]]
+            handle, identity, _ = _windows_nt_open_relative(
+                parent_handle,
+                components[-1],
+                is_directory,
+            )
+            if handle is None or identity != expected_identity:
+                if handle is not None:
+                    _windows_close(handle)
+                raise _PublicationError("PUBLICATION_FAILED")
+            if is_directory:
+                directories[components] = handle
+                opened_directories.append((components, handle))
+            else:
+                opened_files.append(handle)
+        return opened_directories, opened_files
+    except Exception:
+        for handle in opened_files:
+            _windows_close(handle)
+        for _, handle in reversed(opened_directories):
+            _windows_close(handle)
+        raise
+
+
+def _windows_verify_owned_layout(
+    staging_handle: int,
+    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
+) -> None:
+    opened_directories, opened_files = _windows_open_verified_layout(
+        staging_handle,
+        created_entries,
+    )
+    for handle in opened_files:
+        _windows_close(handle)
+    for _, handle in reversed(opened_directories):
+        _windows_close(handle)
 
 
 def _cleanup_windows_staging(
     staging_handle: int,
-    created_files: list[Path],
-    created_directories: list[Path],
+    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
 ) -> None:
-    for path in reversed(created_files):
-        _windows_delete_file(path)
-    for path in reversed(created_directories):
-        _windows_remove_directory(path)
-    _windows_mark_directory_for_deletion(staging_handle)
-
-
-def _windows_flush_cleanup(handle: int) -> None:
+    opened_directories, opened_files = _windows_open_verified_layout(
+        staging_handle,
+        created_entries,
+    )
     try:
-        _windows_flush(handle)
-    except _PublicationError:
-        return
+        while opened_files:
+            handle = opened_files.pop(0)
+            if not _windows_set_delete_disposition(handle):
+                _windows_close(handle)
+                raise _PublicationError("PUBLICATION_FAILED")
+            _windows_close(handle)
+        while opened_directories:
+            _, handle = opened_directories.pop()
+            if not _windows_set_delete_disposition(handle):
+                _windows_close(handle)
+                raise _PublicationError("PUBLICATION_FAILED")
+            _windows_close(handle)
+        if not _windows_set_delete_disposition(staging_handle):
+            raise _PublicationError("PUBLICATION_FAILED")
+    finally:
+        for handle in opened_files:
+            _windows_close(handle)
+        for _, handle in reversed(opened_directories):
+            _windows_close(handle)
+
+
+def _windows_require_staging_absent(parent_handle: int, staging_name: str) -> None:
+    handle, _, status = _windows_nt_open_relative(parent_handle, staging_name, True)
+    if handle is not None:
+        _windows_close(handle)
+        raise _PublicationError("PUBLICATION_FAILED")
+    if status != _WINDOWS_STATUS_OBJECT_NAME_NOT_FOUND:
+        raise _PublicationError("PUBLICATION_FAILED")
 
 
 def _publish_windows_bundle(
@@ -980,38 +1242,36 @@ def _publish_windows_bundle(
 ) -> None:
     ancestors = _windows_open_trusted_ancestors(destination.parent)
     parent_handle = ancestors[-1][1]
-    staging_path = destination.parent / f".{destination.name}.staging"
+    staging_name = f".{destination.name}.staging"
     staging_handle: int | None = None
-    created_files: list[Path] = []
-    created_directories: list[Path] = []
+    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]] = []
     directory_handles: list[int] = []
     published = False
+    cleanup_failed = False
     try:
         _windows_require_destination_absent(destination)
-        created, error = _windows_create_directory(staging_path)
-        if not created:
-            if error in (_WINDOWS_ERROR_FILE_EXISTS, _WINDOWS_ERROR_ALREADY_EXISTS):
-                raise _PublicationError("STAGING_EXISTS")
-            raise _PublicationError("PUBLICATION_FAILED")
-        staging_handle, identity, _ = _windows_open_directory(
-            staging_path,
-            _WINDOWS_GENERIC_WRITE | _WINDOWS_DELETE | _WINDOWS_FILE_READ_ATTRIBUTES,
+        staging_handle, identity, status = _windows_nt_create_relative(
+            parent_handle,
+            staging_name,
+            True,
+            _WINDOWS_FILE_SHARE_READ_WRITE,
         )
         if staging_handle is None or identity is None:
+            if status == _WINDOWS_STATUS_OBJECT_NAME_COLLISION:
+                raise _PublicationError("STAGING_EXISTS")
             raise _PublicationError("PUBLICATION_FAILED")
         _windows_flush(parent_handle)
         _windows_write_layout(
-            staging_path,
             staging_handle,
             files,
             manifest,
-            created_files,
-            created_directories,
+            created_entries,
             directory_handles,
         )
         for handle in reversed(directory_handles):
             _windows_close(handle)
         directory_handles.clear()
+        _windows_verify_owned_layout(staging_handle, created_entries)
         _windows_revalidate_ancestors(ancestors)
         attributes, current_identity = _windows_directory_information(staging_handle)
         if attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT or current_identity != identity:
@@ -1028,13 +1288,21 @@ def _publish_windows_bundle(
             _windows_close(handle)
         if staging_handle is not None:
             if not published:
-                _cleanup_windows_staging(
-                    staging_handle,
-                    created_files,
-                    created_directories,
-                )
+                try:
+                    _cleanup_windows_staging(staging_handle, created_entries)
+                except Exception:
+                    cleanup_failed = True
             _windows_close(staging_handle)
             if not published:
-                _windows_flush_cleanup(parent_handle)
+                try:
+                    _windows_flush(parent_handle)
+                except Exception:
+                    cleanup_failed = True
+                try:
+                    _windows_require_staging_absent(parent_handle, staging_name)
+                except Exception:
+                    cleanup_failed = True
         for _, handle, _ in reversed(ancestors):
             _windows_close(handle)
+        if cleanup_failed:
+            raise _PublicationError("PUBLICATION_FAILED") from None
