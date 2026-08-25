@@ -105,6 +105,7 @@ class FitLedger:
     """Append-only exact-order accounting for 80 selection and at most four replay fits."""
 
     _records: list[FitRecord] = field(default_factory=list, init=False, repr=False)
+    _selection_bound: bool = field(default=False, init=False, repr=False)
     _provisional: ProvisionalWinner | None = field(default=None, init=False, repr=False)
 
     @property
@@ -129,7 +130,7 @@ class FitLedger:
 
     def record_selection(self, trial_id: str, fold_id: str) -> None:
         """Reserve the next exact trial/fold selection fit."""
-        if self._provisional is not None or self.selection_count >= _SELECTION_LIMIT:
+        if self._selection_bound or self.selection_count >= _SELECTION_LIMIT:
             raise FitBudgetError("SELECTION_ALREADY_CONSUMED")
         trial_index, fold_index = divmod(self.selection_count, len(EXACT_FOLD_IDS))
         if (trial_id, fold_id) != (
@@ -139,32 +140,25 @@ class FitLedger:
             raise FitBudgetError("SELECTION_ORDER_INVALID")
         self._records.append(FitRecord(FitPhase.SELECTION, trial_id, fold_id))
 
-    def bind_provisional(self, provisional: ProvisionalWinner) -> None:
-        """Bind replay accounting once to the existing selection session's rank one."""
-        if self._provisional is not None:
-            raise FitBudgetError("PROVISIONAL_ALREADY_BOUND")
+    def bind_session(self, session: ReplaySelectionSession) -> ProvisionalWinner | None:
+        """Seal one exact session and return only its internally derived rank one."""
+        if self._selection_bound:
+            raise FitBudgetError("SELECTION_AUTHORITY_ALREADY_BOUND")
         if self.selection_count != _SELECTION_LIMIT:
             raise FitBudgetError("SELECTION_INCOMPLETE")
-        if type(provisional) is not ProvisionalWinner:
-            raise FitBudgetError("PROVISIONAL_WINNER_INVALID")
-        try:
-            identity = canonical_trial_identity(provisional.trial_id)
-        except ValueError as error:
-            raise FitBudgetError("PROVISIONAL_WINNER_INVALID") from error
-        if (
-            provisional.trial_id not in EXACT_TRIAL_IDS[1:]
-            or provisional.family_id != identity.family_id
-            or provisional.configuration_sha256 != identity.configuration_sha256
-            or type(provisional.fold_digests) is not tuple
-            or tuple(digest.fold_id for digest in provisional.fold_digests) != EXACT_FOLD_IDS
-        ):
-            raise FitBudgetError("PROVISIONAL_WINNER_INVALID")
+        if type(session) is not ReplaySelectionSession:
+            raise FitBudgetError("SELECTION_SESSION_INVALID")
+        provisional = session.ranked_provisional()
+        self._selection_bound = True
         self._provisional = provisional
+        return provisional
 
     def record_replay(self, trial_id: str, fold_id: str) -> None:
         """Reserve the next exact replay fold for the sole bound provisional winner."""
-        if self._provisional is None:
+        if not self._selection_bound:
             raise FitBudgetError("PROVISIONAL_WINNER_REQUIRED")
+        if self._provisional is None:
+            raise FitBudgetError("NO_PROVISIONAL_WINNER")
         if self.replay_count >= _REPLAY_LIMIT:
             raise FitBudgetError("REPLAY_ALREADY_CONSUMED")
         if trial_id != self._provisional.trial_id:
@@ -301,7 +295,7 @@ def _prediction_material(
 ) -> list[dict[str, object]]:
     return [
         {
-            "identity_sha256": outcome.identity.identity_sha256,
+            "identity": asdict(outcome.identity),
             "succeeded": outcome.succeeded,
             "value": outcome.value,
             "reason_code": outcome.reason_code,
@@ -310,28 +304,67 @@ def _prediction_material(
     ]
 
 
+def _fold_evidence_sha256(
+    result: _DevelopmentFoldResult,
+    stable: tuple[PredictionOutcome, ...],
+) -> str:
+    return sha256_hex(
+        canonicalize_json(
+            {
+                "trial_id": result.trial_id,
+                "fold_id": result.fold_id,
+                "contract_verdict": result.contract_verdict.value,
+                "inventory": [asdict(identity) for identity in result.inventory],
+                "adapters": [
+                    {
+                        "identity": asdict(outcome.identity),
+                        "succeeded": outcome.succeeded,
+                        "calendar_day": (
+                            outcome.calendar_day.isoformat()
+                            if outcome.calendar_day is not None
+                            else None
+                        ),
+                        "groups": list(outcome.groups),
+                        "reason_code": outcome.reason_code,
+                    }
+                    for outcome in result.adapters
+                ],
+                "stable_predictions": _prediction_material(stable),
+                "candidate_predictions": _prediction_material(result.predictions),
+                "labels": [
+                    {
+                        "identity": asdict(outcome.identity),
+                        "succeeded": outcome.succeeded,
+                        "value": outcome.value,
+                        "reason_code": outcome.reason_code,
+                    }
+                    for outcome in result.labels
+                ],
+                "declared_digests": {
+                    "preprocessing_state_sha256": result.preprocessing_state_sha256,
+                    "feature_vector_sha256": result.feature_vector_sha256,
+                    "prediction_vector_sha256": result.prediction_vector_sha256,
+                    "metric_sha256": result.metric_sha256,
+                    "receipt_sha256": result.receipt_sha256,
+                },
+            }
+        )
+    )
+
+
 def _qualification_digest(
     result: _DevelopmentFoldResult,
     stable: tuple[PredictionOutcome, ...],
 ) -> QualificationFoldDigests:
     identity = canonical_trial_identity(result.trial_id)
-    prediction_vector_sha256 = sha256_hex(
-        canonicalize_json(
-            {
-                "declared_prediction_vector_sha256": result.prediction_vector_sha256,
-                "stable": _prediction_material(stable),
-                "candidate": _prediction_material(result.predictions),
-            }
-        )
-    )
     return QualificationFoldDigests(
         fold_id=result.fold_id,
         configuration_sha256=identity.configuration_sha256,
         preprocessing_state_sha256=result.preprocessing_state_sha256,
         feature_vector_sha256=result.feature_vector_sha256,
-        prediction_vector_sha256=prediction_vector_sha256,
+        prediction_vector_sha256=result.prediction_vector_sha256,
         metric_sha256=result.metric_sha256,
-        receipt_sha256=result.receipt_sha256,
+        receipt_sha256=_fold_evidence_sha256(result, stable),
     )
 
 
@@ -612,11 +645,10 @@ def _run_development_core(
 
         qualification_tuple = tuple(qualifications)
         session = ReplaySelectionSession(qualification_tuple)
-        provisional = session.ranked_provisional()
+        provisional = ledger.bind_session(session)
         if provisional is None:
             selection = finalize_selection(session, None, None)
         else:
-            ledger.bind_provisional(provisional)
             replay_digests: list[ReplayFoldDigests] = []
             for fold_id in EXACT_FOLD_IDS:
                 result = _execute_fit(

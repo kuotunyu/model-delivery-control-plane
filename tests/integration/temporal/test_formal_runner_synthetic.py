@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -109,6 +110,7 @@ def _fold_result(
     one_qualified_trial: str | None,
     contract_invalid_trial: str | None,
     changed_replay_digest: bool,
+    changed_replay_evidence: str | None,
     changed_replay_predictions: bool,
     invalid_typed_verdict: bool,
 ) -> object:
@@ -140,6 +142,18 @@ def _fold_result(
     labels = tuple(
         LabelOutcome(identity=identity, succeeded=True, value=10.0) for identity in inventory
     )
+    if phase is runner.FitPhase.REPLAY and changed_replay_evidence == "labels":
+        labels = (replace(labels[0], value=11.0), *labels[1:])
+    if phase is runner.FitPhase.REPLAY and changed_replay_evidence == "adapters":
+        adapters = (
+            replace(
+                adapters[0],
+                groups=("weather_mist", "day_non_working", "demand_off_peak"),
+            ),
+            *adapters[1:],
+        )
+    if phase is runner.FitPhase.REPLAY and changed_replay_evidence == "inventory":
+        inventory = (replace(inventory[0], source_position=999), *inventory[1:])
     digest_phase = "changed" if phase is runner.FitPhase.REPLAY and changed_replay_digest else "fit"
     contract_verdict: object = (
         "PASS"
@@ -173,6 +187,7 @@ def _synthetic_plan(
     one_qualified_trial: str | None = "STAT-A1",
     contract_invalid_trial: str | None = None,
     changed_replay_digest: bool = False,
+    changed_replay_evidence: str | None = None,
     changed_replay_predictions: bool = False,
     invalid_typed_verdict: bool = False,
 ) -> tuple[object, list[tuple[runner.FitPhase, str, str]]]:
@@ -187,6 +202,7 @@ def _synthetic_plan(
             one_qualified_trial=one_qualified_trial,
             contract_invalid_trial=contract_invalid_trial,
             changed_replay_digest=changed_replay_digest,
+            changed_replay_evidence=changed_replay_evidence,
             changed_replay_predictions=changed_replay_predictions,
             invalid_typed_verdict=invalid_typed_verdict,
         )
@@ -226,6 +242,18 @@ def test_core_changed_replay_digest_fails_closed_without_another_target() -> Non
 
 def test_core_changed_replay_predictions_cannot_reuse_selection_digest() -> None:
     plan, _ = _synthetic_plan(changed_replay_predictions=True)
+
+    result = runner._run_development_core(plan, _StageGuard())
+
+    assert result.selection.final_winner is None
+    assert result.selection.reason_codes == ("REPLAY_DIGEST_MISMATCH",)
+
+
+@pytest.mark.parametrize("mutation", ("labels", "adapters", "inventory"))
+def test_core_changed_typed_replay_evidence_cannot_reuse_declared_digests(
+    mutation: str,
+) -> None:
+    plan, _ = _synthetic_plan(changed_replay_evidence=mutation)
 
     result = runner._run_development_core(plan, _StageGuard())
 

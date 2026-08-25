@@ -763,7 +763,7 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
     "src/mdcp/temporal/runner.py": (
-        "e8b9b0b35afa13949965f29744b81ffc0212d14b0b2763ddef89ea6937ba8346"
+        "e2ec92a99f190ab14f3355929b342ae6deeca9b747e9f628565ae6b3676925f1"
     ),
 }
 _ALLOWED_PRIVATE_ATTRIBUTES = {
@@ -781,7 +781,9 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
             "_core",
         }
     ),
-    "src/mdcp/temporal/runner.py": frozenset({"_provisional", "_records", "_state"}),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {"_provisional", "_records", "_selection_bound", "_state"}
+    ),
     "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths"}),
 }
 _ALLOWED_SUBPROCESS_CALLS = {
