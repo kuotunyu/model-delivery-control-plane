@@ -626,6 +626,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "math.isfinite",
             "os.name",
             "os.O_NOFOLLOW",
+            "os.O_NONBLOCK",
             "os.O_RDONLY",
             "os.close",
             "os.fstat",

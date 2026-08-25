@@ -413,6 +413,28 @@ def test_private_verifier_opens_once_without_path_preflight(
     assert run_evidence.verify_private_container(GuardedPath(path), identity).verdict == "PASS"
 
 
+def test_posix_private_verifier_opens_fifo_nonblocking_before_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    read_descriptor, write_descriptor = os.pipe()
+    nonblocking_flag = 0x800
+
+    def open_fifo(_path: str, flags: int) -> int:
+        if not flags & nonblocking_flag:
+            raise AssertionError("POSIX FIFO open could block")
+        return os.dup(read_descriptor)
+
+    monkeypatch.setattr(run_evidence.os, "O_NOFOLLOW", 0x20000, raising=False)
+    monkeypatch.setattr(run_evidence.os, "O_NONBLOCK", nonblocking_flag, raising=False)
+    monkeypatch.setattr(run_evidence.os, "open", open_fifo)
+    try:
+        with pytest.raises(ValueError, match="^PRIVATE_CONTAINER_INVALID$"):
+            run_evidence._read_private_container_posix(tmp_path / "untrusted.fifo")
+    finally:
+        os.close(read_descriptor)
+        os.close(write_descriptor)
+
+
 def test_private_container_entry_limit_is_128() -> None:
     bundle = PrivateRunBundle(
         evidence_class="synthetic_test",
@@ -701,6 +723,29 @@ def test_windows_raw_spelling_is_rejected_before_mutation(
     else:
         destination = tmp_path / "bundle.container.json"
         destination._raw_paths = None if raw_case == "missing_state" else [str(tmp_path), 7]
+
+    monkeypatch.setattr(
+        run_evidence,
+        "_publish_windows_container",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("destination oracle bypassed")),
+    )
+    before = tuple(tmp_path.iterdir())
+    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert tuple(tmp_path.iterdir()) == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
+@pytest.mark.parametrize("raw_case", ("repeated_separator", "rooted_fragment", "drive_fragment"))
+def test_windows_raw_fragments_cannot_reset_or_hide_empty_components(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_case: str
+) -> None:
+    if raw_case == "repeated_separator":
+        destination = Path(str(tmp_path) + r"\\repeated\bundle.container.json")
+    elif raw_case == "rooted_fragment":
+        destination = tmp_path / Path(r"\reset\bundle.container.json")
+    else:
+        destination = tmp_path / Path(f"{tmp_path.drive}\\reset\\bundle.container.json")
 
     monkeypatch.setattr(
         run_evidence,
@@ -1045,6 +1090,48 @@ def test_windows_native_ancestor_name_failure_closes_opened_root(
         write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
 
     assert opened and closed == opened
+    assert not destination.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ancestor close aggregation")
+@pytest.mark.parametrize(("metadata_call", "expected_close_count"), ((1, 1), (2, 2)))
+@pytest.mark.parametrize("close_failure", ("false", "exception"))
+def test_windows_early_ancestor_metadata_close_failure_is_aggregated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_call: int,
+    expected_close_count: int,
+    close_failure: str,
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    original_information = run_evidence._windows_file_information
+    original_close = run_evidence._windows_close
+    information_calls = 0
+    close_calls: list[int] = []
+
+    def fail_selected_metadata(handle: int) -> tuple[int, tuple[int, int, int]]:
+        nonlocal information_calls
+        information_calls += 1
+        if information_calls == metadata_call:
+            raise run_evidence._PublicationError("PUBLICATION_FAILED")
+        return original_information(handle)
+
+    def raise_first_close(handle: int) -> bool:
+        close_calls.append(handle)
+        result = original_close(handle)
+        if len(close_calls) == 1:
+            if close_failure == "exception":
+                raise OSError("sensitive close failure")
+            return False
+        return result
+
+    monkeypatch.setattr(run_evidence, "_windows_file_information", fail_selected_metadata)
+    monkeypatch.setattr(run_evidence, "_windows_close", raise_first_close)
+
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert len(close_calls) == expected_close_count
     assert not destination.exists()
 
 

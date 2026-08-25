@@ -744,11 +744,20 @@ def _absolute_destination(destination: Path) -> Path:
         or first_raw[0] not in ascii_letters
         or first_raw[1:3] != ":\\"
         or any("/" in raw_path for raw_path in raw_paths)
-        or any(
-            component in (".", "..") for raw_path in raw_paths for component in raw_path.split("\\")
-        )
     ):
         raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+    raw_fragments = [first_raw[3:], *raw_paths[1:]]
+    for index, raw_fragment in enumerate(raw_fragments):
+        if not raw_fragment:
+            if index == 0:
+                continue
+            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+        if index > 0 and (
+            raw_fragment.startswith("\\") or (len(raw_fragment) >= 2 and raw_fragment[1] == ":")
+        ):
+            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+        if any(component in ("", ".", "..") for component in raw_fragment.split("\\")):
+            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
     value = str(destination)
     if (
         not value
@@ -896,7 +905,7 @@ def _read_private_container_windows(path: Path) -> bytes:
 
 def _read_private_container_posix(path: Path) -> bytes:
     no_follow = os.O_NOFOLLOW
-    descriptor = os.open(str(path), os.O_RDONLY | no_follow)
+    descriptor = os.open(str(path), os.O_RDONLY | no_follow | os.O_NONBLOCK)
     try:
         information = os.fstat(descriptor)
         if not stat.S_ISREG(information.st_mode):
@@ -1093,6 +1102,7 @@ def _windows_open_trusted_ancestors(
     destination: Path,
 ) -> list[tuple[int, tuple[int, int, int], str]]:
     records: list[tuple[int, tuple[int, int, int], str]] = []
+    owned_handles: list[int] = []
     ancestor_access = (
         _WINDOWS_SYNCHRONIZE
         | _WINDOWS_FILE_READ_ATTRIBUTES
@@ -1114,11 +1124,10 @@ def _windows_open_trusted_ancestors(
         )
         if root_handle is None:
             raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+        owned_handles.append(root_handle)
         try:
             attributes, root_identity = _windows_file_information(root_handle)
         except _PublicationError:
-            if not _windows_close(root_handle):
-                raise _PublicationError("PUBLICATION_FAILED") from None
             raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
         records.append((root_handle, root_identity, expected))
         if (
@@ -1146,11 +1155,10 @@ def _windows_open_trusted_ancestors(
                 raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
             if handle is None:
                 raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+            owned_handles.append(handle)
             try:
                 attributes, identity = _windows_file_information(handle)
             except _PublicationError:
-                if not _windows_close(handle):
-                    raise _PublicationError("PUBLICATION_FAILED") from None
                 raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
             records.append((handle, identity, expected))
             if (
@@ -1163,7 +1171,7 @@ def _windows_open_trusted_ancestors(
             parent_handle = handle
         return records
     except Exception as caught:
-        close_failed = not _windows_close_all([handle for handle, _, _ in reversed(records)])
+        close_failed = not _windows_close_all(list(reversed(owned_handles)))
         if close_failed or (
             isinstance(caught, _PublicationError) and str(caught) == "PUBLICATION_FAILED"
         ):
