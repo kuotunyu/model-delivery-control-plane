@@ -454,6 +454,65 @@ def test_static_firewall_rejects_argument_shadowing_of_imported_capability(
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
+@pytest.mark.parametrize(
+    ("logical_path", "function_name"),
+    (
+        ("src/mdcp/temporal/contract_gate.py", "_path_digest"),
+        ("src/mdcp/temporal/contract_gate.py", "_checked_json"),
+        ("src/mdcp/temporal/golden_vectors.py", "verify_golden_vector_manifest"),
+    ),
+)
+def test_static_firewall_rejects_retargeted_file_path_parameters(
+    tmp_path: Path,
+    logical_path: str,
+    function_name: str,
+) -> None:
+    _write_logical_module(
+        tmp_path,
+        logical_path,
+        "from pathlib import Path\n"
+        f"def {function_name}(path: Path):\n"
+        "    path = Path('synthetic-h2.csv')\n"
+        "    return path.read_bytes()",
+    )
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    (
+        (
+            "        source_path = repository_root / logical_path\n",
+            "        source_path = repository_root / logical_path\n"
+            "        source_path = Path('synthetic-h2.py')\n",
+        ),
+        (
+            "from __future__ import annotations\n\n",
+            "from __future__ import annotations\n\n__file__ = 'synthetic-h2.py'\n\n",
+        ),
+        (
+            "    code = function.__code__\n",
+            "    code = function.__code__\n"
+            "    code = type('Code', (), {'co_filename': 'synthetic-h2.py'})()\n",
+        ),
+    ),
+)
+def test_static_firewall_rejects_retargeted_trusted_file_sources(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/firewall.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) == 1
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, replacement, 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 @pytest.mark.parametrize("source", ("breakpoint()", "help('modules')"))
 def test_static_firewall_rejects_runtime_import_and_evaluation_hooks(
     tmp_path: Path,

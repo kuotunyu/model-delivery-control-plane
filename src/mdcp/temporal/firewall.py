@@ -41,6 +41,7 @@ _DYNAMIC_IMPORT_MODULES = frozenset({"importlib", "builtins"})
 _REFLECTION_MODULES = frozenset({"gc", "inspect", "marshal", "operator", "pickle"})
 _FORBIDDEN_DYNAMIC_REFERENCES = _DYNAMIC_IMPORT_FUNCTIONS | {
     "__builtins__",
+    "__file__",
     "__loader__",
     "__spec__",
     "breakpoint",
@@ -288,6 +289,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Starred",
             "ast.Subscript",
             "ast.arg",
+            "ast.dump",
             "ast.expr",
             "ast.iter_child_nodes",
             "ast.parse",
@@ -353,6 +355,38 @@ _ALLOWED_ENVIRONMENT_KEYS = {
         }
     )
 }
+_PROTECTED_PATH_PARAMETER_FUNCTIONS = {
+    "src/mdcp/temporal/contract_gate.py": frozenset({"_checked_json", "_path_digest"}),
+    "src/mdcp/temporal/golden_vectors.py": frozenset({"verify_golden_vector_manifest"}),
+}
+_PINNED_FILE_CAPABILITY_FUNCTIONS = {
+    "src/mdcp/predictor/app_v2.py": {
+        "runtime_from_environment": (
+            "1e0beb1151f8323d21c1d79f3a3a3a04d682786198c355d157d32921584628f8"
+        )
+    },
+    "src/mdcp/temporal/contract_gate.py": {
+        "_checked_json": "e4508a7b837471a78db8ffc3873c055315f5392b033c59f100e6935e57d59214",
+        "_path_digest": "306b3c291c806ed597a75f69d52400f9a0850e6c3ef3196e33e287169d8d1195",
+    },
+    "src/mdcp/temporal/firewall.py": {
+        "_implementation_sha256": (
+            "def57863c42ba3e307708387ad0444828a184aca2b4cb2cd22024dc3ae53908d"
+        ),
+        "audit_static_h2_firewall": (
+            "f48bb5f9eeb6f8bc4b025593006b62c0351bcd34a382ab7102460740d956089d"
+        ),
+        "run_behavioral_h2_firewall": (
+            "3b9fda1edda8772d9c0cb9abe55bf83fa0f9f80dc20dae5e9e43c9e9d4adbe92"
+        ),
+    },
+    "src/mdcp/temporal/golden_vectors.py": {
+        "verify_golden_vector_manifest": (
+            "a3afbe4051812bfcd039d7171f839e2395865288daf457b75c590f7fee4e3994"
+        )
+    },
+}
+_RESERVED_BINDING_NAMES = frozenset({"__file__"})
 _FAILURE_REASON = "H2_IMPORT_CAPABILITY_FORBIDDEN"
 _BEHAVIORAL_FAILURE_REASON = "BEHAVIORAL_H2_FIREWALL_FAILED"
 _FORBIDDEN_CALL_REASON = "FORBIDDEN_CAPABILITY_CALLED"
@@ -517,6 +551,53 @@ def _enclosing_function(
     return None
 
 
+def _protected_path_scope(
+    node: ast.AST,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> str | None:
+    protected_functions = _PROTECTED_PATH_PARAMETER_FUNCTIONS.get(logical_path, frozenset())
+    current = parents.get(node)
+    while current is not None:
+        if (
+            isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef)
+            and current.name in protected_functions
+        ):
+            return current.name
+        current = parents.get(current)
+    return None
+
+
+def _has_exact_path_parameter(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    arguments = node.args
+    positional = (*arguments.posonlyargs, *arguments.args)
+    return (
+        len(positional) == 1
+        and positional[0].arg == "path"
+        and not arguments.defaults
+        and not arguments.kwonlyargs
+        and not arguments.kw_defaults
+        and arguments.vararg is None
+        and arguments.kwarg is None
+    )
+
+
+def _validate_pinned_file_capability_functions(tree: ast.AST, logical_path: str) -> None:
+    expected_functions = _PINNED_FILE_CAPABILITY_FUNCTIONS.get(logical_path, {})
+    for function_name, expected_sha256 in expected_functions.items():
+        matches = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.name == function_name
+        ]
+        if len(matches) != 1:
+            _fail()
+        normalized = ast.dump(matches[0], include_attributes=False).encode("utf-8")
+        if sha256_hex(normalized) != expected_sha256:
+            _fail()
+
+
 def _file_receiver_identity(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
         return f"name:{node.id}"
@@ -553,6 +634,35 @@ def _allowed_file_access_call(
         _file_receiver_identity(node.func.value),
     )
     return identity in _ALLOWED_FILE_ACCESS_CALLS.get(logical_path, frozenset())
+
+
+def _allowed_file_source_name(
+    node: ast.Name,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    parent = parents.get(node)
+    if (
+        logical_path != _TRUSTED_FIREWALL_PATH
+        or node.id != "__file__"
+        or not isinstance(parent, ast.Call)
+        or len(parent.args) != 1
+        or parent.args[0] is not node
+        or parent.keywords
+        or not isinstance(parent.func, ast.Name)
+        or parent.func.id != "Path"
+    ):
+        return False
+    attribute = parents.get(parent)
+    call = parents.get(attribute) if isinstance(attribute, ast.Attribute) else None
+    return (
+        isinstance(attribute, ast.Attribute)
+        and attribute.value is parent
+        and attribute.attr == "read_bytes"
+        and isinstance(call, ast.Call)
+        and call.func is attribute
+        and _allowed_file_access_call(call, logical_path, parents)
+    )
 
 
 def _allowed_pandas_reader_reference(
@@ -692,7 +802,7 @@ def _import_allowed(logical_path: str, module: str, imported_name: str | None) -
 
 
 def _bind_import(bindings: dict[str, str], local_name: str, qualified_name: str) -> None:
-    if local_name in bindings:
+    if local_name in bindings or local_name in _RESERVED_BINDING_NAMES:
         _fail()
     bindings[local_name] = qualified_name
 
@@ -750,30 +860,67 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
 
 
 def _shadows_imported_binding(node: ast.AST, bindings: dict[str, str]) -> bool:
+    protected_names = bindings.keys() | _RESERVED_BINDING_NAMES
     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-        return node.name in bindings
+        return node.name in protected_names
     if isinstance(node, ast.arg):
-        return node.arg in bindings
+        return node.arg in protected_names
     if isinstance(node, ast.ExceptHandler):
-        return node.name in bindings if node.name is not None else False
+        return node.name in protected_names if node.name is not None else False
     if isinstance(node, ast.Global | ast.Nonlocal):
-        return any(name in bindings for name in node.names)
+        return any(name in protected_names for name in node.names)
     if isinstance(node, ast.MatchAs | ast.MatchStar):
-        return node.name in bindings if node.name is not None else False
+        return node.name in protected_names if node.name is not None else False
     if isinstance(node, ast.MatchMapping):
-        return node.rest in bindings if node.rest is not None else False
+        return node.rest in protected_names if node.rest is not None else False
     return False
 
 
 def _audit_tree(tree: ast.AST, logical_path: str) -> None:
+    _validate_pinned_file_capability_functions(tree, logical_path)
     bindings, module_roots = _build_bindings(tree, logical_path)
     allowed_module_attributes = _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST.get(logical_path, frozenset())
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     pandas_reader_references = 0
     previous_reader_references = 0
     descriptor_path_references = 0
+    protected_function_counts = {
+        name: 0 for name in _PROTECTED_PATH_PARAMETER_FUNCTIONS.get(logical_path, frozenset())
+    }
     for node in ast.walk(tree):
         if _shadows_imported_binding(node, bindings):
+            _fail()
+        if (
+            isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.name in protected_function_counts
+        ):
+            protected_function_counts[node.name] += 1
+            if not _has_exact_path_parameter(node):
+                _fail()
+        protected_path_scope = _protected_path_scope(node, logical_path, parents)
+        if (
+            isinstance(node, ast.Name)
+            and node.id == "path"
+            and protected_path_scope is not None
+            and not (
+                _enclosing_function(node, parents) == protected_path_scope
+                and isinstance(parents.get(node), ast.Attribute)
+                and parents[node].value is node
+                and isinstance(parents.get(parents[node]), ast.Call)
+                and parents[parents[node]].func is parents[node]
+                and _allowed_file_access_call(
+                    parents[parents[node]],
+                    logical_path,
+                    parents,
+                )
+            )
+        ):
+            _fail()
+        if (
+            isinstance(node, ast.Global | ast.Nonlocal)
+            and "path" in node.names
+            and protected_path_scope is not None
+        ):
             _fail()
         if isinstance(node, ast.Attribute) and _attribute_name(node, bindings) == "pandas.read_csv":
             pandas_reader_references += 1
@@ -816,7 +963,14 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 and not isinstance(node.ctx, ast.Load)
             ):
                 _fail()
-            if qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES or (
+            if (
+                qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES
+                and not (
+                    isinstance(node, ast.Name)
+                    and qualified_name == "__file__"
+                    and _allowed_file_source_name(node, logical_path, parents)
+                )
+            ) or (
                 isinstance(node, ast.Attribute)
                 and (
                     (
@@ -861,6 +1015,8 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     ):
         _fail()
     if logical_path == "src/mdcp/predictor/app_v2.py" and descriptor_path_references != 2:
+        _fail()
+    if any(count != 1 for count in protected_function_counts.values()):
         _fail()
 
 
