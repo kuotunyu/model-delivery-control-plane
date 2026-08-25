@@ -147,6 +147,25 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("zoneinfo", "ZoneInfo"),
         }
     ),
+    "src/mdcp/temporal/completeness.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections", "Counter"),
+            ("collections", "defaultdict"),
+            ("collections.abc", "Callable"),
+            ("collections.abc", "Iterable"),
+            ("dataclasses", "dataclass"),
+            ("datetime", "date"),
+            ("datetime", "datetime"),
+            ("math", None),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.policy.cluster_bootstrap", "PairedQualityRow"),
+            ("mdcp.temporal.folds", "SourceRowIdentity"),
+            ("typing", "TypeVar"),
+        }
+    ),
     "src/mdcp/temporal/constants.py": frozenset({("datetime", "datetime")}),
     "src/mdcp/temporal/contract_gate.py": frozenset(
         {
@@ -310,6 +329,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/temporal/adapter.py": frozenset(
         {"math.cos", "math.isfinite", "math.pi", "math.sin", "re.compile"}
     ),
+    "src/mdcp/temporal/completeness.py": frozenset({"math.isfinite"}),
     "src/mdcp/temporal/evidence.py": frozenset({"re.IGNORECASE", "re.MULTILINE", "re.compile"}),
     _TRUSTED_FIREWALL_PATH: frozenset(
         {
