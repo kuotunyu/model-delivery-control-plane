@@ -266,6 +266,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     _TRUSTED_FIREWALL_PATH: frozenset(
         {
             "ast.AST",
+            "ast.Assign",
             "ast.Attribute",
             "ast.AsyncFunctionDef",
             "ast.Call",
@@ -274,6 +275,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Import",
             "ast.ImportFrom",
             "ast.Name",
+            "ast.Starred",
             "ast.Subscript",
             "ast.expr",
             "ast.iter_child_nodes",
@@ -296,6 +298,7 @@ _FILE_ACCESS_METHODS = frozenset(
         "read",
         "read1",
         "read_bytes",
+        "read_csv",
         "read_text",
         "readinto",
         "readinto1",
@@ -541,6 +544,66 @@ def _allowed_file_access_call(
     return identity in _ALLOWED_FILE_ACCESS_CALLS.get(logical_path, frozenset())
 
 
+def _allowed_pandas_reader_reference(
+    node: ast.Attribute,
+    bindings: dict[str, str],
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    if _attribute_name(node, bindings) != "pandas.read_csv":
+        return False
+    parent = parents.get(node)
+    if (
+        not isinstance(parent, ast.Assign)
+        or _enclosing_function(node, parents) != "run_development_boundary"
+        or len(parent.targets) != 1
+    ):
+        return False
+    target = parent.targets[0]
+    if parent.value is node:
+        return isinstance(target, ast.Name) and target.id == "previous_read_csv"
+    if target is node:
+        return isinstance(parent.value, ast.Name) and parent.value.id in {
+            "bounded_read_csv",
+            "previous_read_csv",
+        }
+    return False
+
+
+def _allowed_previous_reader_reference(
+    node: ast.Name,
+    bindings: dict[str, str],
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    parent = parents.get(node)
+    if isinstance(parent, ast.Assign) and len(parent.targets) == 1:
+        target = parent.targets[0]
+        if target is node:
+            return (
+                _enclosing_function(node, parents) == "run_development_boundary"
+                and isinstance(parent.value, ast.Attribute)
+                and _attribute_name(parent.value, bindings) == "pandas.read_csv"
+            )
+        if parent.value is node:
+            return (
+                _enclosing_function(node, parents) == "run_development_boundary"
+                and isinstance(target, ast.Attribute)
+                and _attribute_name(target, bindings) == "pandas.read_csv"
+            )
+    return (
+        isinstance(parent, ast.Call)
+        and parent.func is node
+        and _enclosing_function(node, parents) == "bounded_read_csv"
+        and len(parent.args) == 1
+        and isinstance(parent.args[0], ast.Starred)
+        and isinstance(parent.args[0].value, ast.Name)
+        and parent.args[0].value.id == "args"
+        and len(parent.keywords) == 1
+        and parent.keywords[0].arg is None
+        and isinstance(parent.keywords[0].value, ast.Name)
+        and parent.keywords[0].value.id == "kwargs"
+    )
+
+
 def _constant_string(node: ast.expr) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -630,14 +693,33 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     bindings, module_roots = _build_bindings(tree, logical_path)
     allowed_module_attributes = _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST.get(logical_path, frozenset())
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    pandas_reader_references = 0
+    previous_reader_references = 0
     for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and _attribute_name(node, bindings) == "pandas.read_csv":
+            pandas_reader_references += 1
+        if isinstance(node, ast.Name) and node.id == "previous_read_csv":
+            previous_reader_references += 1
+            if logical_path != _TRUSTED_FIREWALL_PATH or not _allowed_previous_reader_reference(
+                node,
+                bindings,
+                parents,
+            ):
+                _fail()
         if (
             isinstance(node, ast.Attribute)
             and node.attr in _FILE_ACCESS_METHODS
             and not (
-                isinstance(parents.get(node), ast.Call)
-                and parents[node].func is node
-                and _allowed_file_access_call(parents[node], logical_path, parents)
+                (
+                    node.attr == "read_csv"
+                    and logical_path == _TRUSTED_FIREWALL_PATH
+                    and _allowed_pandas_reader_reference(node, bindings, parents)
+                )
+                or (
+                    isinstance(parents.get(node), ast.Call)
+                    and parents[node].func is node
+                    and _allowed_file_access_call(parents[node], logical_path, parents)
+                )
             )
         ):
             _fail()
@@ -683,6 +765,10 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 and qualified_name not in allowed_module_attributes
             ):
                 _fail()
+    if logical_path == _TRUSTED_FIREWALL_PATH and (
+        pandas_reader_references != 3 or previous_reader_references != 3
+    ):
+        _fail()
 
 
 def _safe_logical_path(value: str) -> str:

@@ -358,6 +358,24 @@ def test_static_firewall_rejects_file_reader_capability_alias(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "source",
     (
+        "import pandas as pd\nrecovered = pd.read_csv('synthetic-h2.csv')",
+        "import pandas as pd\nreader = pd.read_csv\nrecovered = reader('synthetic-h2.csv')",
+    ),
+)
+def test_static_firewall_rejects_unbounded_pandas_reader_capability(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/firewall.py"
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
         "import os\nrecovered = os.environ['MDCP_REVIEW_H2']",
         "import os\nrecovered = os.getenv('MDCP_REVIEW_H2')",
     ),
