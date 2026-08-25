@@ -691,20 +691,20 @@ def _fold_unknown_reasons(report: DevelopmentQualityReport) -> list[str]:
     return unknown
 
 
-def _weighted_sum(metric: QualityMetricReport, row_count: int, attribute: str) -> float:
-    return float(getattr(metric, attribute)) * row_count
-
-
 def _pooled_aggregate_reasons(report: DevelopmentQualityReport) -> list[str]:
     reasons: list[str] = []
-    for attribute in ("stable_mae", "candidate_mae"):
-        pooled_sum = _weighted_sum(report.pooled_overall, report.pooled_row_count, attribute)
-        fold_sum = sum(
-            _weighted_sum(fold.overall, fold.paired_row_count, attribute) for fold in report.folds
-        )
-        if not math.isclose(pooled_sum, fold_sum, rel_tol=1e-12, abs_tol=1e-12):
-            reasons.append("INVALID_POOLED_AGGREGATE:overall")
-            break
+    pooled_stable_sum = float(report.pooled_overall.stable_mae) * report.pooled_row_count
+    fold_stable_sum = sum(
+        float(fold.overall.stable_mae) * fold.paired_row_count for fold in report.folds
+    )
+    pooled_candidate_sum = float(report.pooled_overall.candidate_mae) * report.pooled_row_count
+    fold_candidate_sum = sum(
+        float(fold.overall.candidate_mae) * fold.paired_row_count for fold in report.folds
+    )
+    if not math.isclose(
+        pooled_stable_sum, fold_stable_sum, rel_tol=1e-12, abs_tol=1e-12
+    ) or not math.isclose(pooled_candidate_sum, fold_candidate_sum, rel_tol=1e-12, abs_tol=1e-12):
+        reasons.append("INVALID_POOLED_AGGREGATE:overall")
 
     fold_subgroups = [
         {entry.name: entry.metric for entry in fold.subgroups} for fold in report.folds
@@ -712,15 +712,22 @@ def _pooled_aggregate_reasons(report: DevelopmentQualityReport) -> list[str]:
     pooled_subgroups = {entry.name: entry.metric for entry in report.pooled_subgroups}
     for group in FIXED_SUBGROUPS:
         pooled_metric = pooled_subgroups[group]
-        for attribute in ("stable_mae", "candidate_mae"):
-            pooled_sum = _weighted_sum(pooled_metric, pooled_metric.row_count, attribute)
-            fold_sum = sum(
-                _weighted_sum(metrics[group], metrics[group].row_count, attribute)
-                for metrics in fold_subgroups
-            )
-            if not math.isclose(pooled_sum, fold_sum, rel_tol=1e-12, abs_tol=1e-12):
-                reasons.append(f"INVALID_POOLED_AGGREGATE:{group}")
-                break
+        pooled_stable_sum = float(pooled_metric.stable_mae) * pooled_metric.row_count
+        fold_stable_sum = sum(
+            float(metrics[group].stable_mae) * metrics[group].row_count
+            for metrics in fold_subgroups
+        )
+        pooled_candidate_sum = float(pooled_metric.candidate_mae) * pooled_metric.row_count
+        fold_candidate_sum = sum(
+            float(metrics[group].candidate_mae) * metrics[group].row_count
+            for metrics in fold_subgroups
+        )
+        if not math.isclose(
+            pooled_stable_sum, fold_stable_sum, rel_tol=1e-12, abs_tol=1e-12
+        ) or not math.isclose(
+            pooled_candidate_sum, fold_candidate_sum, rel_tol=1e-12, abs_tol=1e-12
+        ):
+            reasons.append(f"INVALID_POOLED_AGGREGATE:{group}")
     return reasons
 
 
@@ -774,8 +781,14 @@ def _evidence_unknown_reasons(evidence: object) -> list[str]:
     if type(evidence) is not QualificationEvidence:
         return ["INVALID_QUALIFICATION_EVIDENCE"]
     reasons: list[str] = []
-    for field in ("lineage", "converter", "evidence", "budget"):
-        if getattr(evidence, field) is not GateVerdict.PASS:
+    evidence_fields = (
+        ("lineage", evidence.lineage),
+        ("converter", evidence.converter),
+        ("evidence", evidence.evidence),
+        ("budget", evidence.budget),
+    )
+    for field, verdict in evidence_fields:
+        if verdict is not GateVerdict.PASS:
             reasons.append(f"{field.upper()}_NOT_PASS")
     return reasons
 
