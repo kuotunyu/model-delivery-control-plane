@@ -106,6 +106,58 @@ FORBIDDEN_MODULES = {
         "else getattr(namespace, '__import__')\n"
         "target = loader('workload.dataset', globals(), locals(), (), level=2)"
     ),
+    "narrow_function_globals": (
+        "from mdcp.workload.dataset import load_uci_development_archive\n"
+        "target = load_uci_development_archive.__globals__['load_uci_archive']"
+    ),
+    "rebound_narrow_function_globals": (
+        "from mdcp.workload.dataset import load_uci_development_archive\n"
+        "bounded = load_uci_development_archive\n"
+        "target = bounded.__globals__['load_uci_archive']"
+    ),
+    "reflective_narrow_function_globals": (
+        "from mdcp.workload.splits import split_development_rows\n"
+        "namespace = getattr(split_development_rows, '__globals__')\n"
+        "target = namespace['split_rows']"
+    ),
+    "computed_reflective_narrow_function_globals": (
+        "from mdcp.workload.splits import split_development_rows\n"
+        "attribute = '__' + 'globals__'\n"
+        "namespace = getattr(split_development_rows, attribute)\n"
+        "target = namespace['DatasetPartitions']"
+    ),
+    "dunder_getattribute_narrow_function_globals": (
+        "from mdcp.workload.dataset import load_uci_development_archive\n"
+        "namespace = object.__getattribute__(load_uci_development_archive, '__globals__')\n"
+        "target = namespace['load_uci_archive']"
+    ),
+    "narrow_function_builtin_import": (
+        "from mdcp.workload.dataset import load_uci_development_archive\n"
+        "namespace = load_uci_development_archive.__globals__['__builtins__']\n"
+        "target = namespace['__import__']"
+    ),
+    "getattr_sys_modules": (
+        "import sys\n"
+        "modules = getattr(sys, 'modules')\n"
+        "target = modules['mdcp.workload.dataset'].load_uci_archive"
+    ),
+    "sys_dict_modules": (
+        "import sys\n"
+        "modules = sys.__dict__['modules']\n"
+        "target = modules['mdcp.workload.splits'].split_rows"
+    ),
+    "eval_narrow_function_globals": (
+        "from mdcp.workload.dataset import load_uci_development_archive\n"
+        "target = eval(\"load_uci_development_archive.__globals__['load_uci_archive']\")"
+    ),
+    "exec_narrow_function_globals": (
+        "from mdcp.workload.dataset import load_uci_development_archive\n"
+        "exec(\"target = load_uci_development_archive.__globals__['load_uci_archive']\")"
+    ),
+    "compiled_narrow_function_globals": (
+        "from mdcp.workload.dataset import load_uci_development_archive\n"
+        "target = compile(\"load_uci_development_archive.__globals__\", '<formal>', 'eval')"
+    ),
 }
 
 ALLOWED_NARROW_IMPORTS = (

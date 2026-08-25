@@ -81,8 +81,9 @@ def adapt_v2(request: BikeRequestV2) -> TemporalFeatureVector:
 
     elapsed_days = (local.date() - _ELAPSED_ORIGIN).days + request.hr / 24
     legacy = request.to_legacy()
+    legacy_values = legacy.model_dump(mode="python")
     values = (
-        *(float(getattr(legacy, name)) for name in TEMPORAL_FEATURE_COLUMNS[:11]),
+        *(float(legacy_values[name]) for name in TEMPORAL_FEATURE_COLUMNS[:11]),
         float(elapsed_days),
         math.sin(2 * math.pi * request.hr / 24),
         math.cos(2 * math.pi * request.hr / 24),

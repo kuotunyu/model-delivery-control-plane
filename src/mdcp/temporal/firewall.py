@@ -5,7 +5,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from types import FrameType
+from types import FrameType, FunctionType
 from typing import Annotated, Literal
 
 import pandas as pd
@@ -38,13 +38,42 @@ _DYNAMIC_IMPORT_FUNCTIONS = frozenset(
     }
 )
 _DYNAMIC_IMPORT_MODULES = frozenset({"importlib", "builtins"})
+_REFLECTION_MODULES = frozenset({"gc", "inspect", "marshal", "operator", "pickle"})
 _FORBIDDEN_DYNAMIC_REFERENCES = _DYNAMIC_IMPORT_FUNCTIONS | {
     "__builtins__",
+    "__loader__",
+    "__spec__",
+    "compile",
+    "delattr",
+    "eval",
+    "exec",
+    "getattr",
     "globals",
     "locals",
+    "setattr",
     "vars",
     "sys.modules",
 }
+_FORBIDDEN_REFLECTION_ATTRIBUTES = frozenset(
+    {
+        "__base__",
+        "__bases__",
+        "__builtins__",
+        "__class__",
+        "__closure__",
+        "__dict__",
+        "__getattribute__",
+        "__globals__",
+        "__mro__",
+        "__subclasses__",
+        "cr_frame",
+        "f_globals",
+        "gi_frame",
+        "modules",
+        "sys",
+    }
+)
+_TRUSTED_FIREWALL_PATH = "src/mdcp/temporal/firewall.py"
 _ALLOWED_DIRECT_IMPORTS = {
     "mdcp.workload.dataset": frozenset({"load_uci_development_archive"}),
     "mdcp.workload.splits": frozenset({"DevelopmentPartitions", "split_development_rows"}),
@@ -59,14 +88,10 @@ _H1_ROWS = 4_358
 
 _BOUNDED_LOADER = load_uci_development_archive
 _DEVELOPMENT_SPLITTER = split_development_rows
-_LEGACY_LOAD_CODE = _BOUNDED_LOADER.__globals__["load_uci_archive"].__code__
-_LEGACY_SPLIT_CODE = _DEVELOPMENT_SPLITTER.__globals__["split_rows"].__code__
-_DATASET_PARTITIONS = _DEVELOPMENT_SPLITTER.__globals__["DatasetPartitions"]
-_OPEN_H2_CODE = _DATASET_PARTITIONS.open_h2.__code__
-_FORBIDDEN_CALL_CODES = {
-    _LEGACY_LOAD_CODE: "load_uci_archive",
-    _LEGACY_SPLIT_CODE: "split_rows",
-    _OPEN_H2_CODE: "DatasetPartitions.open_h2",
+_FORBIDDEN_CALL_IDENTITIES = {
+    (_BOUNDED_LOADER.__code__.co_filename, "load_uci_archive"): "load_uci_archive",
+    (_DEVELOPMENT_SPLITTER.__code__.co_filename, "split_rows"): "split_rows",
+    (_DEVELOPMENT_SPLITTER.__code__.co_filename, "open_h2"): "DatasetPartitions.open_h2",
 }
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -182,13 +207,16 @@ def _attribute_name(node: ast.expr, bindings: dict[str, str]) -> str | None:
     return None
 
 
-def _build_bindings(tree: ast.AST) -> dict[str, str]:
+def _build_bindings(tree: ast.AST, logical_path: str) -> dict[str, str]:
     bindings: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.split(".", 1)[0] in _DYNAMIC_IMPORT_MODULES or _is_forbidden_module(
-                    alias.name
+                root_module = alias.name.split(".", 1)[0]
+                if (
+                    root_module in _DYNAMIC_IMPORT_MODULES | _REFLECTION_MODULES
+                    or (root_module == "sys" and logical_path != _TRUSTED_FIREWALL_PATH)
+                    or _is_forbidden_module(alias.name)
                 ):
                     _fail()
                 local_name = alias.asname or alias.name.split(".", 1)[0]
@@ -198,7 +226,10 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
             module = node.module or ""
             if node.level:
                 _fail()
-            if module.split(".", 1)[0] in _DYNAMIC_IMPORT_MODULES:
+            root_module = module.split(".", 1)[0]
+            if root_module in _DYNAMIC_IMPORT_MODULES | _REFLECTION_MODULES or (
+                root_module == "sys" and logical_path != _TRUSTED_FIREWALL_PATH
+            ):
                 _fail()
             if any(alias.name == "*" for alias in node.names):
                 _fail()
@@ -218,15 +249,17 @@ def _build_bindings(tree: ast.AST) -> dict[str, str]:
     return bindings
 
 
-def _audit_tree(tree: ast.AST) -> None:
-    bindings = _build_bindings(tree)
+def _audit_tree(tree: ast.AST, logical_path: str) -> None:
+    bindings = _build_bindings(tree, logical_path)
     for node in ast.walk(tree):
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
             if qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES or (
                 isinstance(node, ast.Attribute)
-                and qualified_name is not None
-                and _is_forbidden_module(qualified_name)
+                and (
+                    node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
+                    or (qualified_name is not None and _is_forbidden_module(qualified_name))
+                )
             ):
                 _fail()
 
@@ -273,7 +306,7 @@ def audit_static_h2_firewall(
             tree = ast.parse(source, filename=logical_path)
         except (OSError, UnicodeError, SyntaxError):
             _fail()
-        _audit_tree(tree)
+        _audit_tree(tree, logical_path)
 
     return StaticFirewallResult(
         schema_version="mdcp.static-h2-firewall.v1",
@@ -284,9 +317,9 @@ def audit_static_h2_firewall(
 
 
 def _implementation_sha256(function: object) -> str:
-    code = getattr(function, "__code__", None)
-    if code is None:
+    if not isinstance(function, FunctionType):
         raise BehavioralFirewallError()
+    code = function.__code__
     try:
         return sha256_hex(Path(code.co_filename).read_bytes())
     except OSError as error:
@@ -331,7 +364,7 @@ def run_development_boundary(
     expected_sha256: str,
 ) -> DevelopmentBoundaryResult:
     read_csv_nrows: list[int] = []
-    forbidden_call_counts = {name: 0 for name in _FORBIDDEN_CALL_CODES.values()}
+    forbidden_call_counts = {name: 0 for name in _FORBIDDEN_CALL_IDENTITIES.values()}
     previous_read_csv = pd.read_csv
     previous_profile = sys.getprofile()
 
@@ -346,7 +379,8 @@ def run_development_boundary(
         del arg
         if event != "call":
             return
-        capability = _FORBIDDEN_CALL_CODES.get(frame.f_code)
+        identity = (frame.f_code.co_filename, frame.f_code.co_name)
+        capability = _FORBIDDEN_CALL_IDENTITIES.get(identity)
         if capability is not None:
             forbidden_call_counts[capability] += 1
             raise BehavioralFirewallError(_FORBIDDEN_CALL_REASON)
