@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import asdict, replace
 from datetime import date, timedelta
 from types import MappingProxyType
 
 import pytest
 
+from mdcp.common.canonical import canonicalize_json
+from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.policy.cluster_bootstrap import PairedQualityRow
 from mdcp.temporal.completeness import (
@@ -19,12 +22,21 @@ from mdcp.temporal.evaluation import (
     FIXED_SUBGROUPS,
     FOLD_IDS,
     DevelopmentQualityReport,
+    FoldQualificationContext,
     NamedQualityMetric,
+    QualificationContext,
     QualificationEvidence,
-    evaluate_fold,
-    evaluate_pooled,
-    qualify_trial,
 )
+from mdcp.temporal.evaluation import (
+    evaluate_fold as production_evaluate_fold,
+)
+from mdcp.temporal.evaluation import (
+    evaluate_pooled as production_evaluate_pooled,
+)
+from mdcp.temporal.evaluation import (
+    qualify_trial as production_qualify_trial,
+)
+from mdcp.temporal.folds import SourceRowIdentity
 
 
 def _layer(count: int, reason_codes: tuple[str, ...]) -> LayerAccounting:
@@ -51,6 +63,77 @@ def _complete_receipt(count: int) -> CompletenessReceipt:
         candidate=_layer(count, PREDICTION_REASON_CODES),
         label=_layer(count, LABEL_REASON_CODES),
     )
+
+
+def _identity(fold_id: str, position: int, row: PairedQualityRow) -> SourceRowIdentity:
+    local_timestamp = f"{row.calendar_day.isoformat()}T{position % 24:02d}:{position % 60:02d}:00"
+    material = {
+        "fold_id": fold_id,
+        "request_id": row.request_id,
+        "local_timestamp": local_timestamp,
+        "source_position": position,
+    }
+    return SourceRowIdentity(
+        **material,
+        identity_sha256=sha256_hex(canonicalize_json(material)),
+    )
+
+
+def _context(
+    fold_rows: Mapping[str, tuple[PairedQualityRow, ...]],
+) -> QualificationContext:
+    return QualificationContext(
+        folds=tuple(
+            FoldQualificationContext(
+                fold_id=fold_id,
+                inventory=tuple(
+                    _identity(fold_id, position, row)
+                    for position, row in enumerate(fold_rows[fold_id])
+                ),
+                paired_rows=fold_rows[fold_id],
+            )
+            for fold_id in FOLD_IDS
+        )
+    )
+
+
+_CONTEXTS: dict[str, QualificationContext] = {}
+_AUTO_CONTEXT = object()
+
+
+def evaluate_fold(
+    fold_id: str,
+    rows: tuple[PairedQualityRow, ...],
+    completeness: CompletenessReceipt,
+):
+    context = FoldQualificationContext(
+        fold_id=fold_id,
+        inventory=tuple(_identity(fold_id, position, row) for position, row in enumerate(rows)),
+        paired_rows=rows,
+    )
+    return production_evaluate_fold(context, completeness)
+
+
+def evaluate_pooled(
+    source: QualificationContext | Mapping[str, tuple[PairedQualityRow, ...]],
+    completeness: Mapping[str, CompletenessReceipt],
+    evidence: QualificationEvidence,
+) -> DevelopmentQualityReport:
+    context = source if type(source) is QualificationContext else _context(source)
+    report = production_evaluate_pooled(context, completeness, evidence)
+    _CONTEXTS[report.pooled_inventory_sha256] = context
+    return report
+
+
+def qualify_trial(
+    report: DevelopmentQualityReport,
+    context: QualificationContext | None | object = _AUTO_CONTEXT,
+    **kwargs: object,
+):
+    resolved = (
+        _CONTEXTS.get(report.pooled_inventory_sha256) if context is _AUTO_CONTEXT else context
+    )
+    return production_qualify_trial(report, resolved, **kwargs)  # type: ignore[arg-type]
 
 
 def _rows(
@@ -419,7 +502,7 @@ def test_coordinated_invalid_metric_values_cannot_bypass_denominator_checks() ->
     )
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+    assert "QUALIFICATION_CONTEXT_MISMATCH" in result.reason_codes
 
 
 def test_coordinated_point_ratio_must_still_match_reported_maes() -> None:
@@ -446,7 +529,7 @@ def test_coordinated_point_ratio_must_still_match_reported_maes() -> None:
     )
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+    assert "QUALIFICATION_CONTEXT_MISMATCH" in result.reason_codes
 
 
 def test_missing_fold_is_unknown_not_a_three_fold_gate() -> None:
@@ -558,7 +641,7 @@ def test_coordinated_pooled_metric_tamper_is_unknown() -> None:
     )
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+    assert "QUALIFICATION_CONTEXT_MISMATCH" in result.reason_codes
 
 
 def test_coordinated_fold_metric_tamper_is_unknown() -> None:
@@ -579,7 +662,7 @@ def test_coordinated_fold_metric_tamper_is_unknown() -> None:
     result = qualify_trial(replace(report, folds=(changed_fold, *report.folds[1:])))
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+    assert "QUALIFICATION_CONTEXT_MISMATCH" in result.reason_codes
 
 
 def test_coordinated_ucb_only_tamper_is_unknown() -> None:
@@ -598,7 +681,7 @@ def test_coordinated_ucb_only_tamper_is_unknown() -> None:
     )
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+    assert "QUALIFICATION_CONTEXT_MISMATCH" in result.reason_codes
 
 
 def test_coordinated_partition_counts_cannot_change_the_row_denominator() -> None:
@@ -646,7 +729,7 @@ def test_coordinated_partition_counts_cannot_change_the_row_denominator() -> Non
     )
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+    assert "QUALIFICATION_CONTEXT_MISMATCH" in result.reason_codes
 
 
 @pytest.mark.parametrize("mutation", ("reason_count", "reason_order", "boolean_counter"))
@@ -692,3 +775,186 @@ def test_pass_receipt_with_all_accounting_counters_changed_to_one_is_unknown() -
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.reason_codes == ("INCOMPLETE_ACCOUNTING:F1",)
+
+
+def _bound_report() -> tuple[DevelopmentQualityReport, QualificationContext]:
+    fold_rows = {fold_id: _rows(fold_id) for fold_id in FOLD_IDS}
+    context = _context(fold_rows)
+    report = evaluate_pooled(
+        context,
+        {fold_id: _complete_receipt(len(rows)) for fold_id, rows in fold_rows.items()},
+        QualificationEvidence(
+            lineage=GateVerdict.PASS,
+            converter=GateVerdict.PASS,
+            evidence=GateVerdict.PASS,
+            budget=GateVerdict.PASS,
+        ),
+    )
+    return report, context
+
+
+def test_attacker_coordinated_context_replacement_cannot_reuse_unchanged_report() -> None:
+    report, context = _bound_report()
+    changed_folds: list[FoldQualificationContext] = []
+    for fold in context.folds:
+        changed_rows = tuple(
+            row.model_copy(
+                update={
+                    "request_id": f"attacker-{fold.fold_id}-{position:04d}",
+                    "stable_prediction": row.stable_prediction + 100.0,
+                    "candidate_prediction": row.candidate_prediction + 100.0,
+                }
+            )
+            for position, row in enumerate(fold.paired_rows)
+        )
+        changed_folds.append(
+            FoldQualificationContext(
+                fold_id=fold.fold_id,
+                inventory=tuple(
+                    _identity(fold.fold_id, position, row)
+                    for position, row in enumerate(changed_rows)
+                ),
+                paired_rows=changed_rows,
+            )
+        )
+
+    result = qualify_trial(report, QualificationContext(folds=tuple(changed_folds)))
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)
+
+
+def test_missing_or_changed_authoritative_inventory_is_unknown() -> None:
+    report, context = _bound_report()
+    missing = replace(context.folds[0], inventory=context.folds[0].inventory[:-1])
+    missing_context = replace(context, folds=(missing, *context.folds[1:]))
+    first_identity = context.folds[0].inventory[0]
+    changed_material = {
+        "fold_id": first_identity.fold_id,
+        "request_id": first_identity.request_id,
+        "local_timestamp": first_identity.local_timestamp,
+        "source_position": first_identity.source_position + 10000,
+    }
+    changed_identity = SourceRowIdentity(
+        **changed_material,
+        identity_sha256=sha256_hex(canonicalize_json(changed_material)),
+    )
+    changed_fold = replace(
+        context.folds[0],
+        inventory=(changed_identity, *context.folds[0].inventory[1:]),
+    )
+    changed_context = replace(context, folds=(changed_fold, *context.folds[1:]))
+
+    missing_result = qualify_trial(report, None)
+    invalid_result = qualify_trial(report, missing_context)
+    changed_result = qualify_trial(report, changed_context)
+
+    assert missing_result.verdict is GateVerdict.UNKNOWN
+    assert missing_result.reason_codes == ("QUALIFICATION_CONTEXT_REQUIRED",)
+    assert invalid_result.verdict is GateVerdict.UNKNOWN
+    assert invalid_result.reason_codes == ("QUALIFICATION_CONTEXT_INVALID",)
+    assert changed_result.verdict is GateVerdict.UNKNOWN
+    assert changed_result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)
+
+
+def test_changed_context_rows_are_unknown_even_when_identity_order_is_unchanged() -> None:
+    report, context = _bound_report()
+    first = context.folds[0]
+    changed_rows = (
+        first.paired_rows[0].model_copy(update={"candidate_prediction": 0.0}),
+        *first.paired_rows[1:],
+    )
+    changed_context = replace(
+        context,
+        folds=(replace(first, paired_rows=changed_rows), *context.folds[1:]),
+    )
+
+    result = qualify_trial(report, changed_context)
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert result.reason_codes == ("QUALIFICATION_CONTEXT_MISMATCH",)
+
+
+def test_invalid_numeric_context_row_fails_closed_before_digest_or_bootstrap() -> None:
+    report, context = _bound_report()
+    first = context.folds[0]
+    changed_rows = (
+        first.paired_rows[0].model_copy(update={"candidate_prediction": float("nan")}),
+        *first.paired_rows[1:],
+    )
+    changed_context = replace(
+        context,
+        folds=(replace(first, paired_rows=changed_rows), *context.folds[1:]),
+    )
+
+    result = qualify_trial(report, changed_context)
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert result.reason_codes == ("QUALIFICATION_CONTEXT_INVALID",)
+
+
+def test_report_asdict_contains_no_transient_or_raw_row_material() -> None:
+    original_report, context = _bound_report()
+    first_fold = context.folds[0]
+    sentinel_row = first_fold.paired_rows[0].model_copy(
+        update={
+            "stable_prediction": 123456.789123,
+            "candidate_prediction": 234567.891234,
+            "label": 345678.912345,
+        }
+    )
+    sentinel_context = replace(
+        context,
+        folds=(
+            replace(
+                first_fold,
+                paired_rows=(sentinel_row, *first_fold.paired_rows[1:]),
+            ),
+            *context.folds[1:],
+        ),
+    )
+    report = production_evaluate_pooled(
+        sentinel_context,
+        {fold.fold_id: fold.completeness for fold in original_report.folds},
+        original_report.qualification_evidence,
+    )
+
+    document = asdict(report)
+    forbidden_keys = {
+        "request_id",
+        "calendar_day",
+        "stable_prediction",
+        "candidate_prediction",
+        "groups",
+        "local_timestamp",
+        "paired_rows",
+        "inventory",
+        "qualification_context",
+    }
+
+    observed_keys: set[str] = set()
+    scalar_values: list[object] = []
+
+    def collect_keys(value: object) -> None:
+        if isinstance(value, dict):
+            observed_keys.update(str(key) for key in value)
+            for nested in value.values():
+                collect_keys(nested)
+        elif isinstance(value, list | tuple):
+            for nested in value:
+                collect_keys(nested)
+        elif hasattr(value, "model_dump"):
+            collect_keys(value.model_dump(mode="json"))
+        else:
+            scalar_values.append(value)
+
+    collect_keys(document)
+    assert forbidden_keys.isdisjoint(observed_keys)
+    assert sentinel_row.request_id not in scalar_values
+    assert sentinel_row.calendar_day.isoformat() not in scalar_values
+    assert sentinel_row.stable_prediction not in scalar_values
+    assert sentinel_row.candidate_prediction not in scalar_values
+    assert sentinel_row.label not in scalar_values
+    assert not any(
+        isinstance(value, FoldQualificationContext | PairedQualityRow) for value in scalar_values
+    )

@@ -6,6 +6,8 @@ from datetime import date, timedelta
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from mdcp.common.canonical import canonicalize_json
+from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.policy.cluster_bootstrap import PairedQualityRow
 from mdcp.temporal.completeness import (
@@ -19,10 +21,13 @@ from mdcp.temporal.evaluation import (
     FIXED_SUBGROUPS,
     FOLD_IDS,
     DevelopmentQualityReport,
+    FoldQualificationContext,
+    QualificationContext,
     QualificationEvidence,
     evaluate_pooled,
     qualify_trial,
 )
+from mdcp.temporal.folds import SourceRowIdentity
 
 
 def _layer(count: int, reasons: tuple[str, ...]) -> LayerAccounting:
@@ -108,12 +113,42 @@ def _rows(
     )
 
 
+def _identity(fold_id: str, position: int, row: PairedQualityRow) -> SourceRowIdentity:
+    local_timestamp = f"{row.calendar_day.isoformat()}T{position % 24:02d}:{position % 60:02d}:00"
+    material = {
+        "fold_id": fold_id,
+        "request_id": row.request_id,
+        "local_timestamp": local_timestamp,
+        "source_position": position,
+    }
+    return SourceRowIdentity(
+        **material,
+        identity_sha256=sha256_hex(canonicalize_json(material)),
+    )
+
+
+def _context(fold_rows: dict[str, tuple[PairedQualityRow, ...]]) -> QualificationContext:
+    return QualificationContext(
+        folds=tuple(
+            FoldQualificationContext(
+                fold_id=fold_id,
+                inventory=tuple(
+                    _identity(fold_id, position, row)
+                    for position, row in enumerate(fold_rows[fold_id])
+                ),
+                paired_rows=fold_rows[fold_id],
+            )
+            for fold_id in FOLD_IDS
+        )
+    )
+
+
 def _report(
     *,
     fold_points: tuple[float, float, float, float] = (0.90, 0.90, 0.90, 0.90),
     target_group: str | None = None,
     pooled_target_count: int = 0,
-) -> DevelopmentQualityReport:
+) -> tuple[DevelopmentQualityReport, QualificationContext]:
     per_fold_counts = tuple(
         pooled_target_count // 4 + (1 if position < pooled_target_count % 4 else 0)
         for position in range(4)
@@ -127,8 +162,9 @@ def _report(
         )
         for position, (fold_id, point) in enumerate(zip(FOLD_IDS, fold_points, strict=True))
     }
-    return evaluate_pooled(
-        fold_rows,
+    context = _context(fold_rows)
+    report = evaluate_pooled(
+        context,
         {fold_id: _receipt(len(rows)) for fold_id, rows in fold_rows.items()},
         QualificationEvidence(
             lineage=GateVerdict.PASS,
@@ -137,12 +173,14 @@ def _report(
             budget=GateVerdict.PASS,
         ),
     )
+    return report, context
 
 
 @settings(max_examples=12, deadline=None)
 @given(excess=st.floats(min_value=1e-9, max_value=0.1, allow_nan=False))
 def test_any_overall_threshold_excess_is_a_fail_not_unknown(excess: float) -> None:
-    result = qualify_trial(_report(fold_points=(0.97 + excess,) * 4))
+    report, context = _report(fold_points=(0.97 + excess,) * 4)
+    result = qualify_trial(report, context)
 
     assert result.verdict is GateVerdict.FAIL
     assert result.qualified is False
@@ -163,7 +201,8 @@ def test_one_fold_only_win_never_satisfies_stability(
     points = list(losers)
     points.insert(winning_fold, winner)
 
-    result = qualify_trial(_report(fold_points=tuple(points)))  # type: ignore[arg-type]
+    report, context = _report(fold_points=tuple(points))  # type: ignore[arg-type]
+    result = qualify_trial(report, context)
 
     assert result.verdict is GateVerdict.FAIL
     assert result.qualified is False
@@ -173,10 +212,10 @@ def test_one_fold_only_win_never_satisfies_stability(
 @settings(max_examples=12, deadline=None)
 @given(missing=st.sampled_from(FIXED_SUBGROUPS))
 def test_any_missing_fixed_subgroup_makes_evidence_unknown(missing: str) -> None:
-    report = _report()
+    report, context = _report()
     filtered = tuple(entry for entry in report.pooled_subgroups if entry.name != missing)
 
-    result = qualify_trial(replace(report, pooled_subgroups=filtered))
+    result = qualify_trial(replace(report, pooled_subgroups=filtered), context)
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.qualified is False
@@ -186,9 +225,9 @@ def test_any_missing_fixed_subgroup_makes_evidence_unknown(missing: str) -> None
 @settings(max_examples=12, deadline=None)
 @given(count=st.integers(min_value=0, max_value=99), group=st.sampled_from(FIXED_SUBGROUPS))
 def test_any_subgroup_below_100_is_statistically_unknown(count: int, group: str) -> None:
-    report = _report(target_group=group, pooled_target_count=count)
+    report, context = _report(target_group=group, pooled_target_count=count)
 
-    result = qualify_trial(report)
+    result = qualify_trial(report, context)
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.qualified is False

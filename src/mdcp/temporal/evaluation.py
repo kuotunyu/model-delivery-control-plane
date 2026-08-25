@@ -5,8 +5,10 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from dataclasses import field as dataclass_field
+from datetime import date, datetime
 
+from mdcp.common.canonical import canonicalize_json
+from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.policy.cluster_bootstrap import (
     BootstrapResult,
@@ -21,6 +23,7 @@ from mdcp.temporal.completeness import (
     CompletenessReceipt,
     LayerAccounting,
 )
+from mdcp.temporal.folds import SourceRowIdentity
 
 FOLD_IDS = ("F1", "F2", "F3", "F4")
 FIXED_SUBGROUPS = (
@@ -65,6 +68,22 @@ class NamedQualityMetric:
 
 
 @dataclass(frozen=True, slots=True)
+class FoldQualificationContext:
+    """Transient raw fold inputs; never nested in a report or public evidence."""
+
+    fold_id: str
+    inventory: tuple[SourceRowIdentity, ...]
+    paired_rows: tuple[PairedQualityRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class QualificationContext:
+    """Transient exact four-fold source inventory and paired-row binding."""
+
+    folds: tuple[FoldQualificationContext, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class FoldQualityReport:
     """Completeness and frozen quality statistics for one development fold."""
 
@@ -75,7 +94,8 @@ class FoldQualityReport:
     subgroups: tuple[NamedQualityMetric, ...]
     bootstrap: BootstrapResult
     reason_codes: tuple[str, ...]
-    _paired_rows: tuple[PairedQualityRow, ...] = dataclass_field(default=(), repr=False)
+    inventory_sha256: str
+    pairing_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +119,8 @@ class DevelopmentQualityReport:
     pooled_bootstrap: BootstrapResult
     qualification_evidence: QualificationEvidence
     reason_codes: tuple[str, ...]
+    pooled_inventory_sha256: str
+    pooled_pairing_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +180,27 @@ def _canonical_group_membership(groups: object) -> bool:
     )
 
 
+def _valid_paired_row(row: object) -> bool:
+    if (
+        type(row) is not PairedQualityRow
+        or type(row.request_id) is not str
+        or not 1 <= len(row.request_id) <= 128
+        or type(row.calendar_day) is not date
+        or not _canonical_group_membership(row.groups)
+    ):
+        return False
+    values = (row.stable_prediction, row.candidate_prediction, row.label)
+    return all(
+        type(value) in (int, float) and math.isfinite(value) and value >= 0 for value in values
+    )
+
+
 def _row_inventory(
     rows: tuple[PairedQualityRow, ...],
 ) -> tuple[dict[str, int], tuple[str, ...]]:
     counts = {group: 0 for group in FIXED_SUBGROUPS}
     reasons: list[str] = []
-    if any(type(row) is not PairedQualityRow for row in rows):
+    if any(not _valid_paired_row(row) for row in rows):
         reasons.append("INVALID_PAIRED_ROW")
         return counts, tuple(reasons)
     request_ids = [row.request_id for row in rows]
@@ -176,6 +213,131 @@ def _row_inventory(
         for group in row.groups:
             counts[group] += 1
     return counts, tuple(dict.fromkeys(reasons))
+
+
+def _valid_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _identity_material(identity: SourceRowIdentity) -> dict[str, object]:
+    return {
+        "fold_id": identity.fold_id,
+        "request_id": identity.request_id,
+        "local_timestamp": identity.local_timestamp,
+        "source_position": identity.source_position,
+    }
+
+
+def _valid_source_identity(identity: object, fold_id: str) -> bool:
+    if type(identity) is not SourceRowIdentity:
+        return False
+    if (
+        type(identity.fold_id) is not str
+        or identity.fold_id != fold_id
+        or type(identity.request_id) is not str
+        or not identity.request_id
+        or type(identity.local_timestamp) is not str
+        or not identity.local_timestamp
+        or type(identity.source_position) is not int
+        or identity.source_position < 0
+        or not _valid_sha256(identity.identity_sha256)
+    ):
+        return False
+    try:
+        timestamp = datetime.fromisoformat(identity.local_timestamp)
+    except ValueError:
+        return False
+    if (
+        timestamp.tzinfo is not None
+        or timestamp.isoformat(timespec="seconds") != identity.local_timestamp
+    ):
+        return False
+    return identity.identity_sha256 == sha256_hex(canonicalize_json(_identity_material(identity)))
+
+
+def _valid_fold_context(context: object) -> bool:
+    if (
+        type(context) is not FoldQualificationContext
+        or type(context.fold_id) is not str
+        or context.fold_id not in FOLD_IDS
+        or type(context.inventory) is not tuple
+        or type(context.paired_rows) is not tuple
+        or not context.inventory
+        or len(context.inventory) != len(context.paired_rows)
+    ):
+        return False
+    if any(not _valid_source_identity(identity, context.fold_id) for identity in context.inventory):
+        return False
+    counts, row_reasons = _row_inventory(context.paired_rows)
+    if row_reasons or not counts:
+        return False
+    request_ids = [identity.request_id for identity in context.inventory]
+    identity_digests = [identity.identity_sha256 for identity in context.inventory]
+    local_timestamps = [identity.local_timestamp for identity in context.inventory]
+    source_positions = [identity.source_position for identity in context.inventory]
+    if (
+        len(request_ids) != len(set(request_ids))
+        or len(identity_digests) != len(set(identity_digests))
+        or len(local_timestamps) != len(set(local_timestamps))
+        or len(source_positions) != len(set(source_positions))
+        or request_ids != [row.request_id for row in context.paired_rows]
+    ):
+        return False
+    return all(
+        datetime.fromisoformat(identity.local_timestamp).date() == row.calendar_day
+        for identity, row in zip(context.inventory, context.paired_rows, strict=True)
+    )
+
+
+def _valid_qualification_context(context: object) -> bool:
+    if (
+        type(context) is not QualificationContext
+        or type(context.folds) is not tuple
+        or len(context.folds) != len(FOLD_IDS)
+        or any(not _valid_fold_context(fold) for fold in context.folds)
+        or tuple(fold.fold_id for fold in context.folds) != FOLD_IDS
+    ):
+        return False
+    request_ids = [row.request_id for fold in context.folds for row in fold.paired_rows]
+    identity_digests = [
+        identity.identity_sha256 for fold in context.folds for identity in fold.inventory
+    ]
+    return len(request_ids) == len(set(request_ids)) and len(identity_digests) == len(
+        set(identity_digests)
+    )
+
+
+def _inventory_digest(inventory: tuple[SourceRowIdentity, ...]) -> str:
+    return sha256_hex(canonicalize_json([identity.identity_sha256 for identity in inventory]))
+
+
+def _pairing_digest(context: FoldQualificationContext) -> str:
+    pair_digests = []
+    for identity, row in zip(context.inventory, context.paired_rows, strict=True):
+        pair_digests.append(
+            sha256_hex(
+                canonicalize_json(
+                    {
+                        "identity_sha256": identity.identity_sha256,
+                        "request_id": row.request_id,
+                        "calendar_day": row.calendar_day.isoformat(),
+                        "stable_prediction": row.stable_prediction,
+                        "candidate_prediction": row.candidate_prediction,
+                        "label": row.label,
+                        "groups": list(row.groups),
+                    }
+                )
+            )
+        )
+    return sha256_hex(canonicalize_json(pair_digests))
+
+
+def _pooled_digest(fold_digests: Sequence[str]) -> str:
+    return sha256_hex(canonicalize_json(list(fold_digests)))
 
 
 def _valid_pass_layer(
@@ -261,16 +423,16 @@ def _reports_from_bootstrap(
 
 
 def evaluate_fold(
-    fold_id: str,
-    rows: Sequence[PairedQualityRow],
+    context: FoldQualificationContext,
     completeness: CompletenessReceipt,
 ) -> FoldQualityReport:
     """Evaluate one fold with the unchanged paired calendar-day bootstrap."""
-    row_tuple = tuple(rows)
+    if not _valid_fold_context(context):
+        raise ValueError("fold qualification context is invalid")
+    fold_id = context.fold_id
+    row_tuple = context.paired_rows
     counts, row_reasons = _row_inventory(row_tuple)
     reasons: list[str] = list(row_reasons)
-    if type(fold_id) is not str or fold_id not in FOLD_IDS:
-        reasons.append("INVALID_FOLD_ID")
     if not _complete_receipt(completeness, len(row_tuple)):
         reasons.append(f"INCOMPLETE_ACCOUNTING:{fold_id}")
 
@@ -298,43 +460,31 @@ def evaluate_fold(
         subgroups=subgroups,
         bootstrap=bootstrap,
         reason_codes=tuple(dict.fromkeys(reasons)),
-        _paired_rows=row_tuple,
+        inventory_sha256=_inventory_digest(context.inventory),
+        pairing_sha256=_pairing_digest(context),
     )
 
 
 def evaluate_pooled(
-    fold_rows: Mapping[str, Sequence[PairedQualityRow]],
+    context: QualificationContext,
     completeness_by_fold: Mapping[str, CompletenessReceipt],
     qualification_evidence: QualificationEvidence,
 ) -> DevelopmentQualityReport:
     """Evaluate the exact four folds and their disjoint pooled out-of-fold union."""
-    reasons: list[str] = []
-    if (
-        not isinstance(fold_rows, Mapping)
-        or not isinstance(completeness_by_fold, Mapping)
-        or set(fold_rows) != set(FOLD_IDS)
-        or set(completeness_by_fold) != set(FOLD_IDS)
-    ):
-        reasons.append("INVALID_FOLD_INVENTORY")
+    if not _valid_qualification_context(context):
+        raise ValueError("qualification context is invalid")
+    if not isinstance(completeness_by_fold, Mapping) or set(completeness_by_fold) != set(FOLD_IDS):
+        raise ValueError("completeness inventory is invalid")
 
     reports = tuple(
-        evaluate_fold(fold_id, fold_rows[fold_id], completeness_by_fold[fold_id])
-        for fold_id in FOLD_IDS
-        if fold_id in fold_rows and fold_id in completeness_by_fold
+        evaluate_fold(fold, completeness_by_fold[fold.fold_id]) for fold in context.folds
     )
-    pooled_rows = tuple(
-        row for fold_id in FOLD_IDS if fold_id in fold_rows for row in fold_rows[fold_id]
-    )
+    pooled_rows = tuple(row for fold in context.folds for row in fold.paired_rows)
     counts, row_reasons = _row_inventory(pooled_rows)
-    reasons.extend(row_reasons)
+    reasons: list[str] = list(row_reasons)
     seen_days: set[object] = set()
-    for fold_id in FOLD_IDS:
-        fold_days = (
-            {row.calendar_day for row in fold_rows[fold_id]}
-            if fold_id in fold_rows
-            and all(type(row) is PairedQualityRow for row in fold_rows[fold_id])
-            else set()
-        )
+    for fold in context.folds:
+        fold_days = {row.calendar_day for row in fold.paired_rows}
         if seen_days.intersection(fold_days):
             reasons.append("OVERLAPPING_FOLD_CALENDAR_DAY")
         seen_days.update(fold_days)
@@ -372,6 +522,8 @@ def evaluate_pooled(
         pooled_bootstrap=bootstrap,
         qualification_evidence=qualification_evidence,
         reason_codes=tuple(dict.fromkeys(reasons)),
+        pooled_inventory_sha256=_pooled_digest([report.inventory_sha256 for report in reports]),
+        pooled_pairing_sha256=_pooled_digest([report.pairing_sha256 for report in reports]),
     )
 
 
@@ -476,9 +628,15 @@ def _report_shape_reasons(report: DevelopmentQualityReport) -> list[str]:
     for fold in report.folds:
         if type(fold.paired_row_count) is not int or fold.paired_row_count < 0:
             return ["INVALID_REPORT_SHAPE"]
+        if not _valid_sha256(fold.inventory_sha256) or not _valid_sha256(fold.pairing_sha256):
+            return ["INVALID_REPORT_SHAPE"]
         if not _exact_subgroup_inventory(fold.subgroups):
             return [f"INVALID_SUBGROUP_INVENTORY:{fold.fold_id}"]
     if type(report.pooled_row_count) is not int or report.pooled_row_count < 0:
+        return ["INVALID_REPORT_SHAPE"]
+    if not _valid_sha256(report.pooled_inventory_sha256) or not _valid_sha256(
+        report.pooled_pairing_sha256
+    ):
         return ["INVALID_REPORT_SHAPE"]
     if not _exact_subgroup_inventory(report.pooled_subgroups):
         return ["INVALID_SUBGROUP_INVENTORY:POOLED"]
@@ -597,20 +755,15 @@ def _pooled_unknown_reasons(report: DevelopmentQualityReport) -> list[str]:
     return unknown
 
 
-def _report_matches_row_recomputation(report: DevelopmentQualityReport) -> bool:
-    fold_rows: dict[str, tuple[PairedQualityRow, ...]] = {}
+def _report_matches_context(
+    report: DevelopmentQualityReport,
+    context: QualificationContext,
+) -> bool:
     receipts: dict[str, CompletenessReceipt] = {}
     for fold in report.folds:
-        if (
-            type(fold._paired_rows) is not tuple
-            or len(fold._paired_rows) != fold.paired_row_count
-            or any(type(row) is not PairedQualityRow for row in fold._paired_rows)
-        ):
-            return False
-        fold_rows[fold.fold_id] = fold._paired_rows
         receipts[fold.fold_id] = fold.completeness
     recomputed = evaluate_pooled(
-        fold_rows,
+        context,
         receipts,
         report.qualification_evidence,
     )
@@ -671,6 +824,7 @@ def _qualification_result(
 
 def qualify_trial(
     report: DevelopmentQualityReport,
+    context: QualificationContext | None = None,
     *,
     trial_id: str = "",
     family_id: str = "",
@@ -697,6 +851,25 @@ def qualify_trial(
             reason_codes=tuple(shape_reasons),
         )
 
+    if context is None:
+        return _qualification_result(
+            report,
+            trial_id=trial_id,
+            family_id=family_id,
+            verdict=GateVerdict.UNKNOWN,
+            qualified=False,
+            reason_codes=("QUALIFICATION_CONTEXT_REQUIRED",),
+        )
+    if not _valid_qualification_context(context):
+        return _qualification_result(
+            report,
+            trial_id=trial_id,
+            family_id=family_id,
+            verdict=GateVerdict.UNKNOWN,
+            qualified=False,
+            reason_codes=("QUALIFICATION_CONTEXT_INVALID",),
+        )
+
     completeness_reasons = [
         f"INCOMPLETE_ACCOUNTING:{fold.fold_id}"
         for fold in report.folds
@@ -712,14 +885,14 @@ def qualify_trial(
             reason_codes=tuple(completeness_reasons),
         )
 
-    if not _report_matches_row_recomputation(report):
+    if not _report_matches_context(report, context):
         return _qualification_result(
             report,
             trial_id=trial_id,
             family_id=family_id,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
-            reason_codes=("REPORT_RECOMPUTATION_MISMATCH",),
+            reason_codes=("QUALIFICATION_CONTEXT_MISMATCH",),
         )
 
     unknown = _fold_unknown_reasons(report)
