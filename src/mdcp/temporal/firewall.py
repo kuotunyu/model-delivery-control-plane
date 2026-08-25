@@ -367,6 +367,10 @@ _PINNED_FILE_CAPABILITY_FUNCTIONS = {
     },
     "src/mdcp/temporal/contract_gate.py": {
         "_checked_json": "e4508a7b837471a78db8ffc3873c055315f5392b033c59f100e6935e57d59214",
+        "_check_golden_vector_inventory": (
+            "55c7cdf79b7afd77932a12f26627bda42585dc3fe562699aeaec5a6fe5890b09"
+        ),
+        "_check_v2_schemas": ("5252e5cfe101bd51573cc6a52bec695762f05182972eba6f6913b3aa58a39642"),
         "_path_digest": "306b3c291c806ed597a75f69d52400f9a0850e6c3ef3196e33e287169d8d1195",
     },
     "src/mdcp/temporal/firewall.py": {
@@ -385,6 +389,26 @@ _PINNED_FILE_CAPABILITY_FUNCTIONS = {
             "a3afbe4051812bfcd039d7171f839e2395865288daf457b75c590f7fee4e3994"
         )
     },
+}
+_PINNED_FILE_CAPABILITY_MODULES = {
+    "src/mdcp/predictor/app_v2.py": (
+        "2b5af76e338af04c5a1e44ddb63ac0882a9242e752b9fdfd7aa5088d74ef49c7"
+    ),
+    "src/mdcp/temporal/contract_gate.py": (
+        "971feef355fc7c9767d6ab496e7b69ca525e8487de2daf7a3195012398073a4e"
+    ),
+    "src/mdcp/temporal/golden_vectors.py": (
+        "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
+    ),
+}
+_SENSITIVE_FILE_CALLABLE_SCOPES = {
+    "src/mdcp/temporal/contract_gate.py": {
+        "_checked_json": "_check_v2_schemas",
+        "_path_digest": "_check_v2_schemas",
+        "mdcp.temporal.golden_vectors.verify_golden_vector_manifest": (
+            "_check_golden_vector_inventory"
+        ),
+    }
 }
 _RESERVED_BINDING_NAMES = frozenset({"__file__"})
 _FAILURE_REASON = "H2_IMPORT_CAPABILITY_FORBIDDEN"
@@ -583,6 +607,11 @@ def _has_exact_path_parameter(node: ast.FunctionDef | ast.AsyncFunctionDef) -> b
 
 
 def _validate_pinned_file_capability_functions(tree: ast.AST, logical_path: str) -> None:
+    expected_module_sha256 = _PINNED_FILE_CAPABILITY_MODULES.get(logical_path)
+    if expected_module_sha256 is not None:
+        normalized_module = ast.dump(tree, include_attributes=False).encode("utf-8")
+        if sha256_hex(normalized_module) != expected_module_sha256:
+            _fail()
     expected_functions = _PINNED_FILE_CAPABILITY_FUNCTIONS.get(logical_path, {})
     for function_name, expected_sha256 in expected_functions.items():
         matches = [
@@ -662,6 +691,22 @@ def _allowed_file_source_name(
         and isinstance(call, ast.Call)
         and call.func is attribute
         and _allowed_file_access_call(call, logical_path, parents)
+    )
+
+
+def _allowed_sensitive_file_callable_reference(
+    node: ast.expr,
+    qualified_name: str,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    allowed_scope = _SENSITIVE_FILE_CALLABLE_SCOPES.get(logical_path, {}).get(qualified_name)
+    parent = parents.get(node)
+    return (
+        allowed_scope is not None
+        and isinstance(parent, ast.Call)
+        and parent.func is node
+        and _enclosing_function(node, parents) == allowed_scope
     )
 
 
@@ -782,6 +827,7 @@ def _environment_access_allowed(
         return (
             isinstance(parent, ast.Subscript)
             and parent.value is node
+            and isinstance(parent.ctx, ast.Load)
             and _constant_string(parent.slice) in allowed_keys
         )
     if qualified_name == "os.getenv":
@@ -957,6 +1003,15 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
             _fail()
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
+            if qualified_name in _SENSITIVE_FILE_CALLABLE_SCOPES.get(
+                logical_path, {}
+            ) and not _allowed_sensitive_file_callable_reference(
+                node,
+                qualified_name,
+                logical_path,
+                parents,
+            ):
+                _fail()
             if (
                 isinstance(node, ast.Name)
                 and node.id in bindings

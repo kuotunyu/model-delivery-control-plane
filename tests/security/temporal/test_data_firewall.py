@@ -513,6 +513,42 @@ def test_static_firewall_rejects_retargeted_trusted_file_sources(
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
+def test_static_firewall_rejects_writes_to_approved_environment_keys(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/predictor/app_v2.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    needle = "import os\n"
+    assert source.count(needle) == 1
+    mutated = source.replace(
+        needle,
+        needle + "os.environ['MDCP_DESCRIPTOR_PATH'] = 'synthetic-h2.json'\n",
+        1,
+    )
+    _write_logical_module(tmp_path, logical_path, mutated)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "call",
+    (
+        "_path_digest(Path('synthetic-h2.bin'))",
+        "_checked_json(Path('synthetic-h2.json'))",
+        "verify_golden_vector_manifest(Path('synthetic-h2.json'))",
+    ),
+)
+def test_static_firewall_rejects_unscoped_file_helper_calls(
+    tmp_path: Path,
+    call: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/contract_gate.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, f"{source}\n{call}")
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 @pytest.mark.parametrize("source", ("breakpoint()", "help('modules')"))
 def test_static_firewall_rejects_runtime_import_and_evaluation_hooks(
     tmp_path: Path,
