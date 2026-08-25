@@ -78,6 +78,206 @@ _ALLOWED_DIRECT_IMPORTS = {
     "mdcp.workload.dataset": frozenset({"load_uci_development_archive"}),
     "mdcp.workload.splits": frozenset({"DevelopmentPartitions", "split_development_rows"}),
 }
+_FORMAL_IMPORT_ALLOWLIST = {
+    "src/mdcp/contracts/workload_v2.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("mdcp.contracts.workload", "BikeRequest"),
+            ("mdcp.contracts.workload", "NormalizedFloat"),
+            ("mdcp.contracts.workload", "RequestId"),
+            ("pydantic", "BaseModel"),
+            ("pydantic", "ConfigDict"),
+            ("pydantic", "Field"),
+            ("pydantic", "StringConstraints"),
+            ("typing", "Annotated"),
+            ("typing", "Literal"),
+        }
+    ),
+    "src/mdcp/predictor/app_v2.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("fastapi", "FastAPI"),
+            ("fastapi", "Request"),
+            ("fastapi.exceptions", "RequestValidationError"),
+            ("fastapi.responses", "JSONResponse"),
+            ("json", None),
+            ("math", None),
+            ("mdcp.common.enums", "ExecutionRole"),
+            ("mdcp.contracts.workload", "PredictionResponse"),
+            ("mdcp.contracts.workload", "SafeErrorResponse"),
+            ("mdcp.predictor.runtime", "OnnxPredictor"),
+            ("mdcp.predictor.runtime", "PredictionContractError"),
+            ("mdcp.temporal.routing", "AdmissionKind"),
+            ("mdcp.temporal.routing", "classify_envelope"),
+            ("os", None),
+            ("pathlib", "Path"),
+            ("pydantic", "ValidationError"),
+            ("typing", "Protocol"),
+        }
+    ),
+    "src/mdcp/temporal/adapter.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("dataclasses", "dataclass"),
+            ("datetime", "date"),
+            ("datetime", "datetime"),
+            ("enum", "StrEnum"),
+            ("math", None),
+            ("mdcp.contracts.workload_v2", "BikeRequestV2"),
+            ("mdcp.temporal.constants", "DOMAIN_END_LOCAL"),
+            ("mdcp.temporal.constants", "DOMAIN_START_LOCAL"),
+            ("mdcp.temporal.constants", "TEMPORAL_FEATURE_COLUMNS"),
+            ("mdcp.temporal.constants", "TIMEZONE_NAME"),
+            ("re", None),
+            ("zoneinfo", "ZoneInfo"),
+        }
+    ),
+    "src/mdcp/temporal/constants.py": frozenset({("datetime", "datetime")}),
+    "src/mdcp/temporal/contract_gate.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Mapping"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.canonical", "parse_json_bytes"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.contracts.release", "serving_inventory_digest"),
+            ("mdcp.contracts.release", "serving_inventory_from_root"),
+            ("mdcp.contracts.serving_identity_v2", "V2_SERVING_PATHS"),
+            ("mdcp.contracts.serving_identity_v2", "V2ServingInventoryBody"),
+            ("mdcp.contracts.serving_identity_v2", "V2ServingInventoryResult"),
+            ("mdcp.contracts.serving_identity_v2", "build_v2_serving_inventory"),
+            ("mdcp.contracts.serving_identity_v2", "verify_v2_serving_inventory"),
+            ("mdcp.contracts.workload_v2", "BikeRequestV2"),
+            ("mdcp.predictor.app", "create_app"),
+            ("mdcp.predictor.app_v2", "create_app"),
+            ("mdcp.temporal.constants", "TEMPORAL_FEATURE_COLUMNS"),
+            ("mdcp.temporal.constants", "TEMPORAL_SCHEMA_ID"),
+            ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("mdcp.temporal.firewall", "BehavioralFirewallBody"),
+            ("mdcp.temporal.firewall", "BehavioralFirewallResult"),
+            ("mdcp.temporal.firewall", "DevelopmentBoundaryResult"),
+            ("mdcp.temporal.firewall", "audit_static_h2_firewall"),
+            ("mdcp.temporal.firewall", "run_behavioral_h2_firewall"),
+            ("mdcp.temporal.firewall", "run_development_boundary"),
+            ("mdcp.temporal.golden_vectors", "GoldenInventoryResult"),
+            ("mdcp.temporal.golden_vectors", "verify_golden_vector_manifest"),
+            ("mdcp.temporal.routing", "AdmissionKind"),
+            ("mdcp.temporal.routing", "classify_envelope"),
+            ("mdcp.workload.features", "audit_temporal_feature_lineage"),
+            ("pandas", None),
+            ("pathlib", "Path"),
+            ("pydantic", "BaseModel"),
+            ("pydantic", "ConfigDict"),
+            ("pydantic", "Field"),
+            ("pydantic", "StringConstraints"),
+            ("typing", "Annotated"),
+            ("typing", "Literal"),
+        }
+    ),
+    "src/mdcp/temporal/evidence.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Mapping"),
+            ("collections.abc", "Sequence"),
+            ("dataclasses", "asdict"),
+            ("dataclasses", "dataclass"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("re", None),
+        }
+    ),
+    _TRUSTED_FIREWALL_PATH: frozenset(
+        {
+            ("__future__", "annotations"),
+            ("ast", None),
+            ("dataclasses", "dataclass"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.workload.dataset", "load_uci_development_archive"),
+            ("mdcp.workload.splits", "split_development_rows"),
+            ("pandas", None),
+            ("pathlib", "Path"),
+            ("pathlib", "PurePosixPath"),
+            ("pydantic", "BeforeValidator"),
+            ("pydantic", "ConfigDict"),
+            ("pydantic", "StringConstraints"),
+            ("pydantic", "with_config"),
+            ("pydantic.dataclasses", "dataclass"),
+            ("re", None),
+            ("sys", None),
+            ("types", "FrameType"),
+            ("types", "FunctionType"),
+            ("typing", "Annotated"),
+            ("typing", "Literal"),
+            ("typing_extensions", "TypedDict"),
+        }
+    ),
+    "src/mdcp/temporal/golden_vectors.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("dataclasses", "dataclass"),
+            ("hashlib", None),
+            ("math", None),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.canonical", "parse_json_bytes"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.contracts.workload_v2", "BikeRequestV2"),
+            ("mdcp.temporal.adapter", "TemporalContractError"),
+            ("mdcp.temporal.adapter", "adapt_v2"),
+            ("mdcp.temporal.constants", "TEMPORAL_FEATURE_COLUMNS"),
+            ("mdcp.temporal.constants", "TEMPORAL_SCHEMA_ID"),
+            ("pathlib", "Path"),
+            ("pydantic", "ValidationError"),
+            ("struct", None),
+            ("typing", "Literal"),
+        }
+    ),
+    "src/mdcp/temporal/routing.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("collections.abc", "Mapping"),
+            ("dataclasses", "dataclass"),
+            ("enum", "StrEnum"),
+            ("mdcp.contracts.workload", "BikeRequest"),
+            ("mdcp.contracts.workload_v2", "BikeRequestV2"),
+            ("mdcp.temporal.adapter", "TemporalContractError"),
+            ("mdcp.temporal.adapter", "TemporalFeatureVector"),
+            ("mdcp.temporal.adapter", "adapt_v2"),
+            ("pydantic", "ValidationError"),
+        }
+    ),
+}
+_FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
+    "src/mdcp/predictor/app_v2.py": frozenset(
+        {"json.loads", "math.isfinite", "os.environ", "os.getenv"}
+    ),
+    "src/mdcp/temporal/adapter.py": frozenset(
+        {"math.cos", "math.isfinite", "math.pi", "math.sin", "re.compile"}
+    ),
+    "src/mdcp/temporal/contract_gate.py": frozenset({"pandas.DataFrame"}),
+    "src/mdcp/temporal/evidence.py": frozenset({"re.IGNORECASE", "re.MULTILINE", "re.compile"}),
+    _TRUSTED_FIREWALL_PATH: frozenset(
+        {
+            "ast.AST",
+            "ast.Attribute",
+            "ast.Import",
+            "ast.ImportFrom",
+            "ast.Name",
+            "ast.expr",
+            "ast.iter_child_nodes",
+            "ast.parse",
+            "ast.walk",
+            "pandas.DataFrame",
+            "pandas.read_csv",
+            "re.compile",
+            "sys.getprofile",
+            "sys.setprofile",
+        }
+    ),
+    "src/mdcp/temporal/golden_vectors.py": frozenset(
+        {"hashlib.sha256", "math.isfinite", "struct.error", "struct.pack"}
+    ),
+}
 _FAILURE_REASON = "H2_IMPORT_CAPABILITY_FORBIDDEN"
 _BEHAVIORAL_FAILURE_REASON = "BEHAVIORAL_H2_FIREWALL_FAILED"
 _FORBIDDEN_CALL_REASON = "FORBIDDEN_CAPABILITY_CALLED"
@@ -207,8 +407,15 @@ def _attribute_name(node: ast.expr, bindings: dict[str, str]) -> str | None:
     return None
 
 
-def _build_bindings(tree: ast.AST, logical_path: str) -> dict[str, str]:
+def _import_allowed(logical_path: str, module: str, imported_name: str | None) -> bool:
+    if imported_name is not None and module in _ALLOWED_DIRECT_IMPORTS:
+        return imported_name in _ALLOWED_DIRECT_IMPORTS[module]
+    return (module, imported_name) in _FORMAL_IMPORT_ALLOWLIST.get(logical_path, frozenset())
+
+
+def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], frozenset[str]]:
     bindings: dict[str, str] = {}
+    module_roots: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -219,9 +426,12 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> dict[str, str]:
                     or _is_forbidden_module(alias.name)
                 ):
                     _fail()
+                if not _import_allowed(logical_path, alias.name, None):
+                    _fail()
                 local_name = alias.asname or alias.name.split(".", 1)[0]
                 qualified_name = alias.name if alias.asname else local_name
                 bindings[local_name] = qualified_name
+                module_roots.add(qualified_name)
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if node.level:
@@ -243,14 +453,18 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> dict[str, str]:
             ) or _is_forbidden_module(module):
                 _fail()
             for alias in node.names:
+                if not _import_allowed(logical_path, module, alias.name):
+                    _fail()
                 local_name = alias.asname or alias.name
                 bindings[local_name] = f"{module}.{alias.name}" if module else alias.name
 
-    return bindings
+    return bindings, frozenset(module_roots)
 
 
 def _audit_tree(tree: ast.AST, logical_path: str) -> None:
-    bindings = _build_bindings(tree, logical_path)
+    bindings, module_roots = _build_bindings(tree, logical_path)
+    allowed_module_attributes = _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST.get(logical_path, frozenset())
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
@@ -260,6 +474,23 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                     node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
                     or (qualified_name is not None and _is_forbidden_module(qualified_name))
                 )
+            ):
+                _fail()
+            if (
+                isinstance(node, ast.Name)
+                and qualified_name in module_roots
+                and not (
+                    isinstance(parents.get(node), ast.Attribute) and parents[node].value is node
+                )
+            ):
+                _fail()
+            if (
+                isinstance(node, ast.Attribute)
+                and qualified_name is not None
+                and any(
+                    qualified_name.startswith(f"{module_root}.") for module_root in module_roots
+                )
+                and qualified_name not in allowed_module_attributes
             ):
                 _fail()
 

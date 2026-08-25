@@ -158,6 +158,18 @@ FORBIDDEN_MODULES = {
         "from mdcp.workload.dataset import load_uci_development_archive\n"
         "target = compile(\"load_uci_development_archive.__globals__\", '<formal>', 'eval')"
     ),
+    "transitive_pandas_import_helper": (
+        "import pandas as pd\n"
+        "target = pd.compat._optional.import_optional_dependency("
+        "'mdcp.workload.dataset').load_uci_archive"
+    ),
+    "direct_pandas_import_helper": (
+        "from pandas.compat._optional import import_optional_dependency\n"
+        "target = import_optional_dependency('mdcp.workload.splits').split_rows"
+    ),
+    "zipfile_archive_loader": "import zipfile\ntarget = zipfile.ZipFile",
+    "direct_zipfile_archive_loader": "from zipfile import ZipFile\ntarget = ZipFile",
+    "unreviewed_process_surface": "import os\ntarget = os.popen('python')",
 }
 
 ALLOWED_NARROW_IMPORTS = (
@@ -170,6 +182,13 @@ ALLOWED_NARROW_IMPORTS = (
 def _write_formal_module(root: Path, source: str) -> str:
     logical_path = "formal.py"
     (root / logical_path).write_text(source + "\n", encoding="utf-8")
+    return logical_path
+
+
+def _write_logical_module(root: Path, logical_path: str, source: str) -> str:
+    target = root / logical_path
+    target.parent.mkdir(parents=True)
+    target.write_text(source + "\n", encoding="utf-8")
     return logical_path
 
 
@@ -203,6 +222,40 @@ def test_static_firewall_allows_only_narrow_development_imports(
     assert result.verdict == "PASS"
     assert result.checked_paths == (logical_path,)
     assert len(result.implementation_sha256) == 64
+
+
+@pytest.mark.parametrize(
+    ("logical_path", "source"),
+    (
+        (
+            "src/mdcp/temporal/contract_gate.py",
+            "import pandas as pd\n"
+            "dependency_surface = pd\n"
+            "target = dependency_surface.compat._optional.import_optional_dependency("
+            "'mdcp.workload.dataset').load_uci_archive",
+        ),
+        (
+            "src/mdcp/temporal/contract_gate.py",
+            "import pandas as pd\n"
+            "(dependency_surface,) = (pd,)\n"
+            "target = dependency_surface.compat._optional.import_optional_dependency("
+            "'mdcp.workload.splits').split_rows",
+        ),
+        (
+            "src/mdcp/predictor/app_v2.py",
+            "import os\nprocess_surface = os\ntarget = process_surface.popen('python')",
+        ),
+    ),
+)
+def test_static_firewall_rejects_rebinding_an_approved_module_surface(
+    tmp_path: Path,
+    logical_path: str,
+    source: str,
+) -> None:
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
 @pytest.mark.parametrize(
