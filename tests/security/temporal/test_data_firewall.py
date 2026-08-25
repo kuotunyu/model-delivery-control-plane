@@ -409,6 +409,18 @@ def test_static_firewall_rejects_retargeted_approved_file_receiver(tmp_path: Pat
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
+@pytest.mark.parametrize("source", ("breakpoint()", "help('modules')"))
+def test_static_firewall_rejects_runtime_import_and_evaluation_hooks(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/adapter.py"
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 @pytest.mark.parametrize(
     "source",
     (
