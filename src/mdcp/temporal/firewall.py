@@ -274,6 +274,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.FunctionDef",
             "ast.Import",
             "ast.ImportFrom",
+            "ast.Load",
             "ast.Name",
             "ast.Starred",
             "ast.Subscript",
@@ -610,6 +611,45 @@ def _constant_string(node: ast.expr) -> str | None:
     return None
 
 
+def _approved_descriptor_path_expression(
+    node: ast.expr,
+    bindings: dict[str, str],
+) -> bool:
+    if (
+        not isinstance(node, ast.Call)
+        or _attribute_name(node.func, bindings) != "pathlib.Path"
+        or len(node.args) != 1
+        or node.keywords
+    ):
+        return False
+    source = node.args[0]
+    return (
+        isinstance(source, ast.Subscript)
+        and _attribute_name(source.value, bindings) == "os.environ"
+        and _constant_string(source.slice) == "MDCP_DESCRIPTOR_PATH"
+    )
+
+
+def _allowed_descriptor_path_reference(
+    node: ast.Name,
+    bindings: dict[str, str],
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    if _enclosing_function(node, parents) != "runtime_from_environment":
+        return False
+    parent = parents.get(node)
+    if isinstance(parent, ast.Assign) and len(parent.targets) == 1 and parent.targets[0] is node:
+        return _approved_descriptor_path_expression(parent.value, bindings)
+    return (
+        isinstance(parent, ast.Attribute)
+        and parent.value is node
+        and parent.attr == "read_text"
+        and isinstance(parents.get(parent), ast.Call)
+        and parents[parent].func is parent
+        and _allowed_file_access_call(parents[parent], "src/mdcp/predictor/app_v2.py", parents)
+    )
+
+
 def _environment_access_allowed(
     node: ast.Attribute,
     qualified_name: str,
@@ -695,6 +735,7 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     pandas_reader_references = 0
     previous_reader_references = 0
+    descriptor_path_references = 0
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and _attribute_name(node, bindings) == "pandas.read_csv":
             pandas_reader_references += 1
@@ -704,6 +745,12 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 node,
                 bindings,
                 parents,
+            ):
+                _fail()
+        if isinstance(node, ast.Name) and node.id == "descriptor_path":
+            descriptor_path_references += 1
+            if logical_path != "src/mdcp/predictor/app_v2.py" or not (
+                _allowed_descriptor_path_reference(node, bindings, parents)
             ):
                 _fail()
         if (
@@ -725,6 +772,12 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
             _fail()
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
+            if (
+                isinstance(node, ast.Name)
+                and node.id in bindings
+                and not isinstance(node.ctx, ast.Load)
+            ):
+                _fail()
             if qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES or (
                 isinstance(node, ast.Attribute)
                 and (
@@ -768,6 +821,8 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     if logical_path == _TRUSTED_FIREWALL_PATH and (
         pandas_reader_references != 3 or previous_reader_references != 3
     ):
+        _fail()
+    if logical_path == "src/mdcp/predictor/app_v2.py" and descriptor_path_references != 2:
         _fail()
 
 
