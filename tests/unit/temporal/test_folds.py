@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from mdcp.temporal.folds import FoldSpec, load_fold_specs, materialize_folds
+from mdcp.workload.splits import DevelopmentPartitions
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
@@ -44,6 +45,40 @@ def test_four_folds_are_exact_and_disjoint() -> None:
 def test_folds_use_expanding_history_and_half_open_boundaries() -> None:
     folds = materialize_folds(_synthetic_development_frame(), EXACT_FOLD_SPECS)
 
+    assert [
+        (
+            fold.spec.train_start,
+            fold.spec.train_end,
+            fold.spec.validation_start,
+            fold.spec.validation_end,
+        )
+        for fold in folds
+    ] == [
+        (
+            pd.Timestamp("2011-01-01T00:00:00"),
+            pd.Timestamp("2011-07-01T00:00:00"),
+            pd.Timestamp("2011-07-01T00:00:00"),
+            pd.Timestamp("2011-10-01T00:00:00"),
+        ),
+        (
+            pd.Timestamp("2011-01-01T00:00:00"),
+            pd.Timestamp("2011-10-01T00:00:00"),
+            pd.Timestamp("2011-10-01T00:00:00"),
+            pd.Timestamp("2012-01-01T00:00:00"),
+        ),
+        (
+            pd.Timestamp("2011-01-01T00:00:00"),
+            pd.Timestamp("2012-01-01T00:00:00"),
+            pd.Timestamp("2012-01-01T00:00:00"),
+            pd.Timestamp("2012-04-01T00:00:00"),
+        ),
+        (
+            pd.Timestamp("2011-01-01T00:00:00"),
+            pd.Timestamp("2012-04-01T00:00:00"),
+            pd.Timestamp("2012-04-01T00:00:00"),
+            pd.Timestamp("2012-07-01T00:00:00"),
+        ),
+    ]
     assert [len(fold.train) for fold in folds] == [4_344, 6_552, 8_760, 10_944]
     assert [len(fold.validation) for fold in folds] == [2_208, 2_208, 2_184, 2_184]
     assert folds[0].validation.index.min() == pd.Timestamp("2011-07-01T00:00:00")
@@ -67,6 +102,75 @@ def test_duplicate_timestamp_identity_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="duplicate source identity"):
         materialize_folds(duplicate, EXACT_FOLD_SPECS)
+
+
+def test_duplicate_request_identity_at_distinct_timestamps_is_rejected() -> None:
+    frame = _synthetic_development_frame().copy()
+    frame["request_id"] = [f"request-{position}" for position in range(len(frame))]
+    frame.iloc[1, frame.columns.get_loc("request_id")] = frame.iloc[0]["request_id"]
+
+    with pytest.raises(ValueError, match="duplicate source identity"):
+        materialize_folds(frame, EXACT_FOLD_SPECS)
+
+
+def test_materialization_rejects_global_non_adjacent_validation_overlap() -> None:
+    overlapping_specs = (
+        FoldSpec(
+            "F1",
+            pd.Timestamp("2011-01-01"),
+            pd.Timestamp("2011-07-01"),
+            pd.Timestamp("2011-07-01"),
+            pd.Timestamp("2011-10-01"),
+        ),
+        FoldSpec(
+            "F2",
+            pd.Timestamp("2011-01-01"),
+            pd.Timestamp("2011-10-01"),
+            pd.Timestamp("2011-10-01"),
+            pd.Timestamp("2012-01-01"),
+        ),
+        FoldSpec(
+            "F3",
+            pd.Timestamp("2011-01-01"),
+            pd.Timestamp("2011-08-01"),
+            pd.Timestamp("2011-08-01"),
+            pd.Timestamp("2011-11-01"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="validation intervals overlap"):
+        materialize_folds(_synthetic_development_frame(), overlapping_specs)
+
+
+def test_materialization_rejects_out_of_order_disjoint_fold_specs() -> None:
+    out_of_order_specs = (EXACT_FOLD_SPECS[1], EXACT_FOLD_SPECS[0], *EXACT_FOLD_SPECS[2:])
+
+    with pytest.raises(ValueError, match="fold specifications are not chronological"):
+        materialize_folds(_synthetic_development_frame(), out_of_order_specs)
+
+
+def test_materialization_from_development_partitions_uses_only_train_and_h1() -> None:
+    frame = _synthetic_development_frame()
+    partitions = DevelopmentPartitions(
+        train=frame.loc[frame.index < pd.Timestamp("2012-01-01")].copy(),
+        h1=frame.loc[frame.index >= pd.Timestamp("2012-01-01")].copy(),
+    )
+
+    folds = materialize_folds(partitions, EXACT_FOLD_SPECS)
+
+    assert tuple(DevelopmentPartitions.__dataclass_fields__) == ("train", "h1")
+    assert not hasattr(partitions, "h2")
+    assert [len(fold.inventory) for fold in folds] == [2_208, 2_208, 2_184, 2_184]
+
+
+def test_load_fold_specs_rejects_malformed_fold_mapping() -> None:
+    malformed_protocol = _protocol()
+    malformed_fold = dict(malformed_protocol["folds"][0])
+    malformed_fold.pop("validation_end")
+    malformed_protocol["folds"] = [malformed_fold, *malformed_protocol["folds"][1:]]
+
+    with pytest.raises(ValueError, match="protocol fold is invalid"):
+        load_fold_specs(malformed_protocol)
 
 
 @pytest.mark.parametrize(

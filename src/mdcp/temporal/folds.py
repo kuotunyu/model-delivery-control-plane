@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -135,6 +135,7 @@ def materialize_folds(
     rows: pd.DataFrame | DevelopmentPartitions, specs: Sequence[FoldSpec]
 ) -> tuple[FoldRows, ...]:
     """Materialize sorted, half-open fold views from development-only rows."""
+    _validate_materialization_specs(specs)
     source = _development_source(rows)
     ordered_rows = _ordered_source_rows(source)
     _reject_duplicate_identities(ordered_rows)
@@ -190,6 +191,19 @@ def _development_source(rows: pd.DataFrame | DevelopmentPartitions) -> pd.DataFr
     if not isinstance(source.index, pd.DatetimeIndex) or source.index.tz is not None:
         raise ValueError("development chronology is invalid")
     return source
+
+
+def _validate_materialization_specs(specs: Sequence[FoldSpec]) -> None:
+    if not all(isinstance(spec, FoldSpec) for spec in specs):
+        raise ValueError("fold specifications are invalid")
+    chronological = tuple(sorted(specs, key=lambda spec: spec.validation_start))
+    if any(
+        later.validation_start < earlier.validation_end
+        for earlier, later in zip(chronological, chronological[1:], strict=False)
+    ):
+        raise ValueError("validation intervals overlap")
+    if tuple(specs) != chronological:
+        raise ValueError("fold specifications are not chronological")
 
 
 def _ordered_source_rows(source: pd.DataFrame) -> list[_OrderedSourceRow]:
@@ -252,7 +266,7 @@ def _identity_for(fold_id: str, row: _OrderedSourceRow) -> SourceRowIdentity:
     )
 
 
-def _row_set_digest(rows: Sequence[_OrderedSourceRow] | Any) -> str:
+def _row_set_digest(rows: Iterable[_OrderedSourceRow]) -> str:
     return sha256_hex(
         canonicalize_json(
             [
