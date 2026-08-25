@@ -130,3 +130,29 @@ def test_duplicate_identity_never_replaces_a_unique_success(
     assert layer.success_count == count - 1
     assert receipt.verdict == "UNKNOWN"
     assert rows == ()
+
+
+@given(stream=st.sampled_from(("adapter", "stable", "candidate")))
+def test_upstream_defect_never_fabricates_downstream_missing_identity(stream: str) -> None:
+    inventory, adapters, stable, candidate, labels = _streams(5)
+    if stream == "adapter":
+        adapters = adapters[:-1]
+        stable = stable[:-1]
+        candidate = candidate[:-1]
+        labels = labels[:-1]
+    elif stream == "stable":
+        stable = stable[:-1]
+        labels = labels[:-1]
+    else:
+        candidate = candidate[:-1]
+        labels = labels[:-1]
+
+    receipt, rows = assemble_development_pairs(inventory, adapters, stable, candidate, labels)
+
+    assert receipt.verdict == "UNKNOWN"
+    assert rows == ()
+    if stream == "adapter":
+        assert receipt.stable.missing_count == 0
+        assert receipt.candidate.missing_count == 0
+    assert receipt.label.missing_count == 0
+    assert receipt.label_missing_count == 0

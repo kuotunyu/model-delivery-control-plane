@@ -130,7 +130,72 @@ def test_prediction_failure_cannot_be_counted_as_missing_label() -> None:
     assert receipt.candidate_failure_count == 1
     assert receipt.candidate.reason_count("INVALID_RESPONSE") == 1
     assert receipt.label_missing_count == 0
-    assert receipt.label_success_count == receipt.source_count
+    assert receipt.label.expected_count == receipt.source_count - 1
+    assert receipt.label_success_count == receipt.source_count - 1
+    assert receipt.label.unexpected_count == 1
+
+
+def test_adapter_failure_reduces_downstream_denominators_without_missing_reasons() -> None:
+    inventory, adapters, stable, candidate, labels = _complete_streams()
+    adapters = (
+        *adapters[:-1],
+        AdapterOutcome(
+            identity=inventory[-1],
+            succeeded=False,
+            reason_code="ADAPTER_REJECTED",
+        ),
+    )
+
+    receipt, rows = assemble_development_pairs(
+        inventory,
+        adapters,
+        stable[:-1],
+        candidate[:-1],
+        labels[:-1],
+    )
+
+    assert receipt.verdict == "UNKNOWN"
+    assert receipt.reason_codes == ("ADAPTER_INCOMPLETE",)
+    assert rows == ()
+    assert receipt.source_count == 3
+    assert receipt.adapter.expected_count == 3
+    assert receipt.adapter_failure_count == 1
+    assert receipt.stable.expected_count == 2
+    assert receipt.stable.success_count == 2
+    assert receipt.stable.missing_count == 0
+    assert receipt.candidate.expected_count == 2
+    assert receipt.candidate.success_count == 2
+    assert receipt.candidate.missing_count == 0
+    assert receipt.label.expected_count == 2
+    assert receipt.label.success_count == 2
+    assert receipt.label.missing_count == 0
+    assert receipt.label_missing_count == 0
+
+
+def test_prediction_failure_reduces_label_denominator_without_missing_label_reason() -> None:
+    inventory, adapters, stable, candidate, labels = _complete_streams()
+    candidate = (
+        *candidate[:-1],
+        PredictionOutcome(
+            identity=inventory[-1],
+            succeeded=False,
+            reason_code="INVALID_RESPONSE",
+        ),
+    )
+
+    receipt, rows = assemble_development_pairs(inventory, adapters, stable, candidate, labels[:-1])
+
+    assert receipt.verdict == "UNKNOWN"
+    assert receipt.reason_codes == ("CANDIDATE_PREDICTION_INCOMPLETE",)
+    assert rows == ()
+    assert receipt.source_count == 3
+    assert receipt.stable.expected_count == 3
+    assert receipt.candidate.expected_count == 3
+    assert receipt.candidate_failure_count == 1
+    assert receipt.label.expected_count == 2
+    assert receipt.label.success_count == 2
+    assert receipt.label.missing_count == 0
+    assert receipt.label_missing_count == 0
 
 
 @pytest.mark.parametrize("stream", ["adapter", "stable", "candidate", "labels"])
@@ -157,6 +222,53 @@ def test_duplicate_expected_identity_is_not_hidden_by_set_equality(stream: str) 
     layer = getattr(receipt, "label" if stream == "labels" else stream)
     assert layer.duplicate_count == 1
     assert layer.success_count == 2
+
+
+def test_duplicate_prediction_retains_terminal_failure_reason_accounting() -> None:
+    inventory, adapters, stable, candidate, labels = _complete_streams()
+    duplicate_failure = PredictionOutcome(
+        identity=inventory[0],
+        succeeded=False,
+        reason_code="INVALID_RESPONSE",
+    )
+
+    receipt, rows = assemble_development_pairs(
+        inventory,
+        adapters,
+        stable,
+        (*candidate, duplicate_failure),
+        labels[1:],
+    )
+
+    assert receipt.verdict == "UNKNOWN"
+    assert rows == ()
+    assert receipt.candidate.duplicate_count == 1
+    assert receipt.candidate.failure_count == 1
+    assert receipt.candidate.reason_count("DUPLICATE_IDENTITY") == 1
+    assert receipt.candidate.reason_count("INVALID_RESPONSE") == 1
+    assert receipt.label.expected_count == 2
+    assert receipt.label.missing_count == 0
+    assert receipt.label_missing_count == 0
+
+
+def test_duplicate_prediction_retains_invalid_terminal_accounting() -> None:
+    inventory, adapters, stable, candidate, labels = _complete_streams()
+    duplicate_invalid = replace(candidate[0], value=float("nan"))
+
+    receipt, rows = assemble_development_pairs(
+        inventory,
+        adapters,
+        stable,
+        (*candidate, duplicate_invalid),
+        labels[1:],
+    )
+
+    assert receipt.verdict == "UNKNOWN"
+    assert rows == ()
+    assert receipt.candidate.duplicate_count == 1
+    assert receipt.candidate.invalid_count == 1
+    assert receipt.candidate.reason_count("DUPLICATE_IDENTITY") == 1
+    assert receipt.candidate.reason_count("INVALID_OUTPUT") == 1
 
 
 def test_unexpected_identity_fails_closed_even_when_all_expected_ids_are_present() -> None:
@@ -206,6 +318,32 @@ def test_duplicate_authoritative_inventory_fails_closed() -> None:
     assert rows == ()
     assert receipt.source_count == 4
     assert "SOURCE_INVENTORY_INVALID" in receipt.reason_codes
+
+
+def test_duplicate_authoritative_local_timestamp_fails_closed() -> None:
+    inventory, adapters, stable, candidate, labels = _complete_streams(2)
+    duplicate_timestamp_material = {
+        "fold_id": inventory[1].fold_id,
+        "request_id": inventory[1].request_id,
+        "local_timestamp": inventory[0].local_timestamp,
+        "source_position": inventory[1].source_position,
+    }
+    duplicate_timestamp_identity = SourceRowIdentity(
+        **duplicate_timestamp_material,
+        identity_sha256=sha256_hex(canonicalize_json(duplicate_timestamp_material)),
+    )
+
+    receipt, rows = assemble_development_pairs(
+        (inventory[0], duplicate_timestamp_identity),
+        (adapters[0], replace(adapters[1], identity=duplicate_timestamp_identity)),
+        (stable[0], replace(stable[1], identity=duplicate_timestamp_identity)),
+        (candidate[0], replace(candidate[1], identity=duplicate_timestamp_identity)),
+        (labels[0], replace(labels[1], identity=duplicate_timestamp_identity)),
+    )
+
+    assert receipt.verdict == "UNKNOWN"
+    assert rows == ()
+    assert receipt.reason_codes == ("SOURCE_INVENTORY_INVALID",)
 
 
 def test_noncanonical_source_timestamp_fails_closed_even_with_matching_digest() -> None:
@@ -336,6 +474,23 @@ def test_adapter_calendar_day_must_match_the_authoritative_identity() -> None:
     inventory, adapters, stable, candidate, labels = _complete_streams()
     adapters = (
         replace(adapters[0], calendar_day=date(2011, 7, 2)),
+        *adapters[1:],
+    )
+
+    receipt, rows = assemble_development_pairs(inventory, adapters, stable, candidate, labels)
+
+    assert receipt.verdict == "UNKNOWN"
+    assert rows == ()
+    assert receipt.adapter.invalid_count == 1
+
+
+def test_adapter_groups_must_use_canonical_weather_day_demand_order() -> None:
+    inventory, adapters, stable, candidate, labels = _complete_streams()
+    adapters = (
+        replace(
+            adapters[0],
+            groups=("day_working", "weather_clear", "demand_off_peak"),
+        ),
         *adapters[1:],
     )
 

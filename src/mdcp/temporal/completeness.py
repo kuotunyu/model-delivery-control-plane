@@ -92,13 +92,12 @@ class LayerAccounting:
 
     @property
     def success_rate(self) -> float:
-        return self.success_count / self.expected_count if self.expected_count else 0.0
+        return self.success_count / self.expected_count if self.expected_count else 1.0
 
     @property
     def complete(self) -> bool:
         return (
-            self.expected_count > 0
-            and self.observed_count == self.expected_count
+            self.observed_count == self.expected_count
             and self.success_count == self.expected_count
             and self.failure_count == 0
             and self.missing_count == 0
@@ -224,10 +223,12 @@ def _valid_source_inventory(inventory: tuple[SourceRowIdentity, ...]) -> bool:
         return False
     digests = [identity.identity_sha256 for identity in inventory]
     request_ids = [identity.request_id for identity in inventory]
+    local_timestamps = [identity.local_timestamp for identity in inventory]
     source_positions = [(identity.fold_id, identity.source_position) for identity in inventory]
     return (
         len(digests) == len(set(digests))
         and len(request_ids) == len(set(request_ids))
+        and len(local_timestamps) == len(set(local_timestamps))
         and len(source_positions) == len(set(source_positions))
     )
 
@@ -251,10 +252,9 @@ def _adapter_classification(outcome: AdapterOutcome) -> tuple[str, str | None]:
             type(groups) is not tuple
             or len(groups) != 3
             or any(type(group) is not str or not group for group in groups)
-            or len(set(groups)) != len(groups)
-            or len(_WEATHER_GROUPS.intersection(groups)) != 1
-            or len(_DAY_GROUPS.intersection(groups)) != 1
-            or len(_DEMAND_GROUPS.intersection(groups)) != 1
+            or groups[0] not in _WEATHER_GROUPS
+            or groups[1] not in _DAY_GROUPS
+            or groups[2] not in _DEMAND_GROUPS
             or outcome.calendar_day != authoritative_day
         ):
             return "invalid", "INVALID_OUTPUT"
@@ -365,6 +365,16 @@ def _account_stream(
         if len(matches) != 1:
             duplicate_count += 1
             reasons["DUPLICATE_IDENTITY"] += 1
+            for outcome in matches:
+                classification, reason_code = classify(outcome)
+                if classification == "missing":
+                    missing_count += 1
+                    reasons[reason_code or "MISSING_IDENTITY"] += 1
+                elif classification == "invalid":
+                    invalid_count += 1
+                    reasons[reason_code or "INVALID_OUTPUT"] += 1
+                elif classification == "failure":
+                    reasons[reason_code or "INVALID_OUTPUT"] += 1
             continue
         outcome = matches[0]
         classification, reason_code = classify(outcome)
@@ -453,22 +463,32 @@ def assemble_development_pairs(
         classify=_adapter_classification,
         reason_codes=ADAPTER_REASON_CODES,
     )
+    prediction_expected = {
+        identity_sha256: expected[identity_sha256]
+        for identity_sha256 in expected
+        if identity_sha256 in accepted_adapters
+    }
     stable_accounting, accepted_stable = _account_stream(
-        expected,
+        prediction_expected,
         stable_tuple,
         outcome_type=PredictionOutcome,
         classify=_prediction_classification,
         reason_codes=PREDICTION_REASON_CODES,
     )
     candidate_accounting, accepted_candidate = _account_stream(
-        expected,
+        prediction_expected,
         candidate_tuple,
         outcome_type=PredictionOutcome,
         classify=_prediction_classification,
         reason_codes=PREDICTION_REASON_CODES,
     )
+    label_expected = {
+        identity_sha256: expected[identity_sha256]
+        for identity_sha256 in expected
+        if identity_sha256 in accepted_stable and identity_sha256 in accepted_candidate
+    }
     label_accounting, accepted_labels = _account_stream(
-        expected,
+        label_expected,
         label_tuple,
         outcome_type=LabelOutcome,
         classify=_label_classification,
