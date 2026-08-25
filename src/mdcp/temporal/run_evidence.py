@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import ctypes
 import json
 import math
 import os
+import unicodedata
 from ctypes import wintypes
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -27,6 +29,11 @@ from mdcp.temporal.evidence import public_evidence_violations
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 _FOLD_IDS = ("F1", "F2", "F3", "F4")
 _TRIAL_IDS = tuple(f"TRIAL-{number:02d}" for number in range(1, 21))
+_PRIVATE_CONTAINER_SCHEMA = "mdcp.private-evidence-container.v1"
+_MAX_PRIVATE_ENTRIES = 128
+_MAX_PRIVATE_PAYLOAD_BYTES = 128 * 1024**2
+_MAX_PRIVATE_TOTAL_BYTES = 384 * 1024**2
+_MAX_PRIVATE_CONTAINER_BYTES = 512 * 1024**2
 _WINDOWS_RESERVED_NAMES = frozenset(
     {
         "CON",
@@ -41,16 +48,10 @@ _WINDOWS_DELETE = 0x00010000
 _WINDOWS_SYNCHRONIZE = 0x00100000
 _WINDOWS_FILE_LIST_DIRECTORY = 0x00000001
 _WINDOWS_FILE_WRITE_DATA = 0x00000002
-_WINDOWS_FILE_APPEND_DATA = 0x00000004
 _WINDOWS_FILE_ADD_FILE = 0x00000002
-_WINDOWS_FILE_ADD_SUBDIRECTORY = 0x00000004
 _WINDOWS_FILE_TRAVERSE = 0x00000020
 _WINDOWS_FILE_READ_ATTRIBUTES = 0x00000080
-_WINDOWS_FILE_WRITE_ATTRIBUTES = 0x00000100
-_WINDOWS_GENERIC_WRITE = 0x40000000
 _WINDOWS_FILE_SHARE_READ_WRITE = 0x00000003
-_WINDOWS_FILE_SHARE_ALL = 0x00000007
-_WINDOWS_CREATE_NEW = 1
 _WINDOWS_OPEN_EXISTING = 3
 _WINDOWS_FILE_ATTRIBUTE_DIRECTORY = 0x00000010
 _WINDOWS_FILE_ATTRIBUTE_NORMAL = 0x00000080
@@ -58,22 +59,17 @@ _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 _WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _WINDOWS_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _WINDOWS_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
-_WINDOWS_FILE_RENAME_INFO = 3
 _WINDOWS_FILE_DISPOSITION_INFO = 4
-_WINDOWS_ERROR_ACCESS_DENIED = 5
-_WINDOWS_ERROR_FILE_NOT_FOUND = 2
-_WINDOWS_ERROR_PATH_NOT_FOUND = 3
-_WINDOWS_ERROR_FILE_EXISTS = 80
-_WINDOWS_ERROR_ALREADY_EXISTS = 183
 _WINDOWS_OBJECT_CASE_INSENSITIVE = 0x00000040
 _WINDOWS_FILE_OPEN = 1
 _WINDOWS_FILE_CREATE = 2
 _WINDOWS_FILE_DIRECTORY_FILE = 0x00000001
+_WINDOWS_FILE_OPEN_REPARSE_POINT = 0x00200000
 _WINDOWS_FILE_WRITE_THROUGH = 0x00000002
 _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
 _WINDOWS_FILE_NON_DIRECTORY_FILE = 0x00000040
-_WINDOWS_STATUS_OBJECT_NAME_NOT_FOUND = -1073741772
 _WINDOWS_STATUS_OBJECT_NAME_COLLISION = -1073741771
+_WINDOWS_STATUS_FILE_IS_A_DIRECTORY = -1073741638
 
 
 class _WindowsFileInformation(ctypes.Structure):
@@ -88,15 +84,6 @@ class _WindowsFileInformation(ctypes.Structure):
         ("nNumberOfLinks", wintypes.DWORD),
         ("nFileIndexHigh", wintypes.DWORD),
         ("nFileIndexLow", wintypes.DWORD),
-    )
-
-
-class _WindowsRenameInformation(ctypes.Structure):
-    _fields_ = (
-        ("ReplaceIfExists", wintypes.BOOL),
-        ("RootDirectory", wintypes.HANDLE),
-        ("FileNameLength", wintypes.DWORD),
-        ("FileName", wintypes.WCHAR * 1),
     )
 
 
@@ -139,6 +126,28 @@ def _is_windows_alias_component(value: str) -> bool:
         ":" in value
         or value.endswith((".", " "))
         or value.split(".", 1)[0].rstrip(" .").upper() in _WINDOWS_RESERVED_NAMES
+    )
+
+
+def _is_canonical_logical_path(value: str) -> bool:
+    path = PurePosixPath(value)
+    return bool(
+        value
+        and len(value) <= 240
+        and value.isascii()
+        and "\\" not in value
+        and not path.is_absolute()
+        and path.as_posix() == value
+        and all(
+            part not in ("", ".", "..")
+            and len(part) <= 64
+            and all(
+                character.isascii() and (character.isalnum() or character in "._-")
+                for character in part
+            )
+            and not _is_windows_alias_component(part)
+            for part in path.parts
+        )
     )
 
 
@@ -283,15 +292,7 @@ class PrivateFoldEvidence(BaseModel):
     @field_validator("logical_path")
     @classmethod
     def _canonical_logical_path(cls, value: str) -> str:
-        path = PurePosixPath(value)
-        if (
-            not value
-            or "\\" in value
-            or path.is_absolute()
-            or any(part in ("", ".", "..") for part in path.parts)
-            or any(_is_windows_alias_component(part) for part in path.parts)
-            or path.as_posix() != value
-        ):
+        if not _is_canonical_logical_path(value):
             raise ValueError("LOGICAL_PATH_INVALID")
         return value
 
@@ -320,6 +321,65 @@ class PrivateBundleIdentity(BaseModel):
     def _non_negative(cls, value: int) -> int:
         if value < 0:
             raise ValueError("IDENTITY_COUNT_INVALID")
+        return value
+
+
+class PrivateContainerCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    verdict: Literal["PASS", "FAIL"]
+    reason_codes: tuple[
+        Literal[
+            "PRIVATE_CONTAINER_INVALID",
+            "PRIVATE_CONTAINER_NONCANONICAL",
+            "PRIVATE_CONTAINER_IDENTITY_MISMATCH",
+            "PRIVATE_CONTAINER_SIZE_EXCEEDED",
+        ],
+        ...,
+    ]
+    identity: PrivateBundleIdentity | None = None
+
+
+class _PrivateContainerEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    logical_path: str
+    byte_size: StrictInt
+    sha256: Sha256
+    payload_base64: str
+
+    @field_validator("logical_path")
+    @classmethod
+    def _closed_logical_path(cls, value: str) -> str:
+        if not _is_canonical_logical_path(value):
+            raise ValueError("LOGICAL_PATH_INVALID")
+        return value
+
+    @field_validator("byte_size")
+    @classmethod
+    def _non_negative_size(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("BYTE_SIZE_INVALID")
+        return value
+
+
+class _PrivateContainer(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    schema_version: Literal["mdcp.private-evidence-container.v1"]
+    canonicalization_version: Literal["RFC8785"]
+    evidence_class: Literal["synthetic_test", "natural_development"]
+    file_count: StrictInt
+    total_bytes: StrictInt
+    entries: tuple[_PrivateContainerEntry, ...]
+    inventory_sha256: Sha256
+    manifest_sha256: Sha256
+
+    @field_validator("file_count", "total_bytes")
+    @classmethod
+    def _non_negative_count(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("COUNT_INVALID")
         return value
 
 
@@ -366,50 +426,24 @@ def verify_development_result(path: Path) -> DevelopmentResultCheck:
 
 
 def write_synthetic_bundle_no_clobber(
-    root: Path, bundle: PrivateRunBundle
+    destination: Path, bundle: PrivateRunBundle
 ) -> PrivateBundleIdentity:
-    """Atomically publish a private synthetic bundle under an already trusted parent."""
+    """Publish one canonical synthetic container without clobbering a destination."""
     if type(bundle) is not PrivateRunBundle:
         raise _PublicationError("PRIVATE_BUNDLE_INVALID")
     if bundle.evidence_class != "synthetic_test":
         raise _PublicationError("FORMAL_RUN_PERMIT_REQUIRED")
-    files = _validated_private_files(bundle.files)
-    inventory = [
-        {
-            "logical_path": item.logical_path,
-            "sha256": sha256_hex(item.canonical_bytes),
-            "bytes": len(item.canonical_bytes),
-        }
-        for item in files
-    ]
-    inventory_sha256 = sha256_hex(canonicalize_json(inventory))
-    manifest = canonicalize_json(
-        {
-            "evidence_class": "synthetic_test",
-            "files": inventory,
-            "inventory_sha256": inventory_sha256,
-        }
-    )
-    manifest_sha256 = sha256_hex(manifest)
+    container_bytes, identity = _canonical_private_container(bundle)
+    if _publication_platform() != "nt":
+        raise _PublicationError("PUBLICATION_UNSUPPORTED")
     try:
-        destination = _absolute_destination(root)
-        platform = _publication_platform()
-        if platform == "nt":
-            _publish_windows_bundle(destination, files, manifest)
-        elif platform == "posix":
-            _publish_posix_bundle(destination, files, manifest)
-        else:
-            raise _PublicationError("PUBLICATION_FAILED")
+        checked_destination = _absolute_destination(destination)
+        _publish_windows_container(checked_destination, container_bytes)
     except _PublicationError:
         raise
     except Exception:
         raise _PublicationError("PUBLICATION_FAILED") from None
-    return PrivateBundleIdentity(
-        file_count=len(files),
-        total_bytes=sum(len(item.canonical_bytes) for item in files),
-        inventory_sha256=inventory_sha256,
-        manifest_sha256=manifest_sha256,
-    )
+    return identity
 
 
 def _publication_platform() -> str:
@@ -431,27 +465,68 @@ def _failed_result(code: str) -> DevelopmentResultCheck:
     return DevelopmentResultCheck(verdict="FAIL", reason_codes=(code,))
 
 
-def _absolute_destination(root: Path) -> Path:
-    if (
-        not isinstance(root, Path)
-        or root.name in ("", ".", "..")
-        or _is_windows_alias_component(root.name)
-    ):
-        raise _PublicationError("TRUSTED_PARENT_REQUIRED")
-    return Path(os.path.abspath(os.fspath(root)))
+def _private_container_failure(code: str) -> PrivateContainerCheck:
+    allowed = {
+        "PRIVATE_CONTAINER_INVALID",
+        "PRIVATE_CONTAINER_NONCANONICAL",
+        "PRIVATE_CONTAINER_IDENTITY_MISMATCH",
+        "PRIVATE_CONTAINER_SIZE_EXCEEDED",
+    }
+    if code not in allowed:
+        code = "PRIVATE_CONTAINER_INVALID"
+    return PrivateContainerCheck(verdict="FAIL", reason_codes=(code,))
+
+
+def _inventory_core(entries: tuple[_PrivateContainerEntry, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "logical_path": entry.logical_path,
+            "byte_size": entry.byte_size,
+            "sha256": entry.sha256,
+        }
+        for entry in entries
+    ]
+
+
+def _manifest_core(
+    evidence_class: str,
+    file_count: int,
+    total_bytes: int,
+    inventory_sha256: str,
+) -> dict[str, object]:
+    return {
+        "schema_version": _PRIVATE_CONTAINER_SCHEMA,
+        "canonicalization_version": "RFC8785",
+        "evidence_class": evidence_class,
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+        "inventory_sha256": inventory_sha256,
+    }
 
 
 def _validated_private_files(
     files: tuple[PrivateFoldEvidence, ...],
 ) -> tuple[PrivateFoldEvidence, ...]:
-    if not files:
+    if type(files) is not tuple or not files:
         raise _PublicationError("PRIVATE_BUNDLE_EMPTY")
+    if len(files) > _MAX_PRIVATE_ENTRIES:
+        raise _PublicationError("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+    if any(type(item) is not PrivateFoldEvidence for item in files):
+        raise _PublicationError("PRIVATE_BUNDLE_INVALID")
     paths = tuple(item.logical_path for item in files)
     if len(set(paths)) != len(paths):
         raise _PublicationError("DUPLICATE_LOGICAL_PATH")
-    if paths != tuple(sorted(paths)):
+    if paths != tuple(sorted(paths, key=lambda value: value.encode("ascii"))):
         raise _PublicationError("LOGICAL_PATH_ORDER_INVALID")
+    total_bytes = 0
     for item in files:
+        if type(item.canonical_bytes) is not bytes:
+            raise _PublicationError("PRIVATE_BUNDLE_INVALID")
+        if len(item.canonical_bytes) > _MAX_PRIVATE_PAYLOAD_BYTES:
+            raise _PublicationError("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+        total_bytes += len(item.canonical_bytes)
+        if total_bytes > _MAX_PRIVATE_TOTAL_BYTES:
+            raise _PublicationError("PRIVATE_CONTAINER_SIZE_EXCEEDED")
         try:
             if canonicalize_json(parse_json_bytes(item.canonical_bytes)) != item.canonical_bytes:
                 raise _PublicationError("NONCANONICAL_PRIVATE_BYTES")
@@ -462,13 +537,156 @@ def _validated_private_files(
     return files
 
 
-def _publish_posix_bundle(
-    destination: Path,
-    files: tuple[PrivateFoldEvidence, ...],
-    manifest: bytes,
-) -> None:
-    del destination, files, manifest
-    raise _PublicationError("PUBLICATION_UNSUPPORTED") from None
+def _canonical_private_container(
+    bundle: PrivateRunBundle,
+) -> tuple[bytes, PrivateBundleIdentity]:
+    """Build and validate the sole deterministic physical private artifact."""
+    if type(bundle) is not PrivateRunBundle:
+        raise _PublicationError("PRIVATE_BUNDLE_INVALID")
+    files = _validated_private_files(bundle.files)
+    entries = tuple(
+        _PrivateContainerEntry(
+            logical_path=item.logical_path,
+            byte_size=len(item.canonical_bytes),
+            sha256=sha256_hex(item.canonical_bytes),
+            payload_base64=base64.b64encode(item.canonical_bytes).decode("ascii"),
+        )
+        for item in files
+    )
+    total_bytes = sum(entry.byte_size for entry in entries)
+    inventory_sha256 = sha256_hex(canonicalize_json(_inventory_core(entries)))
+    manifest = _manifest_core(
+        bundle.evidence_class,
+        len(entries),
+        total_bytes,
+        inventory_sha256,
+    )
+    manifest_sha256 = sha256_hex(canonicalize_json(manifest))
+    container = _PrivateContainer(
+        **manifest,
+        entries=entries,
+        manifest_sha256=manifest_sha256,
+    )
+    container_bytes = canonicalize_json(container.model_dump(mode="json"))
+    if len(container_bytes) > _MAX_PRIVATE_CONTAINER_BYTES:
+        raise _PublicationError("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+    identity = PrivateBundleIdentity(
+        file_count=len(entries),
+        total_bytes=total_bytes,
+        inventory_sha256=inventory_sha256,
+        manifest_sha256=manifest_sha256,
+    )
+    return container_bytes, identity
+
+
+def verify_private_container(
+    path: Path, expected_identity: PrivateBundleIdentity
+) -> PrivateContainerCheck:
+    """Verify one regular canonical container against its narrow public identity."""
+    if not isinstance(path, Path) or type(expected_identity) is not PrivateBundleIdentity:
+        return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+    try:
+        if path.is_symlink() or not path.is_file():
+            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        file_size = path.stat().st_size
+        if file_size > _MAX_PRIVATE_CONTAINER_BYTES:
+            return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+        raw = path.read_bytes()
+        if len(raw) != file_size:
+            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        document = parse_json_bytes(raw)
+        container = _PrivateContainer.model_validate(document)
+        if canonicalize_json(container.model_dump(mode="json")) != raw:
+            return _private_container_failure("PRIVATE_CONTAINER_NONCANONICAL")
+        entries = container.entries
+        if not entries:
+            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        if len(entries) > _MAX_PRIVATE_ENTRIES:
+            return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+        paths = tuple(entry.logical_path for entry in entries)
+        if paths != tuple(sorted(set(paths), key=lambda value: value.encode("ascii"))):
+            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        total_bytes = 0
+        for entry in entries:
+            try:
+                payload = base64.b64decode(entry.payload_base64, validate=True)
+            except Exception:
+                return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+            if base64.b64encode(payload).decode("ascii") != entry.payload_base64:
+                return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+            if len(payload) > _MAX_PRIVATE_PAYLOAD_BYTES:
+                return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+            total_bytes += len(payload)
+            if total_bytes > _MAX_PRIVATE_TOTAL_BYTES:
+                return _private_container_failure("PRIVATE_CONTAINER_SIZE_EXCEEDED")
+            try:
+                if canonicalize_json(parse_json_bytes(payload)) != payload:
+                    return _private_container_failure("PRIVATE_CONTAINER_NONCANONICAL")
+            except Exception:
+                return _private_container_failure("PRIVATE_CONTAINER_NONCANONICAL")
+            if entry.byte_size != len(payload) or entry.sha256 != sha256_hex(payload):
+                return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        if container.file_count != len(entries) or container.total_bytes != total_bytes:
+            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        inventory_sha256 = sha256_hex(canonicalize_json(_inventory_core(entries)))
+        if container.inventory_sha256 != inventory_sha256:
+            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        manifest_sha256 = sha256_hex(
+            canonicalize_json(
+                _manifest_core(
+                    container.evidence_class,
+                    container.file_count,
+                    container.total_bytes,
+                    inventory_sha256,
+                )
+            )
+        )
+        if container.manifest_sha256 != manifest_sha256:
+            return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+        identity = PrivateBundleIdentity(
+            file_count=container.file_count,
+            total_bytes=container.total_bytes,
+            inventory_sha256=inventory_sha256,
+            manifest_sha256=manifest_sha256,
+        )
+        if identity != expected_identity:
+            return _private_container_failure("PRIVATE_CONTAINER_IDENTITY_MISMATCH")
+    except Exception:
+        return _private_container_failure("PRIVATE_CONTAINER_INVALID")
+    return PrivateContainerCheck(verdict="PASS", reason_codes=(), identity=identity)
+
+
+def _absolute_destination(destination: Path) -> Path:
+    if not isinstance(destination, Path):
+        raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+    value = str(destination)
+    if (
+        not value
+        or unicodedata.normalize("NFC", value) != value
+        or value.startswith("\\\\")
+        or not destination.is_absolute()
+        or len(destination.drive) != 2
+        or destination.drive[1:] != ":"
+        or not destination.drive[0].isalpha()
+        or destination.anchor != destination.drive + "\\"
+    ):
+        raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+    components = destination.parts[1:]
+    if not components:
+        raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+    for component in components:
+        base = component.split(".", 1)[0].rstrip(" .").upper()
+        if (
+            component in ("", ".", "..")
+            or component.endswith((".", " "))
+            or "~" in component
+            or any(ord(character) < 32 for character in component)
+            or any(character in '<>:"|?*' for character in component)
+            or base in _WINDOWS_RESERVED_NAMES
+            or unicodedata.normalize("NFC", component) != component
+        ):
+            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+    return destination
 
 
 def _windows_last_error() -> int:
@@ -516,7 +734,7 @@ def _windows_create_file(
     return int(handle), 0
 
 
-def _windows_directory_information(handle: int) -> tuple[int, tuple[int, int, int]]:
+def _windows_file_information(handle: int) -> tuple[int, tuple[int, int, int]]:
     get_information = ctypes.windll.kernel32.GetFileInformationByHandle
     get_information.argtypes = (
         wintypes.HANDLE,
@@ -533,12 +751,46 @@ def _windows_directory_information(handle: int) -> tuple[int, tuple[int, int, in
     )
 
 
+def _windows_normalized_handle_name(handle: int) -> str:
+    get_name = ctypes.windll.kernel32.GetFinalPathNameByHandleW
+    get_name.argtypes = (
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    )
+    get_name.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = int(get_name(handle, buffer, len(buffer), 0))
+    if length == 0 or length >= len(buffer):
+        raise _PublicationError("PUBLICATION_FAILED")
+    value = buffer.value
+    if value.startswith("\\\\?\\"):
+        value = value[4:]
+    return unicodedata.normalize("NFC", value)
+
+
+def _windows_names_equal(left: str, right: str) -> bool:
+    compare = ctypes.windll.kernel32.CompareStringOrdinal
+    compare.argtypes = (
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        wintypes.BOOL,
+    )
+    compare.restype = ctypes.c_int
+    return int(compare(left, -1, right, -1, True)) == 2
+
+
 def _windows_nt_relative_file(
     parent_handle: int,
     name: str,
     is_directory: bool,
+    desired_access: int,
     share_mode: int,
     create_disposition: int,
+    create_options: int,
 ) -> tuple[int | None, tuple[int, int, int] | None, int]:
     name_buffer = ctypes.create_unicode_buffer(name)
     name_length = len(name.encode("utf-16-le"))
@@ -572,25 +824,6 @@ def _windows_nt_relative_file(
         wintypes.ULONG,
     )
     nt_create_file.restype = wintypes.LONG
-    desired_access = (
-        _WINDOWS_SYNCHRONIZE
-        | _WINDOWS_DELETE
-        | _WINDOWS_FILE_READ_ATTRIBUTES
-        | _WINDOWS_FILE_WRITE_ATTRIBUTES
-    )
-    if is_directory:
-        desired_access |= (
-            _WINDOWS_FILE_LIST_DIRECTORY
-            | _WINDOWS_FILE_ADD_FILE
-            | _WINDOWS_FILE_ADD_SUBDIRECTORY
-            | _WINDOWS_FILE_TRAVERSE
-        )
-    else:
-        desired_access |= _WINDOWS_FILE_WRITE_DATA | _WINDOWS_FILE_APPEND_DATA
-    create_options = _WINDOWS_FILE_WRITE_THROUGH | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
-    create_options |= (
-        _WINDOWS_FILE_DIRECTORY_FILE if is_directory else _WINDOWS_FILE_NON_DIRECTORY_FILE
-    )
     status = int(
         nt_create_file(
             ctypes.byref(output_handle),
@@ -608,127 +841,100 @@ def _windows_nt_relative_file(
     )
     if status < 0:
         return None, None, status
-    handle = int(output_handle.value)
-    try:
-        file_attributes, identity = _windows_directory_information(handle)
-        if bool(file_attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY) != is_directory:
-            raise _PublicationError("PUBLICATION_FAILED")
-        if file_attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT:
-            raise _PublicationError("PUBLICATION_FAILED")
-        return handle, identity, 0
-    except Exception:
-        _windows_close(handle)
-        raise
-
-
-def _windows_nt_create_relative(
-    parent_handle: int,
-    name: str,
-    is_directory: bool,
-    share_mode: int,
-) -> tuple[int | None, tuple[int, int, int] | None, int]:
-    return _windows_nt_relative_file(
-        parent_handle,
-        name,
-        is_directory,
-        share_mode,
-        _WINDOWS_FILE_CREATE,
-    )
-
-
-def _windows_nt_open_relative(
-    parent_handle: int,
-    name: str,
-    is_directory: bool,
-) -> tuple[int | None, tuple[int, int, int] | None, int]:
-    return _windows_nt_relative_file(
-        parent_handle,
-        name,
-        is_directory,
-        _WINDOWS_FILE_SHARE_ALL,
-        _WINDOWS_FILE_OPEN,
-    )
-
-
-def _windows_open_directory(
-    path: Path,
-    desired_access: int,
-) -> tuple[int | None, tuple[int, int, int] | None, int]:
-    handle, error = _windows_create_file(
-        path,
-        desired_access,
-        _WINDOWS_OPEN_EXISTING,
-        _WINDOWS_FILE_FLAG_BACKUP_SEMANTICS | _WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
-    )
-    if handle is None:
-        return None, None, error
-    try:
-        attributes, identity = _windows_directory_information(handle)
-        if not attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY:
-            _windows_close(handle)
-            return None, None, _WINDOWS_ERROR_ACCESS_DENIED
-        if attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT:
-            _windows_close(handle)
-            return None, None, _WINDOWS_ERROR_ACCESS_DENIED
-        return handle, identity, 0
-    except Exception:
-        _windows_close(handle)
-        raise
-
-
-def _windows_ancestor_paths(parent: Path) -> tuple[Path, ...]:
-    parts = parent.parts
-    if not parts or not parent.anchor:
-        raise _PublicationError("TRUSTED_PARENT_REQUIRED")
-    current = Path(parts[0])
-    result = [current]
-    for component in parts[1:]:
-        current = current / component
-        result.append(current)
-    return tuple(result)
+    return int(output_handle.value), None, 0
 
 
 def _windows_open_trusted_ancestors(
-    parent: Path,
-) -> list[tuple[Path, int, tuple[int, int, int]]]:
-    records: list[tuple[Path, int, tuple[int, int, int]]] = []
+    destination: Path,
+) -> list[tuple[int, tuple[int, int, int], str]]:
+    records: list[tuple[int, tuple[int, int, int], str]] = []
+    ancestor_access = (
+        _WINDOWS_SYNCHRONIZE
+        | _WINDOWS_FILE_READ_ATTRIBUTES
+        | _WINDOWS_FILE_LIST_DIRECTORY
+        | _WINDOWS_FILE_TRAVERSE
+    )
+    directory_options = (
+        _WINDOWS_FILE_DIRECTORY_FILE
+        | _WINDOWS_FILE_OPEN_REPARSE_POINT
+        | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
+    )
     try:
-        paths = _windows_ancestor_paths(parent)
-        for index, path in enumerate(paths):
-            access = _WINDOWS_FILE_READ_ATTRIBUTES
-            if index == len(paths) - 1:
-                access |= _WINDOWS_GENERIC_WRITE
-            handle, identity, _ = _windows_open_directory(path, access)
-            if handle is None or identity is None:
+        expected = destination.anchor
+        root_handle, _ = _windows_create_file(
+            Path(expected),
+            ancestor_access | (_WINDOWS_FILE_ADD_FILE if len(destination.parts) == 2 else 0),
+            _WINDOWS_OPEN_EXISTING,
+            _WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | _WINDOWS_FILE_FLAG_BACKUP_SEMANTICS,
+        )
+        if root_handle is None:
+            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+        try:
+            attributes, root_identity = _windows_file_information(root_handle)
+        except _PublicationError:
+            _windows_close(root_handle)
+            raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
+        records.append((root_handle, root_identity, expected))
+        if (
+            not attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY
+            or attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            or not _windows_names_equal(_windows_normalized_handle_name(root_handle), expected)
+        ):
+            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+        parent_handle = root_handle
+        parent_components = destination.parts[1:-1]
+        for index, component in enumerate(parent_components):
+            expected = str(Path(expected) / component)
+            try:
+                handle, _, _ = _windows_nt_relative_file(
+                    parent_handle,
+                    component,
+                    True,
+                    ancestor_access
+                    | (_WINDOWS_FILE_ADD_FILE if index == len(parent_components) - 1 else 0),
+                    _WINDOWS_FILE_SHARE_READ_WRITE,
+                    _WINDOWS_FILE_OPEN,
+                    directory_options,
+                )
+            except _PublicationError:
+                raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
+            if handle is None:
                 raise _PublicationError("TRUSTED_PARENT_REQUIRED")
-            records.append((path, handle, identity))
+            try:
+                attributes, identity = _windows_file_information(handle)
+            except _PublicationError:
+                _windows_close(handle)
+                raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
+            records.append((handle, identity, expected))
+            if (
+                not attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY
+                or attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+                or identity[0] != root_identity[0]
+                or not _windows_names_equal(_windows_normalized_handle_name(handle), expected)
+            ):
+                raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+            parent_handle = handle
         return records
     except Exception:
-        for _, handle, _ in reversed(records):
+        for handle, _, _ in reversed(records):
             _windows_close(handle)
-        raise
+        raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
 
 
-def _windows_revalidate_ancestors(
-    records: list[tuple[Path, int, tuple[int, int, int]]],
+def _windows_revalidate_handles(
+    records: list[tuple[int, tuple[int, int, int], str]],
 ) -> None:
-    for path, _, expected_identity in records:
-        probe, identity, _ = _windows_open_directory(path, _WINDOWS_FILE_READ_ATTRIBUTES)
-        if probe is None or identity != expected_identity:
-            if probe is not None:
-                _windows_close(probe)
-            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
-        _windows_close(probe)
-
-
-def _windows_require_destination_absent(destination: Path) -> None:
-    handle, _, error = _windows_open_directory(destination, _WINDOWS_FILE_READ_ATTRIBUTES)
-    if handle is not None:
-        _windows_close(handle)
-        raise _PublicationError("DESTINATION_EXISTS")
-    if error in (_WINDOWS_ERROR_FILE_NOT_FOUND, _WINDOWS_ERROR_PATH_NOT_FOUND):
-        return
-    raise _PublicationError("DESTINATION_EXISTS")
+    root_volume = records[0][1][0]
+    for handle, expected_identity, expected_name in records:
+        attributes, identity = _windows_file_information(handle)
+        if (
+            identity != expected_identity
+            or identity[0] != root_volume
+            or not attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY
+            or attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            or not _windows_names_equal(_windows_normalized_handle_name(handle), expected_name)
+        ):
+            raise _PublicationError("PUBLICATION_FAILED")
 
 
 def _windows_flush(handle: int) -> None:
@@ -739,140 +945,37 @@ def _windows_flush(handle: int) -> None:
         raise _PublicationError("PUBLICATION_FAILED")
 
 
-def _windows_write_file(
-    parent_handle: int,
-    name: str,
-    logical_components: tuple[str, ...],
-    content: bytes,
-    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
-    file_handles: list[int],
-) -> None:
-    handle, identity, _ = _windows_nt_create_relative(
-        parent_handle,
-        name,
-        False,
-        _WINDOWS_FILE_SHARE_READ_WRITE,
-    )
-    if handle is None or identity is None:
-        raise _PublicationError("PUBLICATION_FAILED")
-    created_entries.append((logical_components, False, identity))
-    sealed = False
-    try:
-        write_file = ctypes.windll.kernel32.WriteFile
-        write_file.argtypes = (
-            wintypes.HANDLE,
-            ctypes.c_void_p,
-            wintypes.DWORD,
-            ctypes.POINTER(wintypes.DWORD),
-            ctypes.c_void_p,
-        )
-        write_file.restype = wintypes.BOOL
-        offset = 0
-        while offset < len(content):
-            chunk = content[offset : offset + 1_048_576]
-            buffer = ctypes.create_string_buffer(chunk, len(chunk))
-            written = wintypes.DWORD()
-            if not write_file(
-                handle,
-                ctypes.byref(buffer),
-                len(chunk),
-                ctypes.byref(written),
-                None,
-            ) or written.value != len(chunk):
-                raise _PublicationError("PUBLICATION_FAILED")
-            offset += written.value
-        _windows_flush(handle)
-        sealed = True
-    finally:
-        if not sealed:
-            _windows_close(handle)
-    file_handles.append(handle)
-
-
-def _windows_write_layout(
-    staging_handle: int,
-    files: tuple[PrivateFoldEvidence, ...],
-    manifest: bytes,
-    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
-    directory_handles: list[int],
-    file_handles: list[int],
-) -> None:
-    directories: dict[tuple[str, ...], int] = {(): staging_handle}
-    for item in files:
-        parts = PurePosixPath(item.logical_path).parts
-        prefix: tuple[str, ...] = ()
-        for component in parts[:-1]:
-            parent_handle = directories[prefix]
-            prefix = (*prefix, component)
-            if prefix not in directories:
-                handle, identity, _ = _windows_nt_create_relative(
-                    parent_handle,
-                    component,
-                    True,
-                    _WINDOWS_FILE_SHARE_READ_WRITE,
-                )
-                if handle is None or identity is None:
-                    raise _PublicationError("PUBLICATION_FAILED")
-                created_entries.append((prefix, True, identity))
-                directory_handles.append(handle)
-                directories[prefix] = handle
-                _windows_flush(parent_handle)
-        parent_handle = directories[prefix]
-        _windows_write_file(
-            parent_handle,
-            parts[-1],
-            parts,
-            item.canonical_bytes,
-            created_entries,
-            file_handles,
-        )
-        _windows_flush(parent_handle)
-    _windows_write_file(
-        staging_handle,
-        "manifest.json",
-        ("manifest.json",),
-        manifest,
-        created_entries,
-        file_handles,
-    )
-    _windows_flush(staging_handle)
-    for handle in reversed(directory_handles):
-        _windows_flush(handle)
-    _windows_flush(staging_handle)
-
-
-def _windows_rename_noreplace(staging_handle: int, destination: Path) -> None:
-    encoded_name = str(destination).encode("utf-16-le")
-    buffer_size = _WindowsRenameInformation.FileName.offset + len(encoded_name) + 2
-    buffer = ctypes.create_string_buffer(buffer_size)
-    information = _WindowsRenameInformation.from_buffer(buffer)
-    information.ReplaceIfExists = False
-    information.RootDirectory = None
-    information.FileNameLength = len(encoded_name)
-    ctypes.memmove(
-        ctypes.addressof(buffer) + _WindowsRenameInformation.FileName.offset,
-        encoded_name,
-        len(encoded_name),
-    )
-    set_information = ctypes.windll.kernel32.SetFileInformationByHandle
-    set_information.argtypes = (
+def _windows_write_chunk(handle: int, content: bytes) -> int:
+    write_file = ctypes.windll.kernel32.WriteFile
+    write_file.argtypes = (
         wintypes.HANDLE,
-        ctypes.c_int,
         ctypes.c_void_p,
         wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
     )
-    set_information.restype = wintypes.BOOL
-    if set_information(
-        staging_handle,
-        _WINDOWS_FILE_RENAME_INFO,
+    write_file.restype = wintypes.BOOL
+    buffer = ctypes.create_string_buffer(content, len(content))
+    written = wintypes.DWORD()
+    if not write_file(
+        handle,
         ctypes.byref(buffer),
-        buffer_size,
+        len(content),
+        ctypes.byref(written),
+        None,
     ):
-        return
-    error = _windows_last_error()
-    if error in (_WINDOWS_ERROR_FILE_EXISTS, _WINDOWS_ERROR_ALREADY_EXISTS):
-        raise _PublicationError("DESTINATION_EXISTS") from None
-    raise _PublicationError("PUBLICATION_FAILED") from None
+        raise _PublicationError("PUBLICATION_FAILED")
+    return int(written.value)
+
+
+def _windows_write_all(handle: int, content: bytes) -> None:
+    offset = 0
+    while offset < len(content):
+        chunk = content[offset : offset + 1_048_576]
+        written = _windows_write_chunk(handle, chunk)
+        if written != len(chunk):
+            raise _PublicationError("PUBLICATION_FAILED")
+        offset += written
 
 
 def _windows_set_delete_disposition(handle: int) -> bool:
@@ -895,167 +998,82 @@ def _windows_set_delete_disposition(handle: int) -> bool:
     )
 
 
-def _windows_open_verified_layout(
-    staging_handle: int,
-    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
-) -> tuple[list[tuple[tuple[str, ...], int]], list[int]]:
-    directories: dict[tuple[str, ...], int] = {(): staging_handle}
-    opened_directories: list[tuple[tuple[str, ...], int]] = []
-    opened_files: list[int] = []
-    try:
-        for components, is_directory, expected_identity in created_entries:
-            parent_handle = directories[components[:-1]]
-            handle, identity, _ = _windows_nt_open_relative(
-                parent_handle,
-                components[-1],
-                is_directory,
-            )
-            if handle is None or identity != expected_identity:
-                if handle is not None:
-                    _windows_close(handle)
-                raise _PublicationError("PUBLICATION_FAILED")
-            if is_directory:
-                directories[components] = handle
-                opened_directories.append((components, handle))
-            else:
-                opened_files.append(handle)
-        return opened_directories, opened_files
-    except Exception:
-        for handle in opened_files:
-            _windows_close(handle)
-        for _, handle in reversed(opened_directories):
-            _windows_close(handle)
-        raise
-
-
-def _windows_verify_owned_layout(
-    staging_handle: int,
-    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
-) -> None:
-    opened_directories, opened_files = _windows_open_verified_layout(
-        staging_handle,
-        created_entries,
-    )
-    for handle in opened_files:
-        _windows_close(handle)
-    for _, handle in reversed(opened_directories):
-        _windows_close(handle)
-
-
-def _cleanup_windows_staging(
-    staging_handle: int,
-    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
-) -> None:
-    opened_directories, opened_files = _windows_open_verified_layout(
-        staging_handle,
-        created_entries,
-    )
-    try:
-        while opened_files:
-            handle = opened_files.pop(0)
-            if not _windows_set_delete_disposition(handle):
-                _windows_close(handle)
-                raise _PublicationError("PUBLICATION_FAILED")
-            _windows_close(handle)
-        while opened_directories:
-            _, handle = opened_directories.pop()
-            if not _windows_set_delete_disposition(handle):
-                _windows_close(handle)
-                raise _PublicationError("PUBLICATION_FAILED")
-            _windows_close(handle)
-        if not _windows_set_delete_disposition(staging_handle):
-            raise _PublicationError("PUBLICATION_FAILED")
-    finally:
-        for handle in opened_files:
-            _windows_close(handle)
-        for _, handle in reversed(opened_directories):
-            _windows_close(handle)
-
-
-def _windows_require_staging_absent(parent_handle: int, staging_name: str) -> None:
-    handle, _, status = _windows_nt_open_relative(parent_handle, staging_name, True)
-    if handle is not None:
-        _windows_close(handle)
-        raise _PublicationError("PUBLICATION_FAILED")
-    if status != _WINDOWS_STATUS_OBJECT_NAME_NOT_FOUND:
-        raise _PublicationError("PUBLICATION_FAILED")
-
-
-def _publish_windows_bundle(
-    destination: Path,
-    files: tuple[PrivateFoldEvidence, ...],
-    manifest: bytes,
-) -> None:
-    ancestors = _windows_open_trusted_ancestors(destination.parent)
-    parent_handle = ancestors[-1][1]
-    staging_name = f".{destination.name}.staging"
-    staging_handle: int | None = None
-    created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]] = []
-    directory_handles: list[int] = []
-    file_handles: list[int] = []
+def _publish_windows_container(destination: Path, content: bytes) -> None:
+    ancestors = _windows_open_trusted_ancestors(destination)
+    parent_handle = ancestors[-1][0]
+    final_handle: int | None = None
     published = False
     cleanup_failed = False
+    error: _PublicationError | None = None
+    final_options = (
+        _WINDOWS_FILE_NON_DIRECTORY_FILE
+        | _WINDOWS_FILE_WRITE_THROUGH
+        | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
+    )
+    final_access = (
+        _WINDOWS_FILE_WRITE_DATA
+        | _WINDOWS_DELETE
+        | _WINDOWS_SYNCHRONIZE
+        | _WINDOWS_FILE_READ_ATTRIBUTES
+    )
     try:
-        _windows_require_destination_absent(destination)
-        staging_handle, identity, status = _windows_nt_create_relative(
+        final_handle, _, status = _windows_nt_relative_file(
             parent_handle,
-            staging_name,
-            True,
-            _WINDOWS_FILE_SHARE_READ_WRITE,
+            destination.name,
+            False,
+            final_access,
+            0,
+            _WINDOWS_FILE_CREATE,
+            final_options,
         )
-        if staging_handle is None or identity is None:
-            if status == _WINDOWS_STATUS_OBJECT_NAME_COLLISION:
-                raise _PublicationError("STAGING_EXISTS")
+        if final_handle is None:
+            if status in (
+                _WINDOWS_STATUS_OBJECT_NAME_COLLISION,
+                _WINDOWS_STATUS_FILE_IS_A_DIRECTORY,
+            ):
+                raise _PublicationError("DESTINATION_EXISTS")
             raise _PublicationError("PUBLICATION_FAILED")
+        attributes, final_identity = _windows_file_information(final_handle)
+        if (
+            attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY
+            or attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            or final_identity[0] != ancestors[0][1][0]
+            or not _windows_names_equal(
+                _windows_normalized_handle_name(final_handle), str(destination)
+            )
+        ):
+            raise _PublicationError("PUBLICATION_FAILED")
+        _windows_write_all(final_handle, content)
+        _windows_flush(final_handle)
+        attributes, current_identity = _windows_file_information(final_handle)
+        if (
+            current_identity != final_identity
+            or attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY
+            or attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            or not _windows_names_equal(
+                _windows_normalized_handle_name(final_handle), str(destination)
+            )
+        ):
+            raise _PublicationError("PUBLICATION_FAILED")
+        _windows_revalidate_handles(ancestors)
         _windows_flush(parent_handle)
-        _windows_write_layout(
-            staging_handle,
-            files,
-            manifest,
-            created_entries,
-            directory_handles,
-            file_handles,
-        )
-        for handle in reversed(file_handles):
-            _windows_close(handle)
-        file_handles.clear()
-        for handle in reversed(directory_handles):
-            _windows_close(handle)
-        directory_handles.clear()
-        _windows_verify_owned_layout(staging_handle, created_entries)
-        _windows_revalidate_ancestors(ancestors)
-        attributes, current_identity = _windows_directory_information(staging_handle)
-        if attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT or current_identity != identity:
-            raise _PublicationError("PUBLICATION_FAILED")
-        _windows_rename_noreplace(staging_handle, destination)
         published = True
-        _windows_flush(parent_handle)
-    except _PublicationError:
-        raise
+    except _PublicationError as caught:
+        error = caught
     except Exception:
-        raise _PublicationError("PUBLICATION_FAILED") from None
+        error = _PublicationError("PUBLICATION_FAILED")
     finally:
-        for handle in reversed(file_handles):
-            _windows_close(handle)
-        for handle in reversed(directory_handles):
-            _windows_close(handle)
-        if staging_handle is not None:
+        if final_handle is not None:
             if not published:
                 try:
-                    _cleanup_windows_staging(staging_handle, created_entries)
+                    if not _windows_set_delete_disposition(final_handle):
+                        cleanup_failed = True
                 except Exception:
                     cleanup_failed = True
-            _windows_close(staging_handle)
-            if not published:
-                try:
-                    _windows_flush(parent_handle)
-                except Exception:
-                    cleanup_failed = True
-                try:
-                    _windows_require_staging_absent(parent_handle, staging_name)
-                except Exception:
-                    cleanup_failed = True
-        for _, handle, _ in reversed(ancestors):
+            _windows_close(final_handle)
+        for handle, _, _ in reversed(ancestors):
             _windows_close(handle)
-        if cleanup_failed:
-            raise _PublicationError("PUBLICATION_FAILED") from None
+    if cleanup_failed:
+        raise _PublicationError("PUBLICATION_FAILED") from None
+    if error is not None:
+        raise error

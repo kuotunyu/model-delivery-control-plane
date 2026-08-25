@@ -440,6 +440,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
             ("__future__", "annotations"),
+            ("base64", None),
             ("ctypes", None),
             ("ctypes", "wintypes"),
             ("json", None),
@@ -460,6 +461,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic", "model_validator"),
             ("typing", "Annotated"),
             ("typing", "Literal"),
+            ("unicodedata", None),
         }
     ),
 }
@@ -581,10 +583,11 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
+            "base64.b64decode",
+            "base64.b64encode",
             "ctypes.POINTER",
             "ctypes.Structure",
             "ctypes.Union",
-            "ctypes.addressof",
             "ctypes.byref",
             "ctypes.c_int",
             "ctypes.c_size_t",
@@ -592,15 +595,16 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ctypes.create_string_buffer",
             "ctypes.create_unicode_buffer",
             "ctypes.cast",
-            "ctypes.memmove",
             "ctypes.pointer",
             "ctypes.sizeof",
             "ctypes.windll",
             "ctypes.windll.kernel32",
             "ctypes.windll.kernel32.CloseHandle",
+            "ctypes.windll.kernel32.CompareStringOrdinal",
             "ctypes.windll.kernel32.CreateFileW",
             "ctypes.windll.kernel32.FlushFileBuffers",
             "ctypes.windll.kernel32.GetFileInformationByHandle",
+            "ctypes.windll.kernel32.GetFinalPathNameByHandleW",
             "ctypes.windll.kernel32.GetLastError",
             "ctypes.windll.kernel32.SetFileInformationByHandle",
             "ctypes.windll.kernel32.WriteFile",
@@ -615,14 +619,11 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ctypes.wintypes.LPWSTR",
             "ctypes.wintypes.ULONG",
             "ctypes.wintypes.USHORT",
-            "ctypes.wintypes.WCHAR",
             "json.JSONDecodeError",
             "json.loads",
             "math.isfinite",
-            "os.fspath",
             "os.name",
-            "os.path",
-            "os.path.abspath",
+            "unicodedata.normalize",
         }
     ),
 }
@@ -688,6 +689,7 @@ _ALLOWED_FILE_ACCESS_CALLS = {
                 "Path:schemas/v2/development-result-index.schema.json",
             ),
             ("verify_development_result", "read_bytes", "name:path"),
+            ("verify_private_container", "read_bytes", "name:path"),
         }
     ),
 }

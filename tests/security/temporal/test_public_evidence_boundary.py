@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+import mdcp.temporal.run_evidence as run_evidence
 from mdcp.temporal.evidence import public_evidence_violations
 from mdcp.temporal.run_evidence import PrivateBundleIdentity
 
@@ -149,3 +152,29 @@ def test_private_bundle_identity_is_public_safe_by_shape_and_value() -> None:
     )
 
     assert public_evidence_violations(identity.model_dump(mode="json")) == ()
+
+
+def test_private_container_check_exposes_only_sanitized_shape() -> None:
+    check = run_evidence.PrivateContainerCheck(
+        verdict="FAIL",
+        reason_codes=("PRIVATE_CONTAINER_INVALID",),
+    )
+
+    assert set(check.model_dump()) == {"verdict", "reason_codes", "identity"}
+    assert check.identity is None
+    assert public_evidence_violations(check.model_dump(mode="json")) == ()
+
+
+def test_private_publication_surface_has_no_direct_natural_writer() -> None:
+    assert not hasattr(run_evidence, "write_natural_bundle_no_clobber")
+    assert not hasattr(run_evidence, "write_private_bundle_no_clobber")
+
+
+def test_private_verifier_sanitizes_path_and_identity_type_failures(tmp_path: Path) -> None:
+    secret = tmp_path / "PRIVATE_PATH_SENTINEL.container.json"
+    secret.write_bytes(b"not-json")
+
+    check = run_evidence.verify_private_container(secret, True)  # type: ignore[arg-type]
+
+    assert check.reason_codes == ("PRIVATE_CONTAINER_INVALID",)
+    assert str(secret) not in repr(check)

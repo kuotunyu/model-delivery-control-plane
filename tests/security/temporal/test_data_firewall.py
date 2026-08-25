@@ -809,12 +809,12 @@ def test_static_firewall_rejects_posix_native_recovery_capability(
 ) -> None:
     logical_path = "src/mdcp/temporal/run_evidence.py"
     source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
-    needle = "    del destination, files, manifest\n"
+    needle = '        raise _PublicationError("PUBLICATION_UNSUPPORTED")\n'
     assert source.count(needle) == 1
     _write_logical_module(
         tmp_path,
         logical_path,
-        source.replace(needle, "    ctypes.CDLL(None)\n" + needle, 1),
+        source.replace(needle, "        ctypes.CDLL(None)\n" + needle, 1),
     )
 
     with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
@@ -833,6 +833,24 @@ def test_static_firewall_rejects_unapproved_windows_native_symbol(
         logical_path,
         source.replace(needle, "ctypes.windll.ntdll.NtOpenFile", 1),
     )
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "recovery",
+    (
+        "ctypes.memmove(0, 0, 0)",
+        "os.path.abspath('private-evidence')",
+    ),
+)
+def test_static_firewall_rejects_removed_directory_publisher_capabilities(
+    tmp_path: Path, recovery: str
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, f"{source}\n{recovery}")
 
     with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))

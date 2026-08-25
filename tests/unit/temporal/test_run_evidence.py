@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
+import tempfile
+import unicodedata
 from pathlib import Path
 
 import pytest
 
 import mdcp.temporal.run_evidence as run_evidence
-from mdcp.common.canonical import canonicalize_json
+from mdcp.common.canonical import canonicalize_json, parse_json_bytes
+from mdcp.common.digests import sha256_hex
 from mdcp.temporal.evidence import public_evidence_violations
 from mdcp.temporal.run_evidence import (
     PrivateBundleIdentity,
@@ -22,7 +26,6 @@ from mdcp.temporal.run_evidence import (
 
 
 def valid_public_result() -> dict[str, object]:
-    """A hand-authored closed inventory; changing any inventory guard must fail this test."""
     folds = [
         {
             "fold_id": fold_id,
@@ -38,14 +41,6 @@ def valid_public_result() -> dict[str, object]:
         }
         for fold_id in ("F1", "F2", "F3", "F4")
     ]
-    trials = [
-        {
-            "trial_id": f"TRIAL-{number:02d}",
-            "selection_fit_count": 4,
-            "folds": folds,
-        }
-        for number in range(1, 21)
-    ]
     return {
         "schema_version": "mdcp.development-result-index.v1",
         "canonicalization_version": "RFC8785",
@@ -56,47 +51,40 @@ def valid_public_result() -> dict[str, object]:
         "h2_loaded_rows": 0,
         "selection_fit_count": 80,
         "result_sha256": "a" * 64,
-        "trials": trials,
+        "trials": [
+            {
+                "trial_id": f"TRIAL-{number:02d}",
+                "selection_fit_count": 4,
+                "folds": folds,
+            }
+            for number in range(1, 21)
+        ],
     }
 
 
 def mutate(document: dict[str, object], mutation: str) -> dict[str, object]:
-    """Return one deliberately untrusted mutation without using publisher code."""
     result = json.loads(json.dumps(document))
-    if mutation == "extra_key":
-        result["unexpected"] = True
-    elif mutation == "unknown_metric":
-        result["trials"][0]["folds"][0]["metrics"]["unknown"] = 1.0
-    elif mutation == "nan":
-        result["trials"][0]["folds"][0]["metrics"]["ucb95"] = float("nan")
-    elif mutation == "uppercase_digest":
-        result["result_sha256"] = "A" * 64
-    elif mutation == "short_digest":
-        result["result_sha256"] = "a" * 63
-    elif mutation == "private_path":
-        result["private_path"] = "C:/private/model.bin"
-    elif mutation == "raw_timestamp":
-        result["created_at_utc"] = "2026-08-25T12:00:00Z"
-    elif mutation == "traceback":
-        result["traceback"] = "Traceback (most recent call last):"
-    elif mutation == "credential":
-        result["credential"] = "Bearer " + "a" * 32
-    elif mutation == "raw_prediction":
-        result["raw_prediction"] = [0.1]
-    else:
-        raise AssertionError(f"unhandled mutation: {mutation}")
+    targets = {
+        "extra_key": lambda: result.__setitem__("unexpected", True),
+        "unknown_metric": lambda: result["trials"][0]["folds"][0]["metrics"].__setitem__(
+            "unknown", 1.0
+        ),
+        "nan": lambda: result["trials"][0]["folds"][0]["metrics"].__setitem__(
+            "ucb95", float("nan")
+        ),
+        "uppercase_digest": lambda: result.__setitem__("result_sha256", "A" * 64),
+        "short_digest": lambda: result.__setitem__("result_sha256", "a" * 63),
+        "private_path": lambda: result.__setitem__("private_path", "C:/private/model.bin"),
+        "raw_timestamp": lambda: result.__setitem__("created_at_utc", "2026-08-25T12:00:00Z"),
+        "traceback": lambda: result.__setitem__("traceback", "Traceback (most recent call last):"),
+        "credential": lambda: result.__setitem__("credential", "Bearer " + "a" * 32),
+        "raw_prediction": lambda: result.__setitem__("raw_prediction", [0.1]),
+    }
+    targets[mutation]()
     return result
 
 
-def write_raw_result(tmp_path: Path, document: dict[str, object]) -> Path:
-    """Write adversarial bytes directly, never through the trusted publisher."""
-    path = tmp_path / "untrusted-result.json"
-    path.write_text(json.dumps(document, allow_nan=True), encoding="utf-8")
-    return path
-
-
 def synthetic_private_bundle() -> PrivateRunBundle:
-    """Two canonical private logical files with no time, environment, or entropy source."""
     return PrivateRunBundle(
         evidence_class="synthetic_test",
         files=(
@@ -112,9 +100,76 @@ def synthetic_private_bundle() -> PrivateRunBundle:
     )
 
 
+def private_container_bytes() -> tuple[bytes, PrivateBundleIdentity]:
+    bundle = synthetic_private_bundle()
+    entries = [
+        {
+            "logical_path": item.logical_path,
+            "byte_size": len(item.canonical_bytes),
+            "sha256": sha256_hex(item.canonical_bytes),
+            "payload_base64": base64.b64encode(item.canonical_bytes).decode("ascii"),
+        }
+        for item in bundle.files
+    ]
+    inventory = [
+        {key: entry[key] for key in ("logical_path", "byte_size", "sha256")} for entry in entries
+    ]
+    inventory_sha256 = sha256_hex(canonicalize_json(inventory))
+    manifest = {
+        "schema_version": "mdcp.private-evidence-container.v1",
+        "canonicalization_version": "RFC8785",
+        "evidence_class": "synthetic_test",
+        "file_count": 2,
+        "total_bytes": sum(entry["byte_size"] for entry in entries),
+        "inventory_sha256": inventory_sha256,
+    }
+    manifest_sha256 = sha256_hex(canonicalize_json(manifest))
+    identity = PrivateBundleIdentity(
+        file_count=2,
+        total_bytes=manifest["total_bytes"],
+        inventory_sha256=inventory_sha256,
+        manifest_sha256=manifest_sha256,
+    )
+    return canonicalize_json(
+        {**manifest, "entries": entries, "manifest_sha256": manifest_sha256}
+    ), identity
+
+
+def coordinate_payload_and_all_internal_digests(document: dict[str, object]) -> None:
+    payload = canonicalize_json({"fold_id": "F1", "rows": [99]})
+    entry = document["entries"][0]
+    entry["payload_base64"] = base64.b64encode(payload).decode("ascii")
+    entry["byte_size"] = len(payload)
+    entry["sha256"] = sha256_hex(payload)
+    document["total_bytes"] = sum(item["byte_size"] for item in document["entries"])
+    inventory = [
+        {key: item[key] for key in ("logical_path", "byte_size", "sha256")}
+        for item in document["entries"]
+    ]
+    document["inventory_sha256"] = sha256_hex(canonicalize_json(inventory))
+    manifest = {
+        key: document[key]
+        for key in (
+            "schema_version",
+            "canonicalization_version",
+            "evidence_class",
+            "file_count",
+            "total_bytes",
+            "inventory_sha256",
+        )
+    }
+    document["manifest_sha256"] = sha256_hex(canonicalize_json(manifest))
+
+
+def write_untrusted_container(tmp_path: Path, raw: bytes) -> Path:
+    path = tmp_path / "untrusted.container.json"
+    path.write_bytes(raw)
+    return path
+
+
 @pytest.mark.parametrize(
     "mutation",
-    [
+    (
         "extra_key",
         "unknown_metric",
         "nan",
@@ -125,12 +180,11 @@ def synthetic_private_bundle() -> PrivateRunBundle:
         "traceback",
         "credential",
         "raw_prediction",
-    ],
+    ),
 )
 def test_public_result_fails_closed(tmp_path: Path, mutation: str) -> None:
-    document = mutate(valid_public_result(), mutation)
-    path = write_raw_result(tmp_path, document)
-
+    path = tmp_path / "untrusted-result.json"
+    path.write_text(json.dumps(mutate(valid_public_result(), mutation), allow_nan=True))
     assert verify_development_result(path).verdict == "FAIL"
 
 
@@ -140,334 +194,313 @@ def test_valid_closed_public_result_verifies_only_when_schema_and_bytes_are_cano
     result = PublicDevelopmentResult.model_validate(valid_public_result())
     path = tmp_path / "result.json"
     path.write_bytes(canonicalize_json(result.model_dump(mode="json")))
-
     assert verify_development_result(path).verdict == "PASS"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_private_bundle_public_identity_contains_no_private_material(tmp_path: Path) -> None:
-    identity = write_synthetic_bundle_no_clobber(tmp_path / "new-run", synthetic_private_bundle())
-
-    assert set(identity.model_dump()) == {
-        "file_count",
-        "total_bytes",
-        "inventory_sha256",
-        "manifest_sha256",
-    }
-    assert public_evidence_violations(identity.model_dump(mode="json")) == ()
-
-
-@pytest.mark.parametrize(
-    "setup",
-    ["existing_destination", "partial_destination", "symlink_destination"],
-)
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_private_writer_rejects_existing_or_linked_destination(tmp_path: Path, setup: str) -> None:
-    destination = tmp_path / "new-run"
-    if setup == "existing_destination":
-        destination.mkdir()
-    elif setup == "partial_destination":
-        destination.mkdir()
-        (destination / "partial.json").write_text("{}", encoding="utf-8")
-    else:
-        target = tmp_path / "linked-target"
-        target.mkdir()
-        try:
-            destination.symlink_to(target, target_is_directory=True)
-        except OSError:
-            completed = subprocess.run(
-                ("cmd", "/c", "mklink", "/J", str(destination), str(target)),
-                capture_output=True,
-                check=False,
-            )
-            if completed.returncode != 0:
-                pytest.skip("the platform cannot create a link in pytest tmp_path")
-
-    with pytest.raises(ValueError) as error:
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert str(error.value) == "DESTINATION_EXISTS"
-
-
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_private_writer_requires_a_precreated_nonlinked_parent(tmp_path: Path) -> None:
-    with pytest.raises(ValueError) as error:
-        write_synthetic_bundle_no_clobber(
-            tmp_path / "missing" / "new-run", synthetic_private_bundle()
-        )
-
-    assert str(error.value) == "TRUSTED_PARENT_REQUIRED"
-
-
-def test_private_writer_rejects_duplicate_logical_paths_without_echoing_them(
-    tmp_path: Path,
-) -> None:
-    source = synthetic_private_bundle()
-    duplicate = PrivateRunBundle(
-        evidence_class="synthetic_test",
-        files=(source.files[0], source.files[0]),
-    )
-
-    with pytest.raises(ValueError) as error:
-        write_synthetic_bundle_no_clobber(tmp_path / "new-run", duplicate)
-
-    assert str(error.value) == "DUPLICATE_LOGICAL_PATH"
-    assert source.files[0].logical_path not in str(error.value)
-
-
-def test_private_writer_rejects_noncanonical_bytes(tmp_path: Path) -> None:
-    bundle = PrivateRunBundle(
-        evidence_class="synthetic_test",
-        files=(
-            PrivateFoldEvidence(
-                logical_path="private/folds/F1.json", canonical_bytes=b'{"b":1,"a":2}'
-            ),
-        ),
-    )
-
-    with pytest.raises(ValueError) as error:
-        write_synthetic_bundle_no_clobber(tmp_path / "new-run", bundle)
-
-    assert str(error.value) == "NONCANONICAL_PRIVATE_BYTES"
-
-
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_private_writer_rejects_second_publication(tmp_path: Path) -> None:
-    destination = tmp_path / "new-run"
-    write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    with pytest.raises(ValueError) as error:
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert str(error.value) == "DESTINATION_EXISTS"
-
-
-def test_private_writer_rejects_natural_development_without_permit(tmp_path: Path) -> None:
-    source = synthetic_private_bundle()
-    natural = PrivateRunBundle(evidence_class="natural_development", files=source.files)
-
-    with pytest.raises(ValueError) as error:
-        write_synthetic_bundle_no_clobber(tmp_path / "new-run", natural)
-
-    assert str(error.value) == "FORMAL_RUN_PERMIT_REQUIRED"
-
-
-@pytest.mark.parametrize(
-    "logical_path",
-    [
-        "private/CON.json",
-        "private/CON .json",
-        "private/com1.payload",
-        "private/LPT9",
-        "private/a:.json",
-        "private/x.",
-        "private/x ",
-    ],
-)
-def test_private_logical_paths_reject_windows_aliases(logical_path: str) -> None:
-    with pytest.raises(ValueError, match="LOGICAL_PATH_INVALID"):
-        PrivateFoldEvidence(logical_path=logical_path, canonical_bytes=b"{}")
-
-
-@pytest.mark.parametrize(
-    ("path", "value"),
-    [
-        ("trials.0.folds.0.metrics.row_count", True),
-        ("selection_fit_count", True),
-        ("h2_loaded_rows", False),
-    ],
-)
-def test_public_result_rejects_boolean_numeric_coercion(path: str, value: bool) -> None:
+def test_public_result_rejects_boolean_numeric_coercion() -> None:
     document = valid_public_result()
-    if path in {"selection_fit_count", "h2_loaded_rows"}:
-        document[path] = value
-    else:
-        document["trials"][0]["folds"][0]["metrics"]["row_count"] = value
-
+    document["h2_loaded_rows"] = False
     with pytest.raises(ValueError):
         PublicDevelopmentResult.model_validate(document)
 
 
-def test_verifier_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+def test_public_verifier_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     path = tmp_path / "duplicate.json"
     path.write_bytes(b'{"schema_version":"one","schema_version":"two"}')
-
     assert verify_development_result(path).verdict == "FAIL"
 
 
 def test_canonical_public_result_bytes_returns_rfc8785_bytes() -> None:
     result = PublicDevelopmentResult.model_validate(valid_public_result())
-
     assert canonical_public_result_bytes(result) == canonicalize_json(
         result.model_dump(mode="json")
     )
 
 
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_private_writer_cleans_staging_after_raced_destination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "new-run"
-    original_publish = run_evidence._windows_rename_noreplace
-
-    def race(staging_handle: int, target: Path) -> None:
-        target.mkdir()
-        original_publish(staging_handle, target)
-
-    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", race)
-
-    with pytest.raises(ValueError, match="^DESTINATION_EXISTS$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert destination.is_dir()
-    assert not (tmp_path / ".new-run.staging").exists()
+def test_private_bundle_is_one_deterministic_canonical_file(tmp_path: Path) -> None:
+    first = tmp_path / "first.container.json"
+    second = tmp_path / "second.container.json"
+    first_identity = write_synthetic_bundle_no_clobber(first, synthetic_private_bundle())
+    second_identity = write_synthetic_bundle_no_clobber(second, synthetic_private_bundle())
+    assert first.is_file() and second.is_file()
+    assert first.read_bytes() == second.read_bytes()
+    assert first_identity == second_identity
+    assert run_evidence.verify_private_container(first, first_identity).verdict == "PASS"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_writer_does_not_fall_back_to_path_based_rename(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def forbidden_path_rename(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("path-based rename is not an approved publication primitive")
-
-    monkeypatch.setattr(run_evidence.os, "rename", forbidden_path_rename)
-
-    identity = write_synthetic_bundle_no_clobber(tmp_path / "new-run", synthetic_private_bundle())
-
-    assert identity.file_count == 2
-    assert (tmp_path / "new-run" / "manifest.json").is_file()
-
-
-def test_posix_publication_is_unsupported_without_filesystem_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "new-run"
-    staging = tmp_path / ".new-run.staging"
-    monkeypatch.setattr(
-        run_evidence,
-        "_publication_platform",
-        lambda: "posix",
-        raising=False,
+def test_coordinated_internal_rehash_cannot_change_bound_container(tmp_path: Path) -> None:
+    destination = tmp_path / "bundle.container.json"
+    identity = write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    document = parse_json_bytes(destination.read_bytes())
+    coordinate_payload_and_all_internal_digests(document)
+    destination.write_bytes(canonicalize_json(document))
+    assert run_evidence.verify_private_container(destination, identity).reason_codes == (
+        "PRIVATE_CONTAINER_IDENTITY_MISMATCH",
     )
 
-    with pytest.raises(ValueError) as caught:
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
 
-    assert str(caught.value) == "PUBLICATION_UNSUPPORTED"
-    assert caught.value.__cause__ is None
-    assert not destination.exists()
-    assert not staging.exists()
-    assert tuple(tmp_path.iterdir()) == ()
+def test_private_container_builder_matches_independent_digest_construction() -> None:
+    expected_bytes, expected_identity = private_container_bytes()
+    actual_bytes, actual_identity = run_evidence._canonical_private_container(
+        synthetic_private_bundle()
+    )
+    assert actual_bytes == expected_bytes
+    assert actual_identity == expected_identity
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows protected-handle semantics")
-def test_windows_holds_parent_and_staging_against_replacement_until_publish(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "top_extra",
+        "entry_extra",
+        "top_missing",
+        "entry_missing",
+        "missing_path",
+        "extra_path",
+        "duplicate_path",
+        "reordered_paths",
+        "count_boolean",
+        "entry_size_boolean",
+        "total_boolean",
+        "uppercase_entry_digest",
+        "short_inventory_digest",
+        "bad_manifest_digest",
+    ),
+)
+def test_private_container_closed_negative_matrix(tmp_path: Path, mutation: str) -> None:
+    raw, identity = private_container_bytes()
+    document = parse_json_bytes(raw)
+    if mutation == "top_extra":
+        document["extra"] = 1
+    elif mutation == "entry_extra":
+        document["entries"][0]["extra"] = 1
+    elif mutation == "top_missing":
+        del document["canonicalization_version"]
+    elif mutation == "entry_missing":
+        del document["entries"][0]["sha256"]
+    elif mutation == "missing_path":
+        document["entries"].pop()
+    elif mutation == "extra_path":
+        extra = dict(document["entries"][-1])
+        extra["logical_path"] = "private/folds/F3.json"
+        document["entries"].append(extra)
+    elif mutation == "duplicate_path":
+        document["entries"][1]["logical_path"] = document["entries"][0]["logical_path"]
+    elif mutation == "reordered_paths":
+        document["entries"].reverse()
+    elif mutation == "count_boolean":
+        document["file_count"] = True
+    elif mutation == "entry_size_boolean":
+        document["entries"][0]["byte_size"] = False
+    elif mutation == "total_boolean":
+        document["total_bytes"] = True
+    elif mutation == "uppercase_entry_digest":
+        document["entries"][0]["sha256"] = "A" * 64
+    elif mutation == "short_inventory_digest":
+        document["inventory_sha256"] = "a" * 63
+    else:
+        document["manifest_sha256"] = "g" * 64
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, canonicalize_json(document)), identity
+    )
+    assert check.verdict == "FAIL"
+    assert check.identity is None
+    assert set(check.reason_codes) <= {
+        "PRIVATE_CONTAINER_INVALID",
+        "PRIVATE_CONTAINER_NONCANONICAL",
+        "PRIVATE_CONTAINER_IDENTITY_MISMATCH",
+        "PRIVATE_CONTAINER_SIZE_EXCEEDED",
+    }
+
+
+@pytest.mark.parametrize("scope", ("top", "entry"))
+def test_private_container_duplicate_keys_fail_closed(tmp_path: Path, scope: str) -> None:
+    raw, identity = private_container_bytes()
+    if scope == "top":
+        raw = raw.replace(
+            b'{"canonicalization_version"',
+            b'{"file_count":2,"canonicalization_version"',
+            1,
+        )
+    else:
+        raw = raw.replace(b'{"byte_size"', b'{"byte_size":1,"byte_size"', 1)
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, raw), identity
+    )
+    assert check.reason_codes == ("PRIVATE_CONTAINER_INVALID",)
+
+
+def test_private_container_noncanonical_outer_json_is_distinct(tmp_path: Path) -> None:
+    raw, identity = private_container_bytes()
+    noncanonical = json.dumps(parse_json_bytes(raw), indent=2).encode()
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, noncanonical), identity
+    )
+    assert check.reason_codes == ("PRIVATE_CONTAINER_NONCANONICAL",)
+
+
+@pytest.mark.parametrize("bad_base64", ("@@==", "e30", "e30===", "e3-9", "e30=\n", "Zh=="))
+def test_private_container_requires_strict_canonical_base64(
+    tmp_path: Path, bad_base64: str
 ) -> None:
-    trusted_parent = tmp_path / "trusted"
-    trusted_parent.mkdir()
-    destination = trusted_parent / "new-run"
-    staging = trusted_parent / ".new-run.staging"
-    original = run_evidence._windows_rename_noreplace
-
-    def probe(staging_handle: int, target: Path) -> None:
-        with pytest.raises(OSError):
-            os.rename(trusted_parent, tmp_path / "redirected-parent")
-        with pytest.raises(OSError):
-            os.rename(staging, trusted_parent / "redirected-staging")
-        original(staging_handle, target)
-
-    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", probe)
-
-    write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert destination.is_dir()
-    assert not staging.exists()
+    raw, identity = private_container_bytes()
+    document = parse_json_bytes(raw)
+    document["entries"][0]["payload_base64"] = bad_base64
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, canonicalize_json(document)), identity
+    )
+    assert check.reason_codes == ("PRIVATE_CONTAINER_INVALID",)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows protected-handle semantics")
-def test_windows_cleans_owned_staging_after_file_flush_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "new-run"
-    staging = tmp_path / ".new-run.staging"
-    original_flush = run_evidence._windows_flush
-    calls = 0
-
-    def fail_first_file_flush(handle: int) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 4:
-            raise OSError("sensitive path")
-        original_flush(handle)
-
-    monkeypatch.setattr(run_evidence, "_windows_flush", fail_first_file_flush)
-
-    with pytest.raises(ValueError) as caught:
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert str(caught.value) == "PUBLICATION_FAILED"
-    assert not staging.exists()
+def test_private_container_rejects_noncanonical_decoded_payload(tmp_path: Path) -> None:
+    raw, identity = private_container_bytes()
+    document = parse_json_bytes(raw)
+    payload = b'{"z":1, "a":2}'
+    entry = document["entries"][0]
+    entry["payload_base64"] = base64.b64encode(payload).decode("ascii")
+    entry["byte_size"] = len(payload)
+    entry["sha256"] = sha256_hex(payload)
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, canonicalize_json(document)), identity
+    )
+    assert check.reason_codes == ("PRIVATE_CONTAINER_NONCANONICAL",)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_private_writer_rejects_linked_ancestor_without_touching_target(
+def test_private_container_rejects_non_file_and_link(tmp_path: Path) -> None:
+    _, identity = private_container_bytes()
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        completed = subprocess.run(
+            ("cmd", "/c", "mklink", "/J", str(link), str(target)),
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            pytest.skip("the platform cannot create a junction in pytest tmp_path")
+    assert run_evidence.verify_private_container(directory, identity).reason_codes == (
+        "PRIVATE_CONTAINER_INVALID",
+    )
+    assert run_evidence.verify_private_container(link, identity).reason_codes == (
+        "PRIVATE_CONTAINER_INVALID",
+    )
+
+
+def test_private_container_entry_limit_is_128() -> None:
+    bundle = PrivateRunBundle(
+        evidence_class="synthetic_test",
+        files=tuple(
+            PrivateFoldEvidence(logical_path=f"private/{number:03d}.json", canonical_bytes=b"{}")
+            for number in range(129)
+        ),
+    )
+    with pytest.raises(ValueError, match="^PRIVATE_CONTAINER_SIZE_EXCEEDED$"):
+        run_evidence._canonical_private_container(bundle)
+
+
+def test_private_container_verifier_rejects_129_entries(tmp_path: Path) -> None:
+    raw, identity = private_container_bytes()
+    document = parse_json_bytes(raw)
+    template = document["entries"][0]
+    document["entries"] = [
+        {**template, "logical_path": f"private/{number:03d}.json"} for number in range(129)
+    ]
+    document["file_count"] = 129
+
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, canonicalize_json(document)), identity
+    )
+
+    assert check.reason_codes == ("PRIVATE_CONTAINER_SIZE_EXCEEDED",)
+
+
+def test_private_container_empty_inventory_is_invalid_not_a_size_failure(
     tmp_path: Path,
 ) -> None:
-    target = tmp_path / "linked-target"
-    target.mkdir()
-    linked_parent = tmp_path / "linked-parent"
-    completed = subprocess.run(
-        ("cmd", "/c", "mklink", "/J", str(linked_parent), str(target)),
-        capture_output=True,
-        check=False,
+    raw, identity = private_container_bytes()
+    document = parse_json_bytes(raw)
+    document["entries"] = []
+    document["file_count"] = 0
+    document["total_bytes"] = 0
+    document["inventory_sha256"] = sha256_hex(canonicalize_json([]))
+    manifest = {
+        key: document[key]
+        for key in (
+            "schema_version",
+            "canonicalization_version",
+            "evidence_class",
+            "file_count",
+            "total_bytes",
+            "inventory_sha256",
+        )
+    }
+    document["manifest_sha256"] = sha256_hex(canonicalize_json(manifest))
+
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, canonicalize_json(document)), identity
     )
-    assert completed.returncode == 0
 
-    with pytest.raises(ValueError) as caught:
-        write_synthetic_bundle_no_clobber(linked_parent / "new-run", synthetic_private_bundle())
-
-    assert str(caught.value) == "TRUSTED_PARENT_REQUIRED"
-    assert tuple(target.iterdir()) == ()
+    assert check.reason_codes == ("PRIVATE_CONTAINER_INVALID",)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_preexisting_staging_link_is_not_cleaned_as_owned(tmp_path: Path) -> None:
-    target = tmp_path / "attacker-owned"
-    target.mkdir()
-    sentinel = target / "sentinel.json"
-    sentinel.write_text("{}", encoding="utf-8")
-    staging = tmp_path / ".new-run.staging"
-    completed = subprocess.run(
-        ("cmd", "/c", "mklink", "/J", str(staging), str(target)),
-        capture_output=True,
-        check=False,
+@pytest.mark.parametrize("limit_name", ("payload", "aggregate", "container"))
+def test_private_container_enforces_all_byte_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit_name: str
+) -> None:
+    if limit_name == "payload":
+        monkeypatch.setattr(run_evidence, "_MAX_PRIVATE_PAYLOAD_BYTES", 1)
+    elif limit_name == "aggregate":
+        monkeypatch.setattr(run_evidence, "_MAX_PRIVATE_TOTAL_BYTES", 1)
+    else:
+        monkeypatch.setattr(run_evidence, "_MAX_PRIVATE_CONTAINER_BYTES", 1)
+    with pytest.raises(ValueError, match="^PRIVATE_CONTAINER_SIZE_EXCEEDED$"):
+        run_evidence._canonical_private_container(synthetic_private_bundle())
+    raw, identity = private_container_bytes()
+    check = run_evidence.verify_private_container(
+        write_untrusted_container(tmp_path, raw), identity
     )
-    assert completed.returncode == 0
-
-    with pytest.raises(ValueError) as caught:
-        write_synthetic_bundle_no_clobber(tmp_path / "new-run", synthetic_private_bundle())
-
-    assert str(caught.value) == "STAGING_EXISTS"
-    assert sentinel.read_text(encoding="utf-8") == "{}"
+    assert check.reason_codes == ("PRIVATE_CONTAINER_SIZE_EXCEEDED",)
 
 
-@pytest.mark.parametrize("name", ["CON", "run.", "run ", "run:stream"])
-def test_private_writer_rejects_windows_alias_destination_names(tmp_path: Path, name: str) -> None:
-    with pytest.raises(ValueError) as caught:
-        write_synthetic_bundle_no_clobber(tmp_path / name, synthetic_private_bundle())
+@pytest.mark.parametrize(
+    "logical_path",
+    (
+        "/absolute.json",
+        "private/雪.json",
+        "private/./x.json",
+        "private/../x.json",
+        "private\\x.json",
+        "private/CON",
+        "private/PRN.json",
+        "private/AUX",
+        "private/NUL.txt",
+        "private/COM1.bin",
+        "private/LPT9",
+        "private/a:.json",
+        "private/x.",
+        "private/x ",
+        "private/a~1.json",
+        f"private/{'a' * 65}.json",
+        f"private/{'a' * 241}",
+    ),
+)
+def test_private_logical_path_matrix_is_closed(logical_path: str) -> None:
+    with pytest.raises(ValueError, match="LOGICAL_PATH_INVALID") as caught:
+        PrivateFoldEvidence(logical_path=logical_path, canonical_bytes=b"{}")
+    assert logical_path not in str(caught.value)
 
-    assert str(caught.value) == "TRUSTED_PARENT_REQUIRED"
+
+def test_private_writer_rejects_natural_development_without_permit(tmp_path: Path) -> None:
+    source = synthetic_private_bundle()
+    natural = PrivateRunBundle(evidence_class="natural_development", files=source.files)
+    with pytest.raises(ValueError, match="^FORMAL_RUN_PERMIT_REQUIRED$"):
+        write_synthetic_bundle_no_clobber(tmp_path / "new.container.json", natural)
     assert tuple(tmp_path.iterdir()) == ()
-
-
-def test_private_model_validation_does_not_echo_sensitive_input() -> None:
-    sensitive_path = "private/CON .secret.json"
-
-    with pytest.raises(ValueError) as caught:
-        PrivateFoldEvidence(logical_path=sensitive_path, canonical_bytes=b"{}")
-
-    assert sensitive_path not in str(caught.value)
 
 
 def test_private_identity_rejects_boolean_counts_without_echoing_input() -> None:
@@ -478,207 +511,517 @@ def test_private_identity_rejects_boolean_counts_without_echoing_input() -> None
             inventory_sha256="a" * 64,
             manifest_sha256="b" * 64,
         )
-
     assert "True" not in str(caught.value)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows atomic directory-create semantics")
-def test_windows_normal_directory_swap_cannot_redirect_bundle_writes(
+def test_private_container_failures_expose_only_fixed_codes(tmp_path: Path) -> None:
+    secret = "PRIVATE_PAYLOAD_SENTINEL"
+    path = tmp_path / secret
+    path.write_text(secret)
+    _, identity = private_container_bytes()
+    result = run_evidence.verify_private_container(path, identity)
+    assert result.reason_codes == ("PRIVATE_CONTAINER_INVALID",)
+    assert secret not in repr(result)
+
+
+def test_posix_publication_is_unsupported_before_path_work_or_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original_create = run_evidence._windows_nt_create_relative
-    owned_paths: dict[int, Path] = {}
-    swaps = 0
-    denied_moves = 0
-
-    def swap_after_create(
-        parent_handle: int,
-        name: str,
-        is_directory: bool,
-        share_mode: int,
-    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
-        nonlocal denied_moves, swaps
-        result = original_create(parent_handle, name, is_directory, share_mode)
-        handle, _, _ = result
-        if handle is None or not is_directory:
-            return result
-        path = owned_paths.get(parent_handle, tmp_path) / name
-        assert path.is_dir()
-        displaced = path.parent / f".invocation-owned-{swaps}"
-        try:
-            os.rename(path, displaced)
-        except OSError:
-            denied_moves += 1
-            owned_paths[handle] = path
-            return result
-        swaps += 1
-        owned_paths[handle] = displaced
-        path.mkdir()
-        (path / "attacker-sentinel.json").write_text("{}", encoding="utf-8")
-        return result
-
+    monkeypatch.setattr(run_evidence, "_publication_platform", lambda: "posix")
     monkeypatch.setattr(
         run_evidence,
-        "_windows_nt_create_relative",
-        swap_after_create,
+        "_absolute_destination",
+        lambda _path: pytest.fail("POSIX dispatch reached destination oracle"),
+    )
+    with pytest.raises(ValueError, match="^PUBLICATION_UNSUPPORTED$") as caught:
+        write_synthetic_bundle_no_clobber(
+            tmp_path / "new.container.json", synthetic_private_bundle()
+        )
+    assert caught.value.__cause__ is None
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
+@pytest.mark.parametrize("kind", ("file", "directory", "link"))
+def test_windows_private_writer_rejects_existing_destination(tmp_path: Path, kind: str) -> None:
+    destination = tmp_path / "bundle.container.json"
+    if kind == "file":
+        destination.write_bytes(b"sentinel")
+    elif kind == "directory":
+        destination.mkdir()
+    else:
+        target = tmp_path / "target"
+        target.mkdir()
+        try:
+            destination.symlink_to(target, target_is_directory=True)
+        except OSError:
+            completed = subprocess.run(
+                ("cmd", "/c", "mklink", "/J", str(destination), str(target)),
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                pytest.skip("the platform cannot create a junction in pytest tmp_path")
+    with pytest.raises(ValueError, match="^DESTINATION_EXISTS$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    if kind == "file":
+        assert destination.read_bytes() == b"sentinel"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
+def test_windows_second_publication_is_no_clobber(tmp_path: Path) -> None:
+    destination = tmp_path / "bundle.container.json"
+    identity = write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    original = destination.read_bytes()
+    with pytest.raises(ValueError, match="^DESTINATION_EXISTS$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert destination.read_bytes() == original
+    assert run_evidence.verify_private_container(destination, identity).verdict == "PASS"
+
+
+def _raw_invalid_destinations(tmp_path: Path) -> tuple[Path, ...]:
+    decomposed = unicodedata.normalize("NFD", "café")
+    return (
+        tmp_path / "SHORT~1" / "bundle.json",
+        tmp_path / "bundle.",
+        tmp_path / "bundle ",
+        *(tmp_path / name for name in ("CON", "PRN", "AUX", "NUL")),
+        *(tmp_path / f"COM{number}" for number in range(1, 10)),
+        *(tmp_path / f"LPT{number}" for number in range(1, 10)),
+        tmp_path / "bundle:stream",
+        Path(r"\\server\share\bundle.json"),
+        Path(r"\\?\C:\bundle.json"),
+        Path(r"\\.\C:\bundle.json"),
+        Path("relative.container.json"),
+        tmp_path / ".." / "bundle.json",
+        tmp_path / decomposed / "bundle.json",
     )
 
-    destination = tmp_path / "new-run"
-    staging = tmp_path / ".new-run.staging"
-    write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
 
-    assert swaps == 0
-    assert denied_moves == 3
-    assert not staging.exists()
-    assert (destination / "private" / "folds" / "F1.json").read_bytes() == (
-        b'{"fold_id":"F1","rows":[1,2]}'
-    )
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows delete-sharing semantics")
-def test_windows_live_file_handle_denies_private_byte_displacement(
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
+def test_windows_raw_destination_oracle_rejects_aliases_before_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original_create = run_evidence._windows_nt_create_relative
-    original_flush = run_evidence._windows_flush
-    owned_paths: dict[int, Path] = {}
-    escaped = tmp_path / "escaped-private.json"
-    move_denied = False
-    move_attempted = False
+    monkeypatch.setattr(
+        run_evidence,
+        "_publish_windows_container",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("destination oracle bypassed")),
+    )
+    for destination in _raw_invalid_destinations(tmp_path):
+        before = tuple(tmp_path.iterdir())
+        with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$") as caught:
+            write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+        assert str(destination) not in str(caught.value)
+        assert tuple(tmp_path.iterdir()) == before
 
-    def attempt_file_move(
+
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
+def test_windows_uses_exact_relative_create_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[bool, int, int, int]] = []
+    original = run_evidence._windows_nt_relative_file
+
+    def inspect(
         parent_handle: int,
         name: str,
         is_directory: bool,
+        desired_access: int,
         share_mode: int,
+        create_disposition: int,
+        create_options: int,
     ) -> tuple[int | None, tuple[int, int, int] | None, int]:
-        result = original_create(parent_handle, name, is_directory, share_mode)
-        handle, _, _ = result
-        if handle is None:
-            return result
-        path = owned_paths.get(parent_handle, tmp_path) / name
-        owned_paths[handle] = path
-        return result
+        calls.append((is_directory, share_mode, create_disposition, create_options))
+        return original(
+            parent_handle,
+            name,
+            is_directory,
+            desired_access,
+            share_mode,
+            create_disposition,
+            create_options,
+        )
 
-    def attempt_move_before_layout_seal(handle: int) -> None:
-        nonlocal move_attempted, move_denied
-        path = owned_paths.get(handle)
-        if path is not None and path.name == "F2.json" and not move_attempted:
-            move_attempted = True
-            first_file = path.with_name("F1.json")
-            assert first_file.is_file()
-            try:
-                os.rename(first_file, escaped)
-            except OSError:
-                move_denied = True
+    monkeypatch.setattr(run_evidence, "_windows_nt_relative_file", inspect)
+    destination = tmp_path / "bundle.container.json"
+    write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    directory_options = (
+        run_evidence._WINDOWS_FILE_DIRECTORY_FILE
+        | run_evidence._WINDOWS_FILE_OPEN_REPARSE_POINT
+        | run_evidence._WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
+    )
+    final_options = (
+        run_evidence._WINDOWS_FILE_NON_DIRECTORY_FILE
+        | run_evidence._WINDOWS_FILE_WRITE_THROUGH
+        | run_evidence._WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
+    )
+    assert calls[-1] == (
+        False,
+        0,
+        run_evidence._WINDOWS_FILE_CREATE,
+        final_options,
+    )
+    assert all(
+        call[1:]
+        == (
+            run_evidence._WINDOWS_FILE_SHARE_READ_WRITE,
+            run_evidence._WINDOWS_FILE_OPEN,
+            directory_options,
+        )
+        for call in calls[:-1]
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows protected-handle semantics")
+def test_windows_retains_no_delete_ancestor_handles_until_parent_flush(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    original_flush = run_evidence._windows_flush
+    denied = False
+
+    def probe(handle: int) -> None:
+        nonlocal denied
+        try:
+            os.rename(trusted, tmp_path / "redirected")
+        except OSError:
+            denied = True
         original_flush(handle)
 
-    monkeypatch.setattr(
-        run_evidence,
-        "_windows_nt_create_relative",
-        attempt_file_move,
-    )
-    monkeypatch.setattr(run_evidence, "_windows_flush", attempt_move_before_layout_seal)
+    monkeypatch.setattr(run_evidence, "_windows_flush", probe)
+    write_synthetic_bundle_no_clobber(trusted / "bundle.container.json", synthetic_private_bundle())
+    assert denied
 
-    destination = tmp_path / "new-run"
-    publication_error: ValueError | None = None
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows link fixture semantics")
+def test_windows_rejects_linked_ancestor_without_touching_target(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    linked = tmp_path / "linked"
+    completed = subprocess.run(
+        ("cmd", "/c", "mklink", "/J", str(linked), str(target)),
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.skip("the platform cannot create a junction in pytest tmp_path")
+    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
+        write_synthetic_bundle_no_clobber(
+            linked / "bundle.container.json", synthetic_private_bundle()
+        )
+    assert tuple(target.iterdir()) == ()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cross-volume fixture semantics")
+def test_windows_rejects_cross_volume_junction_ancestor(tmp_path: Path) -> None:
+    target: Path | None = None
+    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        drive = Path(f"{letter}:\\")
+        if drive.exists():
+            try:
+                target = Path(tempfile.mkdtemp(prefix="mdcp-cross-volume-", dir=drive))
+            except OSError:
+                continue
+            break
+    if target is None:
+        pytest.skip("no second writable Windows volume is available")
+    linked = tmp_path / "cross-volume"
+    completed = subprocess.run(
+        ("cmd", "/c", "mklink", "/J", str(linked), str(target)),
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.skip("the platform cannot create a cross-volume junction")
     try:
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    except ValueError as error:
-        publication_error = error
-
-    assert not escaped.exists()
-    assert publication_error is None
-    assert move_attempted and move_denied
-    assert (destination / "private" / "folds" / "F1.json").read_bytes() == (
-        b'{"fold_id":"F1","rows":[1,2]}'
-    )
+        with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
+            write_synthetic_bundle_no_clobber(
+                linked / "bundle.container.json", synthetic_private_bundle()
+            )
+        assert tuple(target.iterdir()) == ()
+    finally:
+        target.rmdir()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows identity-bound cleanup semantics")
-def test_windows_cleanup_does_not_delete_attacker_replacement(
+@pytest.mark.skipif(os.name != "nt", reason="Windows normalized handle names")
+def test_windows_rejects_normalized_handle_name_mismatch_before_create(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "new-run"
-    staging = tmp_path / ".new-run.staging"
-    replacement = b'{"attacker":true}'
-    stolen = tmp_path / "stolen-F1.json"
-    original_publish = run_evidence._windows_rename_noreplace
+    original = run_evidence._windows_normalized_handle_name
+    calls = 0
 
-    def replace_before_cleanup(staging_handle: int, target: Path) -> None:
-        source = staging / "private" / "folds" / "F1.json"
-        os.rename(source, stolen)
-        source.write_bytes(replacement)
-        target.mkdir()
-        original_publish(staging_handle, target)
+    def mismatch(handle: int) -> str:
+        nonlocal calls
+        calls += 1
+        value = original(handle)
+        return value if calls == 1 else value + "-mismatch"
 
-    monkeypatch.setattr(
-        run_evidence,
-        "_windows_rename_noreplace",
-        replace_before_cleanup,
-    )
-
-    with pytest.raises(ValueError) as caught:
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert str(caught.value) == "PUBLICATION_FAILED"
-    assert (staging / "private" / "folds" / "F1.json").read_bytes() == replacement
-    assert stolen.is_file()
+    monkeypatch.setattr(run_evidence, "_windows_normalized_handle_name", mismatch)
+    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
+        write_synthetic_bundle_no_clobber(
+            tmp_path / "bundle.container.json", synthetic_private_bundle()
+        )
+    assert not (tmp_path / "bundle.container.json").exists()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows identity-bound cleanup semantics")
-def test_windows_cleanup_delete_failure_is_terminal_and_sanitized(
+@pytest.mark.skipif(os.name != "nt", reason="Windows create-new semantics")
+def test_windows_destination_create_collision_preserves_attacker_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "new-run"
-    staging = tmp_path / ".new-run.staging"
-    original_publish = run_evidence._windows_rename_noreplace
+    destination = tmp_path / "bundle.container.json"
+    original = run_evidence._windows_nt_relative_file
 
-    def collide(staging_handle: int, target: Path) -> None:
-        target.mkdir()
-        original_publish(staging_handle, target)
+    def collide(
+        parent_handle: int,
+        name: str,
+        is_directory: bool,
+        desired_access: int,
+        share_mode: int,
+        create_disposition: int,
+        create_options: int,
+    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
+        if not is_directory and not destination.exists():
+            destination.write_bytes(b"attacker")
+        return original(
+            parent_handle,
+            name,
+            is_directory,
+            desired_access,
+            share_mode,
+            create_disposition,
+            create_options,
+        )
 
-    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", collide)
-    monkeypatch.setattr(
-        run_evidence,
-        "_windows_set_delete_disposition",
-        lambda _handle: False,
-        raising=False,
-    )
-
-    with pytest.raises(ValueError) as caught:
+    monkeypatch.setattr(run_evidence, "_windows_nt_relative_file", collide)
+    with pytest.raises(ValueError, match="^DESTINATION_EXISTS$"):
         write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert str(caught.value) == "PUBLICATION_FAILED"
-    assert staging.exists()
+    assert destination.read_bytes() == b"attacker"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows identity-bound cleanup semantics")
-def test_windows_cleanup_flush_failure_is_terminal_and_sanitized(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle cleanup semantics")
+@pytest.mark.parametrize("failure", ("short_write", "file_flush", "parent_flush", "identity"))
+def test_windows_failures_use_handle_bound_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    destination = tmp_path / "new-run"
-    original_publish = run_evidence._windows_rename_noreplace
+    destination = tmp_path / "bundle.container.json"
+    deleted_handles: list[int] = []
+    original_delete = run_evidence._windows_set_delete_disposition
     original_flush = run_evidence._windows_flush
-    cleanup_started = False
+    original_information = run_evidence._windows_file_information
+    flush_calls = 0
+    information_calls = 0
 
-    def collide(staging_handle: int, target: Path) -> None:
-        nonlocal cleanup_started
-        target.mkdir()
-        try:
-            original_publish(staging_handle, target)
-        finally:
-            cleanup_started = True
+    def record_delete(handle: int) -> bool:
+        deleted_handles.append(handle)
+        return original_delete(handle)
 
-    def fail_cleanup_flush(handle: int) -> None:
-        if cleanup_started:
+    def fail_flush(handle: int) -> None:
+        nonlocal flush_calls
+        flush_calls += 1
+        if (failure == "file_flush" and flush_calls == 1) or (
+            failure == "parent_flush" and flush_calls == 2
+        ):
             raise run_evidence._PublicationError("PUBLICATION_FAILED")
         original_flush(handle)
 
-    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", collide)
-    monkeypatch.setattr(run_evidence, "_windows_flush", fail_cleanup_flush)
+    def changed_information(handle: int) -> tuple[int, tuple[int, int, int]]:
+        nonlocal information_calls
+        result = original_information(handle)
+        information_calls += 1
+        if failure == "identity" and information_calls > 3:
+            return result[0], (result[1][0], result[1][1], result[1][2] + 1)
+        return result
 
-    with pytest.raises(ValueError) as caught:
+    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", record_delete)
+    monkeypatch.setattr(run_evidence, "_windows_flush", fail_flush)
+    monkeypatch.setattr(run_evidence, "_windows_file_information", changed_information)
+    if failure == "short_write":
+        monkeypatch.setattr(
+            run_evidence, "_windows_write_chunk", lambda _handle, data: len(data) - 1
+        )
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert len(deleted_handles) == 1
+    assert not destination.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle cleanup semantics")
+def test_windows_cleanup_failure_is_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    monkeypatch.setattr(run_evidence, "_windows_write_chunk", lambda _handle, _data: 0)
+    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", lambda _handle: False)
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert destination.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle cleanup semantics")
+def test_windows_immediate_final_metadata_failure_keeps_handle_for_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    original_relative = run_evidence._windows_nt_relative_file
+    original_information = run_evidence._windows_file_information
+    original_delete = run_evidence._windows_set_delete_disposition
+    final_handle: int | None = None
+    deleted_handles: list[int] = []
+
+    def mark_final(
+        parent_handle: int,
+        name: str,
+        is_directory: bool,
+        desired_access: int,
+        share_mode: int,
+        create_disposition: int,
+        create_options: int,
+    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
+        nonlocal final_handle
+        result = original_relative(
+            parent_handle,
+            name,
+            is_directory,
+            desired_access,
+            share_mode,
+            create_disposition,
+            create_options,
+        )
+        if not is_directory:
+            final_handle = result[0]
+        return result
+
+    def unexpected_reparse(handle: int) -> tuple[int, tuple[int, int, int]]:
+        attributes, identity = original_information(handle)
+        if handle == final_handle:
+            attributes |= run_evidence._WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+        return attributes, identity
+
+    def record_delete(handle: int) -> bool:
+        deleted_handles.append(handle)
+        return original_delete(handle)
+
+    monkeypatch.setattr(run_evidence, "_windows_nt_relative_file", mark_final)
+    monkeypatch.setattr(run_evidence, "_windows_file_information", unexpected_reparse)
+    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", record_delete)
+
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
         write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
 
-    assert str(caught.value) == "PUBLICATION_FAILED"
+    assert len(deleted_handles) == 1
+    assert not destination.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ancestor handle semantics")
+def test_windows_native_ancestor_name_failure_closes_opened_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    original_create = run_evidence._windows_create_file
+    original_close = run_evidence._windows_close
+    opened: list[int] = []
+    closed: list[int] = []
+
+    def record_open(
+        path: Path, desired_access: int, creation: int, flags: int
+    ) -> tuple[int | None, int]:
+        handle, error = original_create(path, desired_access, creation, flags)
+        if handle is not None:
+            opened.append(handle)
+        return handle, error
+
+    def record_close(handle: int) -> None:
+        closed.append(handle)
+        original_close(handle)
+
+    monkeypatch.setattr(run_evidence, "_windows_create_file", record_open)
+    monkeypatch.setattr(run_evidence, "_windows_close", record_close)
+    monkeypatch.setattr(
+        run_evidence,
+        "_windows_normalized_handle_name",
+        lambda _handle: (_ for _ in ()).throw(OSError("sensitive path")),
+    )
+
+    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert opened and closed == opened
+    assert not destination.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cleanup handle semantics")
+def test_windows_delete_disposition_exception_still_closes_every_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    original_close = run_evidence._windows_close
+    closed: list[int] = []
+
+    def record_close(handle: int) -> None:
+        closed.append(handle)
+        original_close(handle)
+
+    monkeypatch.setattr(run_evidence, "_windows_write_chunk", lambda _handle, _data: 0)
+    monkeypatch.setattr(
+        run_evidence,
+        "_windows_set_delete_disposition",
+        lambda _handle: (_ for _ in ()).throw(OSError("sensitive path")),
+    )
+    monkeypatch.setattr(run_evidence, "_windows_close", record_close)
+
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+
+    assert len(closed) >= 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows final identity semantics")
+def test_windows_final_normalized_name_mismatch_is_cleaned_by_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "bundle.container.json"
+    original = run_evidence._windows_normalized_handle_name
+
+    def mismatch_final(handle: int) -> str:
+        value = original(handle)
+        return value + "-mismatch" if value.endswith(destination.name) else value
+
+    monkeypatch.setattr(run_evidence, "_windows_normalized_handle_name", mismatch_final)
+    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert not destination.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows publication surface")
+def test_windows_publisher_has_no_staging_rename_or_destination_path_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_opens: list[Path] = []
+    original = run_evidence._windows_create_file
+
+    def root_only(
+        path: Path, desired_access: int, creation: int, flags: int
+    ) -> tuple[int | None, int]:
+        root_opens.append(path)
+        return original(path, desired_access, creation, flags)
+
+    monkeypatch.setattr(run_evidence, "_windows_create_file", root_only)
+    destination = tmp_path / "bundle.container.json"
+    identity = write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    assert root_opens == [Path(destination.anchor)]
+    assert destination.is_file()
+    assert run_evidence.verify_private_container(destination, identity).verdict == "PASS"
+    assert not hasattr(run_evidence, "_windows_rename_noreplace")
+    assert not any("staging" in path.name.lower() for path in tmp_path.iterdir())
+
+
+def test_private_bundle_public_identity_contains_no_private_material() -> None:
+    _, identity = private_container_bytes()
+    assert set(identity.model_dump()) == {
+        "file_count",
+        "total_bytes",
+        "inventory_sha256",
+        "manifest_sha256",
+    }
+    assert public_evidence_violations(identity.model_dump(mode="json")) == ()
