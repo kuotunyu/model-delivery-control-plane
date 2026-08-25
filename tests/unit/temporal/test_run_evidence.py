@@ -12,8 +12,8 @@ from mdcp.temporal.run_evidence import (
     PrivateFoldEvidence,
     PrivateRunBundle,
     PublicDevelopmentResult,
-    write_synthetic_bundle_no_clobber,
     verify_development_result,
+    write_synthetic_bundle_no_clobber,
 )
 
 
@@ -185,12 +185,16 @@ def test_private_writer_rejects_existing_or_linked_destination(tmp_path: Path, s
 
 def test_private_writer_requires_a_precreated_nonlinked_parent(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as error:
-        write_synthetic_bundle_no_clobber(tmp_path / "missing" / "new-run", synthetic_private_bundle())
+        write_synthetic_bundle_no_clobber(
+            tmp_path / "missing" / "new-run", synthetic_private_bundle()
+        )
 
     assert str(error.value) == "TRUSTED_PARENT_REQUIRED"
 
 
-def test_private_writer_rejects_duplicate_logical_paths_without_echoing_them(tmp_path: Path) -> None:
+def test_private_writer_rejects_duplicate_logical_paths_without_echoing_them(
+    tmp_path: Path,
+) -> None:
     source = synthetic_private_bundle()
     duplicate = PrivateRunBundle(
         evidence_class="synthetic_test",
@@ -207,7 +211,11 @@ def test_private_writer_rejects_duplicate_logical_paths_without_echoing_them(tmp
 def test_private_writer_rejects_noncanonical_bytes(tmp_path: Path) -> None:
     bundle = PrivateRunBundle(
         evidence_class="synthetic_test",
-        files=(PrivateFoldEvidence(logical_path="private/folds/F1.json", canonical_bytes=b'{"b":1,"a":2}'),),
+        files=(
+            PrivateFoldEvidence(
+                logical_path="private/folds/F1.json", canonical_bytes=b'{"b":1,"a":2}'
+            ),
+        ),
     )
 
     with pytest.raises(ValueError) as error:

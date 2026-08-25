@@ -796,7 +796,9 @@ def test_static_firewall_rejects_unapproved_run_evidence_capability(tmp_path: Pa
     source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
     needle = "import math\n"
     assert source.count(needle) == 1
-    _write_logical_module(tmp_path, logical_path, source.replace(needle, "import math\nimport time\n", 1))
+    _write_logical_module(
+        tmp_path, logical_path, source.replace(needle, "import math\nimport time\n", 1)
+    )
 
     with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))

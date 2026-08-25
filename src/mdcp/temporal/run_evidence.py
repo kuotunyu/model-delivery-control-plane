@@ -67,9 +67,26 @@ class PublicTrialReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     trial_id: Literal[
-        "TRIAL-01", "TRIAL-02", "TRIAL-03", "TRIAL-04", "TRIAL-05", "TRIAL-06", "TRIAL-07",
-        "TRIAL-08", "TRIAL-09", "TRIAL-10", "TRIAL-11", "TRIAL-12", "TRIAL-13", "TRIAL-14",
-        "TRIAL-15", "TRIAL-16", "TRIAL-17", "TRIAL-18", "TRIAL-19", "TRIAL-20",
+        "TRIAL-01",
+        "TRIAL-02",
+        "TRIAL-03",
+        "TRIAL-04",
+        "TRIAL-05",
+        "TRIAL-06",
+        "TRIAL-07",
+        "TRIAL-08",
+        "TRIAL-09",
+        "TRIAL-10",
+        "TRIAL-11",
+        "TRIAL-12",
+        "TRIAL-13",
+        "TRIAL-14",
+        "TRIAL-15",
+        "TRIAL-16",
+        "TRIAL-17",
+        "TRIAL-18",
+        "TRIAL-19",
+        "TRIAL-20",
     ]
     selection_fit_count: Literal[4]
     folds: tuple[PublicFoldReceipt, PublicFoldReceipt, PublicFoldReceipt, PublicFoldReceipt]
@@ -96,11 +113,26 @@ class PublicDevelopmentResult(BaseModel):
     selection_fit_count: Literal[80]
     result_sha256: Sha256
     trials: tuple[
-        PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt,
-        PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt,
-        PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt,
-        PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt,
-        PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt, PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
+        PublicTrialReceipt,
     ]
 
     @model_validator(mode="after")
@@ -166,7 +198,9 @@ class DevelopmentResultCheck(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     verdict: Literal["PASS", "FAIL"]
-    reason_codes: tuple[Literal["DEVELOPMENT_RESULT_INVALID", "DEVELOPMENT_RESULT_SCHEMA_INVALID"], ...]
+    reason_codes: tuple[
+        Literal["DEVELOPMENT_RESULT_INVALID", "DEVELOPMENT_RESULT_SCHEMA_INVALID"], ...
+    ]
 
 
 class _PublicationError(ValueError):
@@ -201,7 +235,9 @@ def verify_development_result(path: Path) -> DevelopmentResultCheck:
     return DevelopmentResultCheck(verdict="PASS", reason_codes=())
 
 
-def write_synthetic_bundle_no_clobber(root: Path, bundle: PrivateRunBundle) -> PrivateBundleIdentity:
+def write_synthetic_bundle_no_clobber(
+    root: Path, bundle: PrivateRunBundle
+) -> PrivateBundleIdentity:
     """Atomically publish a private synthetic bundle under an already trusted parent."""
     if type(bundle) is not PrivateRunBundle:
         raise _PublicationError("PRIVATE_BUNDLE_INVALID")
@@ -210,12 +246,20 @@ def write_synthetic_bundle_no_clobber(root: Path, bundle: PrivateRunBundle) -> P
     _require_new_child_of_trusted_parent(root)
     files = _validated_private_files(bundle.files)
     inventory = [
-        {"logical_path": item.logical_path, "sha256": sha256_hex(item.canonical_bytes), "bytes": len(item.canonical_bytes)}
+        {
+            "logical_path": item.logical_path,
+            "sha256": sha256_hex(item.canonical_bytes),
+            "bytes": len(item.canonical_bytes),
+        }
         for item in files
     ]
     inventory_sha256 = sha256_hex(canonicalize_json(inventory))
     manifest = canonicalize_json(
-        {"evidence_class": "synthetic_test", "files": inventory, "inventory_sha256": inventory_sha256}
+        {
+            "evidence_class": "synthetic_test",
+            "files": inventory,
+            "inventory_sha256": inventory_sha256,
+        }
     )
     manifest_sha256 = sha256_hex(manifest)
     staging = root.parent / f".{root.name}.staging"
@@ -264,7 +308,9 @@ def _require_new_child_of_trusted_parent(root: Path) -> None:
         raise _PublicationError("DESTINATION_EXISTS")
 
 
-def _validated_private_files(files: tuple[PrivateFoldEvidence, ...]) -> tuple[PrivateFoldEvidence, ...]:
+def _validated_private_files(
+    files: tuple[PrivateFoldEvidence, ...],
+) -> tuple[PrivateFoldEvidence, ...]:
     if not files:
         raise _PublicationError("PRIVATE_BUNDLE_EMPTY")
     paths = tuple(item.logical_path for item in files)
