@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import ctypes
-import errno
 import json
 import os
-import stat
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -148,6 +144,7 @@ def test_valid_closed_public_result_verifies_only_when_schema_and_bytes_are_cano
     assert verify_development_result(path).verdict == "PASS"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_private_bundle_public_identity_contains_no_private_material(tmp_path: Path) -> None:
     identity = write_synthetic_bundle_no_clobber(tmp_path / "new-run", synthetic_private_bundle())
 
@@ -164,6 +161,7 @@ def test_private_bundle_public_identity_contains_no_private_material(tmp_path: P
     "setup",
     ["existing_destination", "partial_destination", "symlink_destination"],
 )
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_private_writer_rejects_existing_or_linked_destination(tmp_path: Path, setup: str) -> None:
     destination = tmp_path / "new-run"
     if setup == "existing_destination":
@@ -191,6 +189,7 @@ def test_private_writer_rejects_existing_or_linked_destination(tmp_path: Path, s
     assert str(error.value) == "DESTINATION_EXISTS"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_private_writer_requires_a_precreated_nonlinked_parent(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as error:
         write_synthetic_bundle_no_clobber(
@@ -232,6 +231,7 @@ def test_private_writer_rejects_noncanonical_bytes(tmp_path: Path) -> None:
     assert str(error.value) == "NONCANONICAL_PRIVATE_BYTES"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_private_writer_rejects_second_publication(tmp_path: Path) -> None:
     destination = tmp_path / "new-run"
     write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
@@ -303,31 +303,18 @@ def test_canonical_public_result_bytes_returns_rfc8785_bytes() -> None:
     )
 
 
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_private_writer_cleans_staging_after_raced_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     destination = tmp_path / "new-run"
-    if os.name == "nt":
-        original_publish = run_evidence._windows_rename_noreplace
+    original_publish = run_evidence._windows_rename_noreplace
 
-        def race(staging_handle: int, target: Path) -> None:
-            target.mkdir()
-            original_publish(staging_handle, target)
+    def race(staging_handle: int, target: Path) -> None:
+        target.mkdir()
+        original_publish(staging_handle, target)
 
-        monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", race)
-    else:
-        original_publish_posix = run_evidence._posix_rename_noreplace
-
-        def race_posix(
-            old_directory: int,
-            old_name: str,
-            new_directory: int,
-            new_name: str,
-        ) -> None:
-            os.mkdir(new_name, dir_fd=new_directory)
-            original_publish_posix(old_directory, old_name, new_directory, new_name)
-
-        monkeypatch.setattr(run_evidence, "_posix_rename_noreplace", race_posix)
+    monkeypatch.setattr(run_evidence, "_windows_rename_noreplace", race)
 
     with pytest.raises(ValueError, match="^DESTINATION_EXISTS$"):
         write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
@@ -336,6 +323,7 @@ def test_private_writer_cleans_staging_after_raced_destination(
     assert not (tmp_path / ".new-run.staging").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_writer_does_not_fall_back_to_path_based_rename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -350,78 +338,26 @@ def test_writer_does_not_fall_back_to_path_based_rename(
     assert (tmp_path / "new-run" / "manifest.json").is_file()
 
 
-def test_posix_renameat2_is_handle_relative_and_no_replace(
-    monkeypatch: pytest.MonkeyPatch,
+def test_posix_publication_is_unsupported_without_filesystem_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[tuple[object, ...]] = []
-
-    class RenameAt2:
-        argtypes: list[object] = []
-        restype: object = None
-
-        def __call__(self, *args: object) -> int:
-            calls.append(args)
-            return 0
-
-    renameat2 = RenameAt2()
-    monkeypatch.setattr(run_evidence, "_load_posix_renameat2", lambda: renameat2)
-
-    run_evidence._posix_rename_noreplace(41, ".new-run.staging", 41, "new-run")
-
-    assert calls == [(41, b".new-run.staging", 41, b"new-run", 1)]
-
-
-def test_posix_renameat2_collision_is_sanitized(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class RenameAt2:
-        argtypes: list[object] = []
-        restype: object = None
-
-        def __call__(self, *_args: object) -> int:
-            ctypes.set_errno(errno.EEXIST)
-            return -1
-
-    monkeypatch.setattr(run_evidence, "_load_posix_renameat2", lambda: RenameAt2())
-
-    with pytest.raises(ValueError) as caught:
-        run_evidence._posix_rename_noreplace(41, ".private-path", 41, "private-path")
-
-    assert str(caught.value) == "DESTINATION_EXISTS"
-    assert caught.value.__cause__ is None
-    assert caught.value.__suppress_context__
-
-
-def test_posix_renameat2_unsupported_fails_closed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(run_evidence.ctypes, "CDLL", lambda *_args, **_kwargs: object())
-
-    with pytest.raises(ValueError) as caught:
-        run_evidence._load_posix_renameat2()
-
-    assert str(caught.value) == "PUBLICATION_FAILED"
-    assert caught.value.__cause__ is None
-    assert caught.value.__suppress_context__
-
-
-def test_posix_staging_handle_is_closed_when_identity_check_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    closed: list[int] = []
-    monkeypatch.setattr(run_evidence, "_posix_directory_flags", lambda: 0)
-    monkeypatch.setattr(run_evidence.os, "open", lambda *_args, **_kwargs: 41)
+    destination = tmp_path / "new-run"
+    staging = tmp_path / ".new-run.staging"
     monkeypatch.setattr(
-        run_evidence.os,
-        "fstat",
-        lambda _descriptor: (_ for _ in ()).throw(OSError("sensitive path")),
+        run_evidence,
+        "_publication_platform",
+        lambda: "posix",
+        raising=False,
     )
-    monkeypatch.setattr(run_evidence.os, "close", closed.append)
 
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        run_evidence._posix_open_owned_staging(40, ".new-run.staging", (10, 20))
+    with pytest.raises(ValueError) as caught:
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
 
-    assert closed == [41]
+    assert str(caught.value) == "PUBLICATION_UNSUPPORTED"
+    assert caught.value.__cause__ is None
+    assert not destination.exists()
+    assert not staging.exists()
+    assert tuple(tmp_path.iterdir()) == ()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows protected-handle semantics")
@@ -474,21 +410,19 @@ def test_windows_cleans_owned_staging_after_file_flush_failure(
     assert not staging.exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_private_writer_rejects_linked_ancestor_without_touching_target(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "linked-target"
     target.mkdir()
     linked_parent = tmp_path / "linked-parent"
-    if os.name == "nt":
-        completed = subprocess.run(
-            ("cmd", "/c", "mklink", "/J", str(linked_parent), str(target)),
-            capture_output=True,
-            check=False,
-        )
-        assert completed.returncode == 0
-    else:
-        linked_parent.symlink_to(target, target_is_directory=True)
+    completed = subprocess.run(
+        ("cmd", "/c", "mklink", "/J", str(linked_parent), str(target)),
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0
 
     with pytest.raises(ValueError) as caught:
         write_synthetic_bundle_no_clobber(linked_parent / "new-run", synthetic_private_bundle())
@@ -497,21 +431,19 @@ def test_private_writer_rejects_linked_ancestor_without_touching_target(
     assert tuple(target.iterdir()) == ()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
 def test_preexisting_staging_link_is_not_cleaned_as_owned(tmp_path: Path) -> None:
     target = tmp_path / "attacker-owned"
     target.mkdir()
     sentinel = target / "sentinel.json"
     sentinel.write_text("{}", encoding="utf-8")
     staging = tmp_path / ".new-run.staging"
-    if os.name == "nt":
-        completed = subprocess.run(
-            ("cmd", "/c", "mklink", "/J", str(staging), str(target)),
-            capture_output=True,
-            check=False,
-        )
-        assert completed.returncode == 0
-    else:
-        staging.symlink_to(target, target_is_directory=True)
+    completed = subprocess.run(
+        ("cmd", "/c", "mklink", "/J", str(staging), str(target)),
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0
 
     with pytest.raises(ValueError) as caught:
         write_synthetic_bundle_no_clobber(tmp_path / "new-run", synthetic_private_bundle())
@@ -550,32 +482,6 @@ def test_private_identity_rejects_boolean_counts_without_echoing_input() -> None
     assert "True" not in str(caught.value)
 
 
-def test_posix_staging_open_rejects_normal_directory_swapped_after_identity_capture(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    created_identity = (10, 20)
-    replacement = SimpleNamespace(st_dev=30, st_ino=40, st_mode=stat.S_IFDIR)
-    closed: list[int] = []
-    monkeypatch.setattr(run_evidence, "_posix_directory_flags", lambda: 0)
-    monkeypatch.setattr(run_evidence.os, "open", lambda *_args, **_kwargs: 41)
-    monkeypatch.setattr(run_evidence.os, "fstat", lambda _descriptor: replacement)
-    monkeypatch.setattr(
-        run_evidence.os,
-        "stat",
-        lambda *_args, **_kwargs: replacement,
-    )
-    monkeypatch.setattr(run_evidence.os, "close", closed.append)
-
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        run_evidence._posix_open_owned_staging(
-            40,
-            ".new-run.staging",
-            created_identity,
-        )
-
-    assert closed == [41]
-
-
 @pytest.mark.skipif(os.name != "nt", reason="Windows atomic directory-create semantics")
 def test_windows_normal_directory_swap_cannot_redirect_bundle_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -583,6 +489,7 @@ def test_windows_normal_directory_swap_cannot_redirect_bundle_writes(
     original_create = run_evidence._windows_nt_create_relative
     owned_paths: dict[int, Path] = {}
     swaps = 0
+    denied_moves = 0
 
     def swap_after_create(
         parent_handle: int,
@@ -590,16 +497,18 @@ def test_windows_normal_directory_swap_cannot_redirect_bundle_writes(
         is_directory: bool,
         share_mode: int,
     ) -> tuple[int | None, tuple[int, int, int] | None, int]:
-        nonlocal swaps
+        nonlocal denied_moves, swaps
         result = original_create(parent_handle, name, is_directory, share_mode)
         handle, _, _ = result
         if handle is None or not is_directory:
             return result
         path = owned_paths.get(parent_handle, tmp_path) / name
+        assert path.is_dir()
         displaced = path.parent / f".invocation-owned-{swaps}"
         try:
             os.rename(path, displaced)
         except OSError:
+            denied_moves += 1
             owned_paths[handle] = path
             return result
         swaps += 1
@@ -616,13 +525,74 @@ def test_windows_normal_directory_swap_cannot_redirect_bundle_writes(
 
     destination = tmp_path / "new-run"
     staging = tmp_path / ".new-run.staging"
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
 
-    assert swaps >= 1
-    assert not destination.exists()
-    assert (staging / "private" / "attacker-sentinel.json").read_text(encoding="utf-8") == "{}"
-    assert not (staging / "private" / "folds" / "F1.json").exists()
+    assert swaps == 0
+    assert denied_moves == 3
+    assert not staging.exists()
+    assert (destination / "private" / "folds" / "F1.json").read_bytes() == (
+        b'{"fold_id":"F1","rows":[1,2]}'
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows delete-sharing semantics")
+def test_windows_live_file_handle_denies_private_byte_displacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_create = run_evidence._windows_nt_create_relative
+    original_flush = run_evidence._windows_flush
+    owned_paths: dict[int, Path] = {}
+    escaped = tmp_path / "escaped-private.json"
+    move_denied = False
+    move_attempted = False
+
+    def attempt_file_move(
+        parent_handle: int,
+        name: str,
+        is_directory: bool,
+        share_mode: int,
+    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
+        result = original_create(parent_handle, name, is_directory, share_mode)
+        handle, _, _ = result
+        if handle is None:
+            return result
+        path = owned_paths.get(parent_handle, tmp_path) / name
+        owned_paths[handle] = path
+        return result
+
+    def attempt_move_before_layout_seal(handle: int) -> None:
+        nonlocal move_attempted, move_denied
+        path = owned_paths.get(handle)
+        if path is not None and path.name == "F2.json" and not move_attempted:
+            move_attempted = True
+            first_file = path.with_name("F1.json")
+            assert first_file.is_file()
+            try:
+                os.rename(first_file, escaped)
+            except OSError:
+                move_denied = True
+        original_flush(handle)
+
+    monkeypatch.setattr(
+        run_evidence,
+        "_windows_nt_create_relative",
+        attempt_file_move,
+    )
+    monkeypatch.setattr(run_evidence, "_windows_flush", attempt_move_before_layout_seal)
+
+    destination = tmp_path / "new-run"
+    publication_error: ValueError | None = None
+    try:
+        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
+    except ValueError as error:
+        publication_error = error
+
+    assert not escaped.exists()
+    assert publication_error is None
+    assert move_attempted and move_denied
+    assert (destination / "private" / "folds" / "F1.json").read_bytes() == (
+        b'{"fold_id":"F1","rows":[1,2]}'
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows identity-bound cleanup semantics")

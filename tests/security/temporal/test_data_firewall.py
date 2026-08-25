@@ -804,17 +804,17 @@ def test_static_firewall_rejects_unapproved_run_evidence_capability(tmp_path: Pa
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
-def test_static_firewall_rejects_unapproved_run_evidence_native_symbol(
+def test_static_firewall_rejects_posix_native_recovery_capability(
     tmp_path: Path,
 ) -> None:
     logical_path = "src/mdcp/temporal/run_evidence.py"
     source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
-    needle = "ctypes.CDLL(None, use_errno=True).renameat2"
+    needle = "    del destination, files, manifest\n"
     assert source.count(needle) == 1
     _write_logical_module(
         tmp_path,
         logical_path,
-        source.replace(needle, "ctypes.CDLL(None, use_errno=True).system", 1),
+        source.replace(needle, "    ctypes.CDLL(None)\n" + needle, 1),
     )
 
     with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import ctypes
-import errno
 import json
 import math
 import os
-import stat
 from ctypes import wintypes
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -39,8 +37,6 @@ _WINDOWS_RESERVED_NAMES = frozenset(
         *(f"LPT{number}" for number in range(1, 10)),
     }
 )
-_RENAME_NOREPLACE = 1
-
 _WINDOWS_DELETE = 0x00010000
 _WINDOWS_SYNCHRONIZE = 0x00100000
 _WINDOWS_FILE_LIST_DIRECTORY = 0x00000001
@@ -397,9 +393,10 @@ def write_synthetic_bundle_no_clobber(
     manifest_sha256 = sha256_hex(manifest)
     try:
         destination = _absolute_destination(root)
-        if os.name == "nt":
+        platform = _publication_platform()
+        if platform == "nt":
             _publish_windows_bundle(destination, files, manifest)
-        elif os.name == "posix":
+        elif platform == "posix":
             _publish_posix_bundle(destination, files, manifest)
         else:
             raise _PublicationError("PUBLICATION_FAILED")
@@ -413,6 +410,10 @@ def write_synthetic_bundle_no_clobber(
         inventory_sha256=inventory_sha256,
         manifest_sha256=manifest_sha256,
     )
+
+
+def _publication_platform() -> str:
+    return os.name
 
 
 def _checked_in_schema() -> object:
@@ -461,276 +462,13 @@ def _validated_private_files(
     return files
 
 
-def _posix_directory_flags() -> int:
-    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-
-
-def _open_posix_trusted_parent(parent: Path) -> int:
-    current = -1
-    try:
-        parts = parent.parts
-        if not parts or parts[0] != "/":
-            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
-        current = os.open("/", _posix_directory_flags())
-        for component in parts[1:]:
-            following = os.open(component, _posix_directory_flags(), dir_fd=current)
-            os.close(current)
-            current = following
-        return current
-    except _PublicationError:
-        if current >= 0:
-            os.close(current)
-        raise
-    except OSError:
-        if current >= 0:
-            os.close(current)
-        raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
-
-
-def _posix_require_absent(directory: int, name: str, code: str) -> None:
-    try:
-        os.stat(name, dir_fd=directory, follow_symlinks=False)
-    except FileNotFoundError:
-        return
-    except OSError:
-        raise _PublicationError("PUBLICATION_FAILED") from None
-    raise _PublicationError(code) from None
-
-
-def _posix_identity(info: os.stat_result) -> tuple[int, int]:
-    return info.st_dev, info.st_ino
-
-
-def _posix_create_owned_directory(
-    parent: int,
-    name: str,
-    collision_code: str,
-) -> tuple[int, int]:
-    try:
-        os.mkdir(name, 0o700, dir_fd=parent)
-    except FileExistsError:
-        raise _PublicationError(collision_code) from None
-    try:
-        created = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if not stat.S_ISDIR(created.st_mode):
-            raise _PublicationError("PUBLICATION_FAILED")
-        return _posix_identity(created)
-    except _PublicationError:
-        raise
-    except OSError:
-        raise _PublicationError("PUBLICATION_FAILED") from None
-
-
-def _posix_create_owned_staging(parent: int, name: str) -> tuple[int, int]:
-    return _posix_create_owned_directory(parent, name, "STAGING_EXISTS")
-
-
-def _posix_open_owned_staging(
-    parent: int,
-    name: str,
-    expected_identity: tuple[int, int],
-) -> tuple[int, tuple[int, int]]:
-    descriptor = -1
-    try:
-        descriptor = os.open(name, _posix_directory_flags(), dir_fd=parent)
-        opened = os.fstat(descriptor)
-        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(opened.st_mode)
-            or not stat.S_ISDIR(named.st_mode)
-            or _posix_identity(opened) != expected_identity
-            or _posix_identity(named) != expected_identity
-            or _posix_identity(opened) != _posix_identity(named)
-        ):
-            raise _PublicationError("PUBLICATION_FAILED")
-        return descriptor, _posix_identity(opened)
-    except _PublicationError:
-        if descriptor >= 0:
-            os.close(descriptor)
-        raise
-    except OSError:
-        if descriptor >= 0:
-            os.close(descriptor)
-        raise _PublicationError("PUBLICATION_FAILED") from None
-
-
-def _posix_write_file(directory: int, name: str, content: bytes) -> None:
-    descriptor = os.open(
-        name,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-        0o600,
-        dir_fd=directory,
-    )
-    try:
-        offset = 0
-        while offset < len(content):
-            written = os.write(descriptor, content[offset:])
-            if written <= 0:
-                raise OSError
-            offset += written
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    os.fsync(directory)
-
-
-def _posix_write_layout(
-    staging: int,
-    files: tuple[PrivateFoldEvidence, ...],
-    manifest: bytes,
-) -> None:
-    directories: dict[tuple[str, ...], int] = {(): staging}
-    opened: list[int] = []
-    try:
-        for item in files:
-            parts = PurePosixPath(item.logical_path).parts
-            prefix: tuple[str, ...] = ()
-            for component in parts[:-1]:
-                parent = directories[prefix]
-                prefix = (*prefix, component)
-                if prefix not in directories:
-                    created_identity = _posix_create_owned_directory(
-                        parent,
-                        component,
-                        "PUBLICATION_FAILED",
-                    )
-                    os.fsync(parent)
-                    descriptor, _ = _posix_open_owned_staging(
-                        parent,
-                        component,
-                        created_identity,
-                    )
-                    directories[prefix] = descriptor
-                    opened.append(descriptor)
-            _posix_write_file(directories[prefix], parts[-1], item.canonical_bytes)
-        _posix_write_file(staging, "manifest.json", manifest)
-        for descriptor in reversed(opened):
-            os.fsync(descriptor)
-        os.fsync(staging)
-    finally:
-        for descriptor in reversed(opened):
-            os.close(descriptor)
-
-
-def _load_posix_renameat2() -> object:
-    try:
-        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
-        renameat2.argtypes = (
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        )
-        renameat2.restype = ctypes.c_int
-        return renameat2
-    except (AttributeError, OSError):
-        raise _PublicationError("PUBLICATION_FAILED") from None
-
-
-def _posix_rename_noreplace(
-    old_directory: int,
-    old_name: str,
-    new_directory: int,
-    new_name: str,
-) -> None:
-    renameat2 = _load_posix_renameat2()
-    result = renameat2(
-        old_directory,
-        os.fsencode(old_name),
-        new_directory,
-        os.fsencode(new_name),
-        _RENAME_NOREPLACE,
-    )
-    if result == 0:
-        return
-    error = ctypes.get_errno()
-    if error in (errno.EEXIST, errno.ENOTEMPTY):
-        raise _PublicationError("DESTINATION_EXISTS") from None
-    raise _PublicationError("PUBLICATION_FAILED") from None
-
-
-def _posix_clear_directory(directory: int) -> None:
-    for name in os.listdir(directory):
-        named = os.stat(name, dir_fd=directory, follow_symlinks=False)
-        if stat.S_ISDIR(named.st_mode):
-            child = os.open(name, _posix_directory_flags(), dir_fd=directory)
-            try:
-                if _posix_identity(os.fstat(child)) != _posix_identity(named):
-                    raise OSError
-                _posix_clear_directory(child)
-            finally:
-                os.close(child)
-            current = os.stat(name, dir_fd=directory, follow_symlinks=False)
-            if _posix_identity(current) != _posix_identity(named):
-                raise OSError
-            os.rmdir(name, dir_fd=directory)
-        else:
-            os.unlink(name, dir_fd=directory)
-    os.fsync(directory)
-
-
-def _cleanup_posix_staging(
-    parent: int,
-    name: str,
-    identity: tuple[int, int],
-) -> None:
-    try:
-        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if not stat.S_ISDIR(named.st_mode) or _posix_identity(named) != identity:
-            return
-        staging = os.open(name, _posix_directory_flags(), dir_fd=parent)
-        try:
-            if _posix_identity(os.fstat(staging)) != identity:
-                return
-            _posix_clear_directory(staging)
-        finally:
-            os.close(staging)
-        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if _posix_identity(current) != identity:
-            return
-        os.rmdir(name, dir_fd=parent)
-        os.fsync(parent)
-    except OSError:
-        return
-
-
 def _publish_posix_bundle(
     destination: Path,
     files: tuple[PrivateFoldEvidence, ...],
     manifest: bytes,
 ) -> None:
-    parent = _open_posix_trusted_parent(destination.parent)
-    staging_name = f".{destination.name}.staging"
-    staging = -1
-    staging_identity: tuple[int, int] | None = None
-    published = False
-    try:
-        _posix_require_absent(parent, destination.name, "DESTINATION_EXISTS")
-        created_identity = _posix_create_owned_staging(parent, staging_name)
-        os.fsync(parent)
-        staging, staging_identity = _posix_open_owned_staging(
-            parent,
-            staging_name,
-            created_identity,
-        )
-        _posix_write_layout(staging, files, manifest)
-        current = os.stat(staging_name, dir_fd=parent, follow_symlinks=False)
-        if _posix_identity(current) != staging_identity:
-            raise _PublicationError("PUBLICATION_FAILED")
-        _posix_rename_noreplace(parent, staging_name, parent, destination.name)
-        published = True
-        os.fsync(parent)
-    except _PublicationError:
-        raise
-    except OSError:
-        raise _PublicationError("PUBLICATION_FAILED") from None
-    finally:
-        if staging >= 0:
-            os.close(staging)
-        if not published and staging_identity is not None:
-            _cleanup_posix_staging(parent, staging_name, staging_identity)
-        os.close(parent)
+    del destination, files, manifest
+    raise _PublicationError("PUBLICATION_UNSUPPORTED") from None
 
 
 def _windows_last_error() -> int:
@@ -1007,16 +745,18 @@ def _windows_write_file(
     logical_components: tuple[str, ...],
     content: bytes,
     created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
+    file_handles: list[int],
 ) -> None:
     handle, identity, _ = _windows_nt_create_relative(
         parent_handle,
         name,
         False,
-        _WINDOWS_FILE_SHARE_ALL,
+        _WINDOWS_FILE_SHARE_READ_WRITE,
     )
     if handle is None or identity is None:
         raise _PublicationError("PUBLICATION_FAILED")
     created_entries.append((logical_components, False, identity))
+    sealed = False
     try:
         write_file = ctypes.windll.kernel32.WriteFile
         write_file.argtypes = (
@@ -1042,8 +782,11 @@ def _windows_write_file(
                 raise _PublicationError("PUBLICATION_FAILED")
             offset += written.value
         _windows_flush(handle)
+        sealed = True
     finally:
-        _windows_close(handle)
+        if not sealed:
+            _windows_close(handle)
+    file_handles.append(handle)
 
 
 def _windows_write_layout(
@@ -1052,6 +795,7 @@ def _windows_write_layout(
     manifest: bytes,
     created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]],
     directory_handles: list[int],
+    file_handles: list[int],
 ) -> None:
     directories: dict[tuple[str, ...], int] = {(): staging_handle}
     for item in files:
@@ -1065,7 +809,7 @@ def _windows_write_layout(
                     parent_handle,
                     component,
                     True,
-                    _WINDOWS_FILE_SHARE_ALL,
+                    _WINDOWS_FILE_SHARE_READ_WRITE,
                 )
                 if handle is None or identity is None:
                     raise _PublicationError("PUBLICATION_FAILED")
@@ -1080,6 +824,7 @@ def _windows_write_layout(
             parts,
             item.canonical_bytes,
             created_entries,
+            file_handles,
         )
         _windows_flush(parent_handle)
     _windows_write_file(
@@ -1088,6 +833,7 @@ def _windows_write_layout(
         ("manifest.json",),
         manifest,
         created_entries,
+        file_handles,
     )
     _windows_flush(staging_handle)
     for handle in reversed(directory_handles):
@@ -1246,6 +992,7 @@ def _publish_windows_bundle(
     staging_handle: int | None = None
     created_entries: list[tuple[tuple[str, ...], bool, tuple[int, int, int]]] = []
     directory_handles: list[int] = []
+    file_handles: list[int] = []
     published = False
     cleanup_failed = False
     try:
@@ -1267,7 +1014,11 @@ def _publish_windows_bundle(
             manifest,
             created_entries,
             directory_handles,
+            file_handles,
         )
+        for handle in reversed(file_handles):
+            _windows_close(handle)
+        file_handles.clear()
         for handle in reversed(directory_handles):
             _windows_close(handle)
         directory_handles.clear()
@@ -1284,6 +1035,8 @@ def _publish_windows_bundle(
     except Exception:
         raise _PublicationError("PUBLICATION_FAILED") from None
     finally:
+        for handle in reversed(file_handles):
+            _windows_close(handle)
         for handle in reversed(directory_handles):
             _windows_close(handle)
         if staging_handle is not None:
