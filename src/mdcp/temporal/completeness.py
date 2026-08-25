@@ -78,7 +78,7 @@ class LabelOutcome:
 
 @dataclass(frozen=True, slots=True)
 class LayerAccounting:
-    """Closed accounting for one stream against the fixed source denominator."""
+    """Closed accounting for one stream against its immutable causal denominator."""
 
     expected_count: int
     observed_count: int
