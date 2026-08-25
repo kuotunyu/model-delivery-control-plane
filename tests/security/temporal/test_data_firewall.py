@@ -170,6 +170,22 @@ FORBIDDEN_MODULES = {
     "zipfile_archive_loader": "import zipfile\ntarget = zipfile.ZipFile",
     "direct_zipfile_archive_loader": "from zipfile import ZipFile\ntarget = ZipFile",
     "unreviewed_process_surface": "import os\ntarget = os.popen('python')",
+    "builtin_function_self_import": (
+        "target = print.__self__.__import__("
+        "'mdcp.workload.dataset', fromlist=['load_uci_archive']).load_uci_archive"
+    ),
+    "traceback_frame_builtin_import": (
+        "try:\n"
+        "    1 / 0\n"
+        "except Exception as error:\n"
+        "    target = error.__traceback__.tb_frame.f_builtins['__import__']("
+        "'mdcp.workload.splits', fromlist=['split_rows']).split_rows"
+    ),
+    "generator_frame_builtin_import": (
+        "generator = (value for value in ())\n"
+        "target = generator.gi_frame.f_builtins['__import__']("
+        "'mdcp.workload.dataset', fromlist=['load_uci_archive']).load_uci_archive"
+    ),
 }
 
 ALLOWED_NARROW_IMPORTS = (

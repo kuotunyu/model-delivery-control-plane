@@ -66,11 +66,17 @@ _FORBIDDEN_REFLECTION_ATTRIBUTES = frozenset(
         "__globals__",
         "__mro__",
         "__subclasses__",
+        "ag_frame",
         "cr_frame",
+        "f_back",
+        "f_builtins",
         "f_globals",
+        "f_locals",
         "gi_frame",
         "modules",
         "sys",
+        "tb_frame",
+        "tb_next",
     }
 )
 _TRUSTED_FIREWALL_PATH = "src/mdcp/temporal/firewall.py"
@@ -260,6 +266,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         {
             "ast.AST",
             "ast.Attribute",
+            "ast.Call",
             "ast.Import",
             "ast.ImportFrom",
             "ast.Name",
@@ -407,6 +414,29 @@ def _attribute_name(node: ast.expr, bindings: dict[str, str]) -> str | None:
     return None
 
 
+def _allowed_dunder_attribute(node: ast.Attribute, logical_path: str) -> bool:
+    if node.attr == "__init__":
+        return (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "super"
+            and not node.value.args
+            and not node.value.keywords
+        )
+    if node.attr == "__module__" and logical_path == "src/mdcp/temporal/contract_gate.py":
+        return isinstance(node.value, ast.Name) and node.value.id in {
+            "create_v1_app",
+            "create_v2_app",
+        }
+    if node.attr == "__code__" and logical_path == _TRUSTED_FIREWALL_PATH:
+        return isinstance(node.value, ast.Name) and node.value.id in {
+            "_BOUNDED_LOADER",
+            "_DEVELOPMENT_SPLITTER",
+            "function",
+        }
+    return False
+
+
 def _import_allowed(logical_path: str, module: str, imported_name: str | None) -> bool:
     if imported_name is not None and module in _ALLOWED_DIRECT_IMPORTS:
         return imported_name in _ALLOWED_DIRECT_IMPORTS[module]
@@ -471,7 +501,12 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
             if qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES or (
                 isinstance(node, ast.Attribute)
                 and (
-                    node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
+                    (
+                        node.attr.startswith("__")
+                        and node.attr.endswith("__")
+                        and not _allowed_dunder_attribute(node, logical_path)
+                    )
+                    or node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
                     or (qualified_name is not None and _is_forbidden_module(qualified_name))
                 )
             ):
