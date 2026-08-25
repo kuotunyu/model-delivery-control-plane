@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -20,9 +22,9 @@ from sklearn.utils.validation import check_array, check_is_fitted
 
 from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
-from mdcp.contracts.workload import BikeRequest
-from mdcp.temporal.adapter import adapt_local_v2
-from mdcp.temporal.constants import TEMPORAL_FEATURE_COLUMNS
+from mdcp.contracts.workload_v2 import BikeRequestV2
+from mdcp.temporal.adapter import adapt_v2
+from mdcp.temporal.constants import TEMPORAL_FEATURE_COLUMNS, TIMEZONE_NAME
 from mdcp.temporal.folds import FoldRows
 
 
@@ -541,6 +543,16 @@ def _feature_names(spec: TrialSpec) -> tuple[str, ...]:
     return tuple(TEMPORAL_FEATURE_COLUMNS[position - 1] for position in spec.feature_positions)
 
 
+def _historical_event_timestamp(timestamp: pd.Timestamp) -> str:
+    local = timestamp.to_pydatetime()
+    zone = ZoneInfo(TIMEZONE_NAME)
+    candidate = local.replace(tzinfo=zone, fold=0)
+    round_tripped = candidate.astimezone(UTC).astimezone(zone)
+    if round_tripped.replace(tzinfo=None) != local or round_tripped.fold != 0:
+        raise ValueError("INVALID_EVENT_TIMESTAMP")
+    return candidate.isoformat(timespec="seconds")
+
+
 def _materialize_features(rows: pd.DataFrame) -> pd.DataFrame:
     required = {*TEMPORAL_FEATURE_COLUMNS[:11], "cnt"}
     if (
@@ -556,13 +568,15 @@ def _materialize_features(rows: pd.DataFrame) -> pd.DataFrame:
 
     vectors = []
     for position, (timestamp, row) in enumerate(rows.iterrows()):
-        request = BikeRequest.model_validate(
+        request = BikeRequestV2.model_validate(
             {
+                "schema_version": "mdcp.bike-request.v2",
                 "request_id": f"development-{position}",
+                "event_timestamp": _historical_event_timestamp(timestamp),
                 **{name: row[name] for name in TEMPORAL_FEATURE_COLUMNS[:11]},
             }
         )
-        vectors.append(adapt_local_v2(request, timestamp.to_pydatetime()))
+        vectors.append(adapt_v2(request))
     materialized = pd.DataFrame(
         [vector.values for vector in vectors],
         columns=TEMPORAL_FEATURE_COLUMNS,

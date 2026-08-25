@@ -13,6 +13,7 @@ from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 
+import mdcp.temporal.trials as trials_module
 from mdcp.temporal.constants import TEMPORAL_FEATURE_COLUMNS
 from mdcp.temporal.folds import FoldRows, load_fold_specs, materialize_folds
 from mdcp.temporal.trials import (
@@ -37,7 +38,11 @@ def _synthetic_development_frame() -> pd.DataFrame:
     sys.path.insert(0, str(Path(__file__).parents[2]))
     from temporal_fixtures import synthetic_development_frame
 
-    return synthetic_development_frame()
+    frame = synthetic_development_frame()
+    nonexistent = pd.DatetimeIndex(
+        [pd.Timestamp("2011-03-13T02:00:00"), pd.Timestamp("2012-03-11T02:00:00")]
+    )
+    return frame.loc[~frame.index.isin(nonexistent)]
 
 
 @pytest.fixture
@@ -191,7 +196,7 @@ def test_recency_never_pads_from_future(specs: tuple[TrialSpec, ...], f4: FoldRo
     assert rows.index.min() == pd.Timestamp("2011-10-04")
     assert rows.index.max() < pd.Timestamp("2012-04-01")
     assert rows.index.max() == pd.Timestamp("2012-03-31T23:00:00")
-    assert len(rows) == 180 * 24
+    assert len(rows) == 180 * 24 - 1
 
 
 def test_training_rows_materialize_only_declared_features_and_raw_target(
@@ -219,6 +224,19 @@ def test_training_rows_fail_closed_on_timestamp_field_mismatch(
 
     with pytest.raises(ValueError, match="TEMPORAL_FIELD_MISMATCH"):
         training_rows_for_trial(_spec(specs, "NL-E64-R0.03-D2"), mismatched_fold)
+
+
+def test_training_rows_use_the_versioned_serving_adapter(
+    specs: tuple[TrialSpec, ...], f4: FoldRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def deny_adapter_call(request: object) -> object:
+        del request
+        raise RuntimeError("VERSIONED_ADAPTER_CALLED")
+
+    monkeypatch.setattr(trials_module, "adapt_v2", deny_adapter_call)
+
+    with pytest.raises(RuntimeError, match="VERSIONED_ADAPTER_CALLED"):
+        training_rows_for_trial(_spec(specs, "NL-E64-R0.03-D2"), f4)
 
 
 def test_recency_rows_exclude_field_twelve_in_exact_declared_order(
