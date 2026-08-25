@@ -28,7 +28,9 @@ merge with, or append to an existing destination.
 
 This decision removes the unresolved Windows interval in which descendant handles had to be
 closed before a staging-root rename. It keeps the public identity deliberately narrow and makes the
-private artifact independently verifiable from a source archive without Git history.
+private artifact independently verifiable from a source archive without Git history. Publication
+in v0.2 is supported only on the authoritative Windows host; POSIX reviewers can build and verify
+container bytes but cannot publish them.
 
 ## 2. Triggering evidence and append-only boundary
 
@@ -145,51 +147,62 @@ exception, or untrusted value. There is no permissive extraction mode and no unk
 
 ### 5.1 Common preconditions
 
-The caller supplies one exact destination whose parent already exists. The writer rejects an empty
-or aliased destination name, an existing destination of any type, a missing parent, any symlink,
-junction, mount/reparse boundary, or parent whose verified identity changes during the operation.
-All container bytes and public identity fields are computed before the first create attempt.
+The caller supplies one exact drive-local Windows destination whose parent already exists. UNC,
+device, volume-alias, relative, empty, or aliased destinations fail before mutation. Starting from
+the drive root, the writer opens the root once with `CreateFileW(OPEN_EXISTING,
+FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS)` and then opens every descendant component
+strictly handle-relative through the previously verified parent. Every directory handle omits
+`FILE_SHARE_DELETE` and remains open through final-file close; every component must be a directory,
+must not have `FILE_ATTRIBUTE_REPARSE_POINT`, and must remain on the root volume identity. This
+rejects symlinks, junctions, mount points, component substitution, ancestor rename, and cross-volume
+traversal during publication. An existing destination of any type or a missing component fails
+closed. All container bytes and public identity fields are computed before the first create attempt.
 
 The write path never calls `mkdir`, never creates a staging name, never performs rename/replace,
 never follows a destination link, and never reopens the destination by absolute path to write.
 
 ### 5.2 Windows
 
-Windows publication opens and identity-checks the existing ancestor chain without following reparse
-points, retains the trusted-parent handle, and performs one handle-relative `NtCreateFile` (or an
-equivalent reviewed create-new primitive) for a non-directory child with:
+Windows publication uses only the ancestor chain above and exactly one handle-relative
+`ntdll!NtCreateFile` for the non-directory destination child. There is no alternate `CreateFileW`,
+path-based open, or fallback for final creation. Its object attributes set `RootDirectory` to the
+retained trusted-parent handle and contain only the validated single child name. It uses:
 
 - create disposition `FILE_CREATE`/`CREATE_NEW`;
 - no replace, overwrite, append-to-existing, or open-existing fallback;
 - write, synchronize, read-attributes, and delete authority needed only for this invocation;
 - write-through/synchronous semantics; and
-- share flags that do not permit delete/rename while the owned handle is live.
+- share mode `0`, preventing another open for read, write, delete, or rename while the owned handle
+  is live.
 
 The implementation writes the complete prebuilt bytes through that handle, requires full writes,
-flushes the file buffers, rechecks the file and ancestor identities, and only then closes the
-handle and returns PASS. Because the artifact is one file, there is no child-handle-close followed
-by root-rename interval.
+flushes the file buffers, rechecks the file identity and all retained ancestor-handle identities,
+and only then closes the file handle and returns PASS. The ancestor handles stay live until after
+the final handle closes. Because the artifact is one file, there is no child-handle-close followed
+by root-rename interval. After successful close, same-user access to the trusted external evidence
+root is part of the host trust boundary; every later consumer must still verify the canonical
+container and bound public identity before use.
 
-### 5.3 POSIX
+### 5.3 POSIX and other platforms
 
-POSIX publication opens each existing ancestor with no-follow/directory semantics, retains the
-trusted-parent descriptor, then calls `os.open` relative to that descriptor with
-`O_CREAT|O_EXCL|O_WRONLY` plus `O_NOFOLLOW` and `O_CLOEXEC` where available. It writes the complete
-prebuilt bytes through the returned descriptor, requires full writes, calls `fsync` on the file,
-rechecks `fstat`/parent identities, closes the file, and `fsync`s the parent directory.
+v0.2 does not claim that normal POSIX file descriptors can prevent same-user rename/unlink of an
+already named file or safely delete that name by descriptor after a replacement race. Therefore
+every non-Windows publication call returns `PUBLICATION_UNSUPPORTED` before opening or creating any
+destination or temporary path. It must not fall back to `open`, `openat`, `O_TMPFILE`, `linkat`,
+`rename`, an advisory lock, or best-effort checks.
 
-If the platform cannot supply the required create-new and no-follow semantics, publication returns
-`PUBLICATION_UNSUPPORTED` before mutation. It must not silently fall back to path-based open,
-temporary-file rename, or best-effort checks.
+The pure container builder, parser, digest verifier, public verifier, and source-archive proof remain
+cross-platform and perform no publication. Adding a POSIX publisher requires a separate owner-
+approved design with an exact supported kernel/filesystem primitive and threat boundary.
 
 ### 5.4 Failure and owned partials
 
-Before successful flush and identity verification, the open file handle/descriptor is the sole
-ownership proof. On a handled write, flush, or identity failure, the implementation attempts to
-mark/delete only that invocation-owned file while the owned handle remains live. It never deletes
-by an unverified pathname.
+Before successful flush and identity verification, the Windows file handle is the sole ownership
+proof. On a handled write, flush, or identity failure, the implementation calls
+`SetFileInformationByHandle(FileDispositionInfo)` only on that invocation-owned, share-mode-zero
+handle before closing it. It never deletes by path and never opens a name for cleanup.
 
-If owned deletion succeeds, the destination is absent. If the platform cannot prove deletion, the
+If owned deletion succeeds, the destination is absent. If Windows cannot prove deletion, the
 partial file remains a quarantined, no-clobber failure artifact and the call returns only
 `PUBLICATION_FAILED`; it is never reported as a valid bundle and never reused or overwritten.
 Retry requires a new destination under later authority. Process death has the same terminal
@@ -221,8 +234,10 @@ verifier, and handle-bound publisher. The public-result schema is unchanged. Uni
 tests change their success assertion from a directory tree to one verifying regular file and add
 adversarial coverage for coordinated digest mutation, duplicate/extra fields, malformed base64,
 destination aliases, ancestor substitution, create races, short writes, flush failure, owned
-cleanup, second publication, and sanitized errors. Windows and POSIX supported paths both require
-GREEN tests; capability-absent cases may skip only a platform-specific adversarial primitive, not
+cleanup, second publication, and sanitized errors. Both platform branches require GREEN tests for
+their respective contract: Windows must publish and verify the file; POSIX must
+return `PUBLICATION_UNSUPPORTED` without mutation. Pure build/verify tests have no platform skip.
+Windows capability skips may cover only an adversarial fixture such as creating a junction, never
 the base publication contract.
 
 ### 7.2 Task 3
@@ -241,16 +256,66 @@ writer implementation is allowed.
 
 Boundary proofs deny staging directories, multi-file publication, path reopen, rename/replace,
 writer injection, and direct natural publication. The final source inventory binds the container
-builder, verifier, platform primitives, schemas, security tests, this amendment, and its corrective
-plan. Private-output inventory identities describe logical entries inside the container, not a
-physical directory tree.
+builder, verifier, platform primitives, schemas, security tests, this amendment, and the exact
+corrective plan
+`docs/superpowers/plans/2026-08-26-mdcp-v02-wave-3-private-evidence-container-corrective.md`. The
+amended source inventory contains exactly 41 ASCII-ordered paths: the prior exact 39 plus this
+amendment and that corrective plan, inserted in their respective `specs/` and `plans/` ordering.
+Missing, extra, duplicate, reordered, or unknown paths fail closed. Private-output inventory
+identities describe logical entries inside the container, not a physical directory tree.
+
+The exact 41-path inventory is:
+
+```text
+configs/workload/temporal-development-v2.json
+configs/workload/uci-bike-sharing-v1.json
+docs/superpowers/plans/2026-08-24-mdcp-v02-wave-3-formal-development.md
+docs/superpowers/plans/2026-08-25-mdcp-v02-wave-3-execution-boundary-corrective.md
+docs/superpowers/plans/2026-08-26-mdcp-v02-wave-3-private-evidence-container-corrective.md
+docs/superpowers/specs/2026-08-24-mdcp-v02-temporal-retraining-design.md
+docs/superpowers/specs/2026-08-25-mdcp-v02-wave-3-execution-boundary-corrective-design.md
+docs/superpowers/specs/2026-08-26-mdcp-v02-private-evidence-container-design.md
+pyproject.toml
+schemas/v2/bike-request.schema.json
+schemas/v2/development-result-index.schema.json
+schemas/v2/formal-run-authorization.schema.json
+schemas/v2/search-receipt.schema.json
+schemas/v2/temporal-contract-receipt.schema.json
+schemas/v2/temporal-development.schema.json
+src/mdcp/common/canonical.py
+src/mdcp/common/digests.py
+src/mdcp/common/enums.py
+src/mdcp/contracts/workload.py
+src/mdcp/contracts/workload_v2.py
+src/mdcp/policy/cluster_bootstrap.py
+src/mdcp/temporal/adapter.py
+src/mdcp/temporal/cli.py
+src/mdcp/temporal/completeness.py
+src/mdcp/temporal/constants.py
+src/mdcp/temporal/contract_gate.py
+src/mdcp/temporal/evaluation.py
+src/mdcp/temporal/evidence.py
+src/mdcp/temporal/firewall.py
+src/mdcp/temporal/folds.py
+src/mdcp/temporal/golden_vectors.py
+src/mdcp/temporal/run_evidence.py
+src/mdcp/temporal/runner.py
+src/mdcp/temporal/runtime_guards.py
+src/mdcp/temporal/search_identity.py
+src/mdcp/temporal/selection.py
+src/mdcp/temporal/trials.py
+src/mdcp/workload/dataset.py
+src/mdcp/workload/splits.py
+tests/fixtures/temporal/adapter-golden-vectors.json
+uv.lock
+```
 
 ### 7.5 Task 7
 
 Search freeze still adds only the two approved canonical public JSON files. The final freeze
 preflight must recompute both the four-field private identity contract and the exact corrected
-source inventory from a source archive without `.git`. It performs no private publication and no
-formal run.
+41-path source inventory from a source archive without `.git`. It performs no private publication
+and no formal run.
 
 ## 8. Implementation scope and migration order
 
@@ -295,7 +360,9 @@ The corrective plan shall include observable REDs for at least:
 - existing destination, second publication, linked/reparse ancestor, and destination create race;
 - short write, write failure, flush failure, identity substitution, and sanitized failure text;
 - natural evidence without the exact permit;
-- Windows handle-relative create-new and POSIX dir-fd create-new without rename/staging fallback;
+- exact Windows `NtCreateFile` handle-relative create-new with share mode `0`, retained no-delete
+  ancestor handles, and no rename/staging/path-open fallback;
+- unconditional pre-mutation `PUBLICATION_UNSUPPORTED` on POSIX and other platforms;
 - source-archive recomputation without `.git`; and
 - H2 `SEALED_NOT_LOADED`, loaded rows `0` throughout.
 
@@ -310,7 +377,8 @@ Implementation stops clean without scope expansion if:
 
 - a correction requires a path outside the approved allowlist or a new dependency/schema;
 - any protected identity or prior evidence byte changes;
-- a platform needs weaker no-clobber, no-follow, handle-relative, full-write, or flush semantics;
+- Windows needs weaker no-clobber, no-follow, handle-relative, exclusive-share, full-write, or
+  flush semantics, or a non-Windows publisher would be required;
 - UCI/H1/H2 rows, model execution, Docker, GPU, network, remote operations, or P2 are needed;
 - the same blocker survives three separately evidenced hypotheses;
 - any Critical or Important review finding remains unresolved; or
@@ -327,7 +395,8 @@ Before implementation planning, review this amendment for:
 - placeholders, ambiguous normative verbs, or dependence on Git history;
 - digest/self-hash cycles or caller-supplied identity material;
 - path alias, duplicate-key, base64, short-write, flush, cleanup, and process-death gaps;
-- a Windows handle-close or POSIX descriptor-close interval that permits undetected substitution;
+- a Windows handle-close interval that permits undetected substitution, or any accidental POSIX
+  publication path;
 - public leakage of private logical paths, payloads, absolute paths, exceptions, or environment;
 - a natural-evidence path that bypasses the consumed permit;
 - source-archive or final-inventory incompleteness;
