@@ -425,7 +425,10 @@ def test_formal_wrapper_requires_exact_runtime_permit_type() -> None:
 Add wrong source/freeze/receipt/protocol digest, noncanonical bytes, duplicate keys, extra fields,
 malformed or non-UTC authorization timestamp, symlink/reparse file, dirty repository, existing consumption marker/output,
 directory-valued private destination, serialized/forged/subclassed permit, alternate writer,
-independent replay command, and failure-after-consumption no-restore cases. Assert CLI sets exact
+independent replay command, and failure-after-consumption no-restore cases. Add an exact parser test
+asserting the Task 4 command tuple `("run-development", "verify-search-freeze")` and rejecting
+`replay-provisional`, `prepare-search-freeze`, `verify-search-source`,
+`verify-development-result`, and every unknown command at this boundary. Assert CLI sets exact
 thread environment values before estimator-bearing imports and constructs guards internally.
 
 - [ ] **Step 2: Run RED**
