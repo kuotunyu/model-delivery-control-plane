@@ -275,6 +275,30 @@ def test_static_firewall_rejects_rebinding_an_approved_module_surface(
 
 
 @pytest.mark.parametrize(
+    ("logical_path", "source"),
+    (
+        (
+            "src/mdcp/predictor/app_v2.py",
+            "from pathlib import Path\ntarget = Path._flavour.os.popen",
+        ),
+        (
+            "src/mdcp/temporal/contract_gate.py",
+            "from pathlib import Path\ntarget = Path._flavour.os.open",
+        ),
+    ),
+)
+def test_static_firewall_rejects_private_attribute_capability_recovery(
+    tmp_path: Path,
+    logical_path: str,
+    source: str,
+) -> None:
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
     "source",
     (
         "from mdcp.workload.dataset import DatasetIntegrityError",

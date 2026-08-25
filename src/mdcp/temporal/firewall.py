@@ -502,8 +502,7 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 isinstance(node, ast.Attribute)
                 and (
                     (
-                        node.attr.startswith("__")
-                        and node.attr.endswith("__")
+                        node.attr.startswith("_")
                         and not _allowed_dunder_attribute(node, logical_path)
                     )
                     or node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
