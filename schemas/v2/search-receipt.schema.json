@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "description": "The canonical, public, deliberately acyclic search identity.",
+  "properties": {
+    "schema_version": {"const": "mdcp.search-receipt.v1", "title": "Schema Version", "type": "string"},
+    "canonicalization_version": {"const": "RFC8785", "title": "Canonicalization Version", "type": "string"},
+    "search_source_commit": {"pattern": "^[0-9a-f]{40}$", "title": "Search Source Commit", "type": "string"},
+    "approved_spec_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Approved Spec Sha256", "type": "string"},
+    "dependency_lock_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Dependency Lock Sha256", "type": "string"},
+    "dataset_contract_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Dataset Contract Sha256", "type": "string"},
+    "dataset_archive_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Dataset Archive Sha256", "type": "string"},
+    "development_rows_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Development Rows Sha256", "type": "string"},
+    "temporal_schema_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Temporal Schema Sha256", "type": "string"},
+    "temporal_adapter_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Temporal Adapter Sha256", "type": "string"},
+    "golden_vector_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Golden Vector Sha256", "type": "string"},
+    "fold_table_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Fold Table Sha256", "type": "string"},
+    "trial_table_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Trial Table Sha256", "type": "string"},
+    "ranking_rule_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Ranking Rule Sha256", "type": "string"},
+    "quality_policy_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Quality Policy Sha256", "type": "string"},
+    "statistical_code_sha256": {"pattern": "^[0-9a-f]{64}$", "title": "Statistical Code Sha256", "type": "string"},
+    "execution_seed": {"const": 2026, "title": "Execution Seed", "type": "integer"},
+    "estimator_threads": {"const": 1, "title": "Estimator Threads", "type": "integer"},
+    "selection_fit_limit": {"const": 80, "title": "Selection Fit Limit", "type": "integer"},
+    "replay_fit_limit": {"const": 4, "title": "Replay Fit Limit", "type": "integer"},
+    "final_fit_limit": {"const": 1, "title": "Final Fit Limit", "type": "integer"},
+    "maximum_fit_limit": {"const": 85, "title": "Maximum Fit Limit", "type": "integer"},
+    "h1_role": {"const": "OBSERVED_DEVELOPMENT_ONLY", "title": "H1 Role", "type": "string"},
+    "h2_status": {"const": "SEALED_NOT_LOADED", "title": "H2 Status", "type": "string"},
+    "h2_loaded_rows": {"const": 0, "title": "H2 Loaded Rows", "type": "integer"},
+    "created_at_utc": {"format": "date-time", "title": "Created At Utc", "type": "string"}
+  },
+  "required": [
+    "schema_version", "canonicalization_version", "search_source_commit", "approved_spec_sha256",
+    "dependency_lock_sha256", "dataset_contract_sha256", "dataset_archive_sha256", "development_rows_sha256",
+    "temporal_schema_sha256", "temporal_adapter_sha256", "golden_vector_sha256", "fold_table_sha256",
+    "trial_table_sha256", "ranking_rule_sha256", "quality_policy_sha256", "statistical_code_sha256",
+    "execution_seed", "estimator_threads", "selection_fit_limit", "replay_fit_limit", "final_fit_limit",
+    "maximum_fit_limit", "h1_role", "h2_status", "h2_loaded_rows", "created_at_utc"
+  ],
+  "title": "SearchReceipt",
+  "type": "object"
+}
