@@ -7,7 +7,7 @@ from types import MappingProxyType
 import pytest
 
 from mdcp.common.enums import GateVerdict
-from mdcp.policy.cluster_bootstrap import BootstrapResult, PairedQualityRow, RatioMetric
+from mdcp.policy.cluster_bootstrap import PairedQualityRow
 from mdcp.temporal.completeness import (
     ADAPTER_REASON_CODES,
     LABEL_REASON_CODES,
@@ -19,10 +19,8 @@ from mdcp.temporal.evaluation import (
     FIXED_SUBGROUPS,
     FOLD_IDS,
     DevelopmentQualityReport,
-    FoldQualityReport,
     NamedQualityMetric,
     QualificationEvidence,
-    QualityMetricReport,
     evaluate_fold,
     evaluate_pooled,
     qualify_trial,
@@ -55,20 +53,43 @@ def _complete_receipt(count: int) -> CompletenessReceipt:
     )
 
 
-def _rows(fold_id: str, *, ratio: float = 0.90) -> tuple[PairedQualityRow, ...]:
+def _rows(
+    fold_id: str,
+    *,
+    ratio: float = 0.90,
+    weather_ratios: tuple[float, float, float] | None = None,
+    day_ratios: tuple[float, ...] | None = None,
+    weather_counts: tuple[int, int, int] = (100, 100, 100),
+) -> tuple[PairedQualityRow, ...]:
+    assert sum(weather_counts) == 300
+    assert day_ratios is None or len(day_ratios) == 10
     start = date(2011, 7, 1) + timedelta(days=100 * (int(fold_id[1]) - 1))
     rows: list[PairedQualityRow] = []
     weather_groups = ("weather_clear", "weather_mist", "weather_adverse")
+    remaining = dict(zip(weather_groups, weather_counts, strict=True))
+    weather_inventory_list: list[str] = []
+    while any(remaining.values()):
+        for group in weather_groups:
+            if remaining[group]:
+                weather_inventory_list.append(group)
+                remaining[group] -= 1
+    weather_inventory = tuple(weather_inventory_list)
     for position in range(300):
+        weather_group = weather_inventory[position]
+        candidate_ratio = ratio
+        if weather_ratios is not None:
+            candidate_ratio = weather_ratios[weather_groups.index(weather_group)]
+        if day_ratios is not None:
+            candidate_ratio = day_ratios[position // 30]
         rows.append(
             PairedQualityRow(
                 request_id=f"{fold_id}-{position:04d}",
                 calendar_day=start + timedelta(days=position // 30),
                 stable_prediction=20.0,
-                candidate_prediction=10.0 + 10.0 * ratio,
+                candidate_prediction=10.0 + 10.0 * candidate_ratio,
                 label=10.0,
                 groups=(
-                    weather_groups[position % 3],
+                    weather_group,
                     "day_working" if position % 2 else "day_non_working",
                     "demand_peak" if position % 2 else "demand_off_peak",
                 ),
@@ -77,139 +98,35 @@ def _rows(fold_id: str, *, ratio: float = 0.90) -> tuple[PairedQualityRow, ...]:
     return tuple(rows)
 
 
-def _quality_metric(
-    *, point_ratio: float = 0.90, ucb95: float = 0.90, row_count: int = 300
-) -> QualityMetricReport:
-    return QualityMetricReport(
-        row_count=row_count,
-        stable_mae=10.0,
-        candidate_mae=10.0 * point_ratio,
-        point_ratio=point_ratio,
-        ucb95=ucb95,
-    )
-
-
-def _bootstrap(
-    *, point_ratio: float = 0.90, ucb95: float = 0.90, row_count: int = 300
-) -> BootstrapResult:
-    overall = RatioMetric(
-        row_count=row_count,
-        stable_mae=10.0,
-        candidate_mae=10.0 * point_ratio,
-        point_ratio=point_ratio,
-        ucb95=ucb95,
-    )
-    return BootstrapResult(
-        valid=True,
-        overall=overall,
-        subgroups={
-            group: RatioMetric(
-                row_count=100 if group.startswith("weather_") else 150,
-                stable_mae=10.0,
-                candidate_mae=9.0,
-                point_ratio=0.90,
-                ucb95=0.90,
-            )
-            for group in FIXED_SUBGROUPS
-        },
-        resamples=2000,
-        seed=2026,
-        replicate_index=1899,
-    )
-
-
-def _fold_report(fold_id: str, *, point: float = 0.90) -> FoldQualityReport:
-    return FoldQualityReport(
-        fold_id=fold_id,
-        completeness=_complete_receipt(300),
-        paired_row_count=300,
-        overall=_quality_metric(point_ratio=point, ucb95=point),
-        subgroups=tuple(
-            NamedQualityMetric(
-                name=group,
-                metric=_quality_metric(row_count=100 if group.startswith("weather_") else 150),
-            )
-            for group in FIXED_SUBGROUPS
-        ),
-        bootstrap=_bootstrap(point_ratio=point, ucb95=point),
-        reason_codes=(),
-    )
-
-
 def _report_with(
     *,
-    pooled_point: float = 0.90,
-    pooled_ucb: float = 0.90,
-    subgroup_points: tuple[float, ...] | None = None,
-    subgroup_ucbs: tuple[float, ...] | None = None,
-    subgroup_counts: tuple[int, ...] | None = None,
     fold_points: tuple[float, ...] = (0.90, 0.90, 0.90, 0.90),
+    weather_ratios: tuple[float, float, float] | None = None,
+    day_ratios: tuple[float, ...] | None = None,
+    weather_counts: dict[str, tuple[int, int, int]] | None = None,
     evidence: QualificationEvidence | None = None,
 ) -> DevelopmentQualityReport:
-    subgroup_points = subgroup_points or (0.90,) * len(FIXED_SUBGROUPS)
-    subgroup_ucbs = subgroup_ucbs or (0.90,) * len(FIXED_SUBGROUPS)
-    subgroup_counts = subgroup_counts or (400, 400, 400, 600, 600, 600, 600)
-    pooled_subgroups = tuple(
-        NamedQualityMetric(
-            name=group,
-            metric=_quality_metric(
-                point_ratio=point,
-                ucb95=ucb,
-                row_count=count,
-            ),
+    fold_rows = {
+        fold_id: _rows(
+            fold_id,
+            ratio=point,
+            weather_ratios=weather_ratios,
+            day_ratios=day_ratios,
+            weather_counts=(weather_counts or {}).get(fold_id, (100, 100, 100)),
         )
-        for group, point, ucb, count in zip(
-            FIXED_SUBGROUPS,
-            subgroup_points,
-            subgroup_ucbs,
-            subgroup_counts,
-            strict=True,
-        )
-    )
-    pooled_bootstrap = BootstrapResult(
-        valid=True,
-        overall=RatioMetric(
-            row_count=1200,
-            stable_mae=10.0,
-            candidate_mae=10.0 * pooled_point,
-            point_ratio=pooled_point,
-            ucb95=pooled_ucb,
-        ),
-        subgroups={
-            entry.name: RatioMetric(
-                row_count=entry.metric.row_count,
-                stable_mae=entry.metric.stable_mae or 0.0,
-                candidate_mae=entry.metric.candidate_mae or 0.0,
-                point_ratio=entry.metric.point_ratio or 0.0,
-                ucb95=entry.metric.ucb95 or 0.0,
-            )
-            for entry in pooled_subgroups
-        },
-        resamples=2000,
-        seed=2026,
-        replicate_index=1899,
-    )
-    return DevelopmentQualityReport(
-        folds=tuple(
-            _fold_report(fold_id, point=point)
-            for fold_id, point in zip(FOLD_IDS, fold_points, strict=True)
-        ),
-        pooled_row_count=1200,
-        pooled_overall=_quality_metric(
-            point_ratio=pooled_point,
-            ucb95=pooled_ucb,
-            row_count=1200,
-        ),
-        pooled_subgroups=pooled_subgroups,
-        pooled_bootstrap=pooled_bootstrap,
-        qualification_evidence=evidence
+        for fold_id, point in zip(FOLD_IDS, fold_points, strict=True)
+    }
+    receipts = {fold_id: _complete_receipt(len(rows)) for fold_id, rows in fold_rows.items()}
+    return evaluate_pooled(
+        fold_rows,
+        receipts,
+        evidence
         or QualificationEvidence(
             lineage=GateVerdict.PASS,
             converter=GateVerdict.PASS,
             evidence=GateVerdict.PASS,
             budget=GateVerdict.PASS,
         ),
-        reason_codes=(),
     )
 
 
@@ -256,6 +173,9 @@ def test_pooled_evaluation_is_the_disjoint_union_of_exactly_four_folds() -> None
     assert report.pooled_bootstrap.valid is True
     assert report.pooled_overall.point_ratio == pytest.approx(0.90)
     assert tuple(entry.name for entry in report.pooled_subgroups) == FIXED_SUBGROUPS
+    assert qualify_trial(report).verdict is GateVerdict.PASS
+    assert "_paired_rows" not in repr(report)
+    assert "F1-0000" not in repr(report)
 
 
 def test_pooled_evaluation_normalizes_mapping_order_without_changing_fold_order() -> None:
@@ -304,37 +224,36 @@ def test_pooled_evaluation_rejects_calendar_day_overlap_between_folds() -> None:
 
 
 def test_qualification_accepts_every_frozen_threshold_at_its_boundary() -> None:
-    result = qualify_trial(
-        _report_with(
-            pooled_point=0.97,
-            pooled_ucb=0.97,
-            subgroup_points=(1.05,) * len(FIXED_SUBGROUPS),
-            subgroup_ucbs=(1.05,) * len(FIXED_SUBGROUPS),
-            fold_points=(0.99, 1.00, 0.98, 1.04),
-        )
-    )
+    result = qualify_trial(_report_with(fold_points=(0.97, 0.97, 0.97, 0.97)))
 
     assert result.qualified is True
     assert result.verdict is GateVerdict.PASS
     assert result.reason_codes == ()
 
 
+def test_qualification_accepts_subgroup_point_and_ucb_at_exact_boundary() -> None:
+    report = _report_with(weather_ratios=(1.05, 0.80, 0.80))
+
+    result = qualify_trial(report)
+
+    weather_clear = report.pooled_bootstrap.subgroups["weather_clear"]
+    assert weather_clear.point_ratio == pytest.approx(1.05)
+    assert weather_clear.ucb95 == pytest.approx(1.05)
+    assert result.verdict is GateVerdict.PASS
+
+
 def test_qualification_result_carries_the_exact_selection_key_inputs() -> None:
     result = qualify_trial(
-        _report_with(
-            pooled_ucb=0.96,
-            subgroup_ucbs=(1.01, 1.02, 1.03, 1.04, 1.05, 1.00, 0.99),
-            fold_points=(0.91, 0.92, 0.93, 1.04),
-        ),
+        _report_with(fold_points=(0.96, 0.96, 0.96, 0.96)),
         trial_id="STAT-A1",
         family_id="STAT",
     )
 
     assert result.trial_id == "STAT-A1"
     assert result.family_id == "STAT"
-    assert result.pooled_ucb95 == 0.96
-    assert result.worst_fold_point == 1.04
-    assert result.worst_subgroup_ucb95 == 1.05
+    assert result.pooled_ucb95 == pytest.approx(0.96)
+    assert result.worst_fold_point == pytest.approx(0.96)
+    assert result.worst_subgroup_ucb95 == pytest.approx(0.96)
 
 
 def test_one_fold_only_win_does_not_qualify() -> None:
@@ -345,50 +264,56 @@ def test_one_fold_only_win_does_not_qualify() -> None:
     assert "FOLD_STABILITY" in result.reason_codes
 
 
-@pytest.mark.parametrize(
-    ("override", "reason"),
-    [
-        ({"pooled_point": 0.9700001}, "POOLED_OVERALL_POINT_RATIO"),
-        ({"pooled_ucb": 0.9700001}, "POOLED_OVERALL_UCB95"),
-        (
-            {"subgroup_points": (1.0500001,) + (0.90,) * 6},
-            "POOLED_SUBGROUP_POINT_RATIO:weather_clear",
-        ),
-        (
-            {"subgroup_ucbs": (1.0500001,) + (0.90,) * 6},
-            "POOLED_SUBGROUP_UCB95:weather_clear",
-        ),
-        (
-            {"fold_points": (1.0500001, 0.90, 0.90, 0.90)},
-            "FOLD_OVERALL_POINT_RATIO:F1",
-        ),
-    ],
-)
-def test_threshold_violations_are_fail_not_unknown(
-    override: dict[str, object], reason: str
-) -> None:
-    result = qualify_trial(_report_with(**override))  # type: ignore[arg-type]
+def test_pooled_overall_point_threshold_violation_is_fail_not_unknown() -> None:
+    result = qualify_trial(_report_with(fold_points=(0.9700001,) * 4))
 
     assert result.verdict is GateVerdict.FAIL
-    assert result.qualified is False
-    assert reason in result.reason_codes
+    assert "POOLED_OVERALL_POINT_RATIO" in result.reason_codes
+
+
+def test_real_bootstrap_ucb_threshold_violation_is_fail_not_unknown() -> None:
+    report = _report_with(day_ratios=(0.75,) * 5 + (1.15,) * 5)
+
+    result = qualify_trial(report)
+
+    assert report.pooled_overall.point_ratio <= 0.97
+    assert report.pooled_overall.ucb95 > 0.97
+    assert result.verdict is GateVerdict.FAIL
+    assert "POOLED_OVERALL_UCB95" in result.reason_codes
+
+
+def test_pooled_subgroup_point_threshold_violation_is_fail_not_unknown() -> None:
+    result = qualify_trial(_report_with(weather_ratios=(1.0500001, 0.80, 0.80)))
+
+    assert result.verdict is GateVerdict.FAIL
+    assert "POOLED_SUBGROUP_POINT_RATIO:weather_clear" in result.reason_codes
+
+
+def test_real_subgroup_bootstrap_ucb_threshold_violation_is_fail_not_unknown() -> None:
+    report = _report_with(day_ratios=(0.70,) * 5 + (1.30,) * 5)
+
+    result = qualify_trial(report)
+
+    weather_clear = report.pooled_bootstrap.subgroups["weather_clear"]
+    assert weather_clear.point_ratio <= 1.05
+    assert weather_clear.ucb95 > 1.05
+    assert result.verdict is GateVerdict.FAIL
+    assert "POOLED_SUBGROUP_UCB95:weather_clear" in result.reason_codes
+
+
+def test_fold_point_threshold_violation_is_fail_not_unknown() -> None:
+    result = qualify_trial(_report_with(fold_points=(1.0500001, 0.80, 0.80, 0.80)))
+
+    assert result.verdict is GateVerdict.FAIL
+    assert "FOLD_OVERALL_POINT_RATIO:F1" in result.reason_codes
 
 
 def test_insufficient_group_in_any_fold_is_unknown_even_when_pooled_is_large() -> None:
-    report = _report_with()
-    first_fold = report.folds[0]
-    deficient = replace(
-        first_fold,
-        subgroups=(
-            NamedQualityMetric(
-                name=FIXED_SUBGROUPS[0],
-                metric=replace(first_fold.subgroups[0].metric, row_count=99),
-            ),
-            *first_fold.subgroups[1:],
-        ),
+    report = _report_with(
+        weather_counts={"F1": (99, 100, 101)},
     )
 
-    result = qualify_trial(replace(report, folds=(deficient, *report.folds[1:])))
+    result = qualify_trial(report)
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.qualified is False
@@ -413,15 +338,26 @@ def test_non_pass_qualification_evidence_is_unknown(field: str) -> None:
 
 
 def test_incomplete_accounting_is_unknown_before_bootstrap_or_thresholds() -> None:
-    report = _report_with()
+    fold_rows = {fold_id: _rows(fold_id) for fold_id in FOLD_IDS}
+    receipts = {fold_id: _complete_receipt(len(rows)) for fold_id, rows in fold_rows.items()}
     incomplete_receipt = replace(
-        report.folds[0].completeness,
+        receipts["F1"],
         verdict=GateVerdict.UNKNOWN,
         reason_codes=("CANDIDATE_PREDICTION_INCOMPLETE",),
     )
-    incomplete_fold = replace(report.folds[0], completeness=incomplete_receipt)
+    receipts["F1"] = incomplete_receipt
+    report = evaluate_pooled(
+        fold_rows,
+        receipts,
+        QualificationEvidence(
+            lineage=GateVerdict.PASS,
+            converter=GateVerdict.PASS,
+            evidence=GateVerdict.PASS,
+            budget=GateVerdict.PASS,
+        ),
+    )
 
-    result = qualify_trial(replace(report, folds=(incomplete_fold, *report.folds[1:])))
+    result = qualify_trial(report)
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert "INCOMPLETE_ACCOUNTING:F1" in result.reason_codes
@@ -483,7 +419,7 @@ def test_coordinated_invalid_metric_values_cannot_bypass_denominator_checks() ->
     )
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "INVALID_OVERALL_METRIC:POOLED" in result.reason_codes
+    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
 
 
 def test_coordinated_point_ratio_must_still_match_reported_maes() -> None:
@@ -510,7 +446,7 @@ def test_coordinated_point_ratio_must_still_match_reported_maes() -> None:
     )
 
     assert result.verdict is GateVerdict.UNKNOWN
-    assert "INVALID_OVERALL_METRIC:POOLED" in result.reason_codes
+    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
 
 
 def test_missing_fold_is_unknown_not_a_three_fold_gate() -> None:
@@ -530,3 +466,229 @@ def test_malformed_fold_entry_fails_closed_without_evaluator_exception() -> None
 
     assert result.verdict is GateVerdict.UNKNOWN
     assert result.reason_codes == ("INVALID_FOLD_INVENTORY",)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing", "extra", "duplicate", "reordered", "non_tuple", "malformed"),
+)
+def test_malformed_fold_subgroup_inventory_is_unknown_without_exception(
+    mutation: str,
+) -> None:
+    report = _report_with()
+    entries: object = report.folds[0].subgroups
+    if mutation == "missing":
+        entries = report.folds[0].subgroups[:-1]
+    elif mutation == "extra":
+        entries = (*report.folds[0].subgroups, report.folds[0].subgroups[0])
+    elif mutation == "duplicate":
+        entries = (
+            report.folds[0].subgroups[0],
+            report.folds[0].subgroups[0],
+            *report.folds[0].subgroups[2:],
+        )
+    elif mutation == "reordered":
+        entries = tuple(reversed(report.folds[0].subgroups))
+    elif mutation == "non_tuple":
+        entries = list(report.folds[0].subgroups)
+    elif mutation == "malformed":
+        entries = (*report.folds[0].subgroups[:-1], object())
+    malformed_fold = replace(report.folds[0], subgroups=entries)  # type: ignore[arg-type]
+
+    result = qualify_trial(replace(report, folds=(malformed_fold, *report.folds[1:])))
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert result.reason_codes == ("INVALID_SUBGROUP_INVENTORY:F1",)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing", "extra", "duplicate", "reordered", "non_tuple", "malformed"),
+)
+def test_malformed_pooled_subgroup_inventory_is_unknown_without_exception(
+    mutation: str,
+) -> None:
+    report = _report_with()
+    entries: object = report.pooled_subgroups
+    if mutation == "missing":
+        entries = report.pooled_subgroups[:-1]
+    elif mutation == "extra":
+        entries = (*report.pooled_subgroups, report.pooled_subgroups[0])
+    elif mutation == "duplicate":
+        entries = (
+            report.pooled_subgroups[0],
+            report.pooled_subgroups[0],
+            *report.pooled_subgroups[2:],
+        )
+    elif mutation == "reordered":
+        entries = tuple(reversed(report.pooled_subgroups))
+    elif mutation == "non_tuple":
+        entries = list(report.pooled_subgroups)
+    elif mutation == "malformed":
+        entries = (*report.pooled_subgroups[:-1], object())
+
+    result = qualify_trial(replace(report, pooled_subgroups=entries))  # type: ignore[arg-type]
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert result.reason_codes == ("INVALID_SUBGROUP_INVENTORY:POOLED",)
+
+
+def test_coordinated_pooled_metric_tamper_is_unknown() -> None:
+    report = _report_with()
+    changed_metric = replace(
+        report.pooled_overall,
+        candidate_mae=8.0,
+        point_ratio=0.80,
+        ucb95=0.80,
+    )
+    changed_bootstrap = report.pooled_bootstrap.model_copy(
+        update={
+            "overall": report.pooled_bootstrap.overall.model_copy(
+                update={"candidate_mae": 8.0, "point_ratio": 0.80, "ucb95": 0.80}
+            )
+        }
+    )
+
+    result = qualify_trial(
+        replace(
+            report,
+            pooled_overall=changed_metric,
+            pooled_bootstrap=changed_bootstrap,
+        )
+    )
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+
+
+def test_coordinated_fold_metric_tamper_is_unknown() -> None:
+    report = _report_with()
+    first = report.folds[0]
+    changed_fold = replace(
+        first,
+        overall=replace(first.overall, candidate_mae=8.0, point_ratio=0.80, ucb95=0.80),
+        bootstrap=first.bootstrap.model_copy(
+            update={
+                "overall": first.bootstrap.overall.model_copy(
+                    update={"candidate_mae": 8.0, "point_ratio": 0.80, "ucb95": 0.80}
+                )
+            }
+        ),
+    )
+
+    result = qualify_trial(replace(report, folds=(changed_fold, *report.folds[1:])))
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+
+
+def test_coordinated_ucb_only_tamper_is_unknown() -> None:
+    report = _report_with()
+    changed_metric = replace(report.pooled_overall, ucb95=0.10)
+    changed_bootstrap = report.pooled_bootstrap.model_copy(
+        update={"overall": report.pooled_bootstrap.overall.model_copy(update={"ucb95": 0.10})}
+    )
+
+    result = qualify_trial(
+        replace(
+            report,
+            pooled_overall=changed_metric,
+            pooled_bootstrap=changed_bootstrap,
+        )
+    )
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+
+
+def test_coordinated_partition_counts_cannot_change_the_row_denominator() -> None:
+    report = _report_with()
+
+    def changed_entries(
+        entries: tuple[NamedQualityMetric, ...], count: int
+    ) -> tuple[NamedQualityMetric, ...]:
+        return tuple(
+            replace(entry, metric=replace(entry.metric, row_count=count)) for entry in entries
+        )
+
+    changed_folds = tuple(
+        replace(
+            fold,
+            subgroups=changed_entries(fold.subgroups, 100),
+            bootstrap=fold.bootstrap.model_copy(
+                update={
+                    "subgroups": {
+                        name: metric.model_copy(update={"row_count": 100})
+                        for name, metric in fold.bootstrap.subgroups.items()
+                    }
+                }
+            ),
+        )
+        for fold in report.folds
+    )
+    changed_pooled = changed_entries(report.pooled_subgroups, 400)
+    changed_pooled_bootstrap = report.pooled_bootstrap.model_copy(
+        update={
+            "subgroups": {
+                name: metric.model_copy(update={"row_count": 400})
+                for name, metric in report.pooled_bootstrap.subgroups.items()
+            }
+        }
+    )
+
+    result = qualify_trial(
+        replace(
+            report,
+            folds=changed_folds,
+            pooled_subgroups=changed_pooled,
+            pooled_bootstrap=changed_pooled_bootstrap,
+        )
+    )
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert "REPORT_RECOMPUTATION_MISMATCH" in result.reason_codes
+
+
+@pytest.mark.parametrize("mutation", ("reason_count", "reason_order", "boolean_counter"))
+def test_contradictory_pass_completeness_receipt_is_unknown(mutation: str) -> None:
+    report = _report_with()
+    layer = report.folds[0].completeness.adapter
+    if mutation == "reason_count":
+        layer = replace(
+            layer,
+            reason_counts=((layer.reason_counts[0][0], 1), *layer.reason_counts[1:]),
+        )
+    elif mutation == "reason_order":
+        layer = replace(layer, reason_counts=tuple(reversed(layer.reason_counts)))
+    else:
+        layer = replace(layer, failure_count=False)  # type: ignore[arg-type]
+    receipt = replace(report.folds[0].completeness, adapter=layer)
+    changed_fold = replace(report.folds[0], completeness=receipt)
+
+    result = qualify_trial(replace(report, folds=(changed_fold, *report.folds[1:])))
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert "INCOMPLETE_ACCOUNTING:F1" in result.reason_codes
+
+
+def test_pass_receipt_with_all_accounting_counters_changed_to_one_is_unknown() -> None:
+    report = _report_with()
+    layer = report.folds[0].completeness.adapter
+    layer = replace(
+        layer,
+        expected_count=1,
+        observed_count=1,
+        success_count=1,
+        failure_count=1,
+        missing_count=1,
+        duplicate_count=1,
+        unexpected_count=1,
+        invalid_count=1,
+    )
+    receipt = replace(report.folds[0].completeness, adapter=layer)
+    changed_fold = replace(report.folds[0], completeness=receipt)
+
+    result = qualify_trial(replace(report, folds=(changed_fold, *report.folds[1:])))
+
+    assert result.verdict is GateVerdict.UNKNOWN
+    assert result.reason_codes == ("INCOMPLETE_ACCOUNTING:F1",)

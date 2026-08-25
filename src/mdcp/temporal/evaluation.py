@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 
 from mdcp.common.enums import GateVerdict
 from mdcp.policy.cluster_bootstrap import (
@@ -13,7 +14,13 @@ from mdcp.policy.cluster_bootstrap import (
     RatioMetric,
     cluster_bootstrap_ratios,
 )
-from mdcp.temporal.completeness import CompletenessReceipt
+from mdcp.temporal.completeness import (
+    ADAPTER_REASON_CODES,
+    LABEL_REASON_CODES,
+    PREDICTION_REASON_CODES,
+    CompletenessReceipt,
+    LayerAccounting,
+)
 
 FOLD_IDS = ("F1", "F2", "F3", "F4")
 FIXED_SUBGROUPS = (
@@ -68,6 +75,7 @@ class FoldQualityReport:
     subgroups: tuple[NamedQualityMetric, ...]
     bootstrap: BootstrapResult
     reason_codes: tuple[str, ...]
+    _paired_rows: tuple[PairedQualityRow, ...] = dataclass_field(default=(), repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,21 +178,63 @@ def _row_inventory(
     return counts, tuple(dict.fromkeys(reasons))
 
 
+def _valid_pass_layer(
+    layer: object,
+    row_count: int,
+    reason_inventory: tuple[str, ...],
+) -> bool:
+    if type(layer) is not LayerAccounting:
+        return False
+    counters = (
+        layer.expected_count,
+        layer.observed_count,
+        layer.success_count,
+        layer.failure_count,
+        layer.missing_count,
+        layer.duplicate_count,
+        layer.unexpected_count,
+        layer.invalid_count,
+    )
+    if any(type(value) is not int or value < 0 for value in counters):
+        return False
+    if (
+        layer.expected_count != row_count
+        or layer.observed_count != row_count
+        or layer.success_count != row_count
+        or any(value != 0 for value in counters[3:])
+    ):
+        return False
+    if type(layer.reason_counts) is not tuple or len(layer.reason_counts) != len(reason_inventory):
+        return False
+    for entry, expected_reason in zip(layer.reason_counts, reason_inventory, strict=True):
+        if (
+            type(entry) is not tuple
+            or len(entry) != 2
+            or type(entry[0]) is not str
+            or entry[0] != expected_reason
+            or type(entry[1]) is not int
+            or entry[1] != 0
+        ):
+            return False
+    return True
+
+
 def _complete_receipt(receipt: object, row_count: int) -> bool:
     if type(receipt) is not CompletenessReceipt:
         return False
     if (
         receipt.verdict is not GateVerdict.PASS
-        or receipt.reason_codes
+        or type(receipt.reason_codes) is not tuple
+        or receipt.reason_codes != ()
+        or type(receipt.source_count) is not int
         or receipt.source_count != row_count
     ):
         return False
-    return all(
-        layer.complete
-        and layer.expected_count == row_count
-        and layer.observed_count == row_count
-        and layer.success_count == row_count
-        for layer in (receipt.adapter, receipt.stable, receipt.candidate, receipt.label)
+    return (
+        _valid_pass_layer(receipt.adapter, row_count, ADAPTER_REASON_CODES)
+        and _valid_pass_layer(receipt.stable, row_count, PREDICTION_REASON_CODES)
+        and _valid_pass_layer(receipt.candidate, row_count, PREDICTION_REASON_CODES)
+        and _valid_pass_layer(receipt.label, row_count, LABEL_REASON_CODES)
     )
 
 
@@ -248,6 +298,7 @@ def evaluate_fold(
         subgroups=subgroups,
         bootstrap=bootstrap,
         reason_codes=tuple(dict.fromkeys(reasons)),
+        _paired_rows=row_tuple,
     )
 
 
@@ -356,11 +407,14 @@ def _metric_matches_bootstrap(metric: QualityMetricReport, bootstrap: RatioMetri
 def _bootstrap_is_frozen(bootstrap: object) -> bool:
     return (
         type(bootstrap) is BootstrapResult
-        and bootstrap.valid
+        and bootstrap.valid is True
         and bootstrap.reason_code is None
         and bootstrap.overall is not None
+        and type(bootstrap.resamples) is int
         and bootstrap.resamples == _BOOTSTRAP_RESAMPLES
+        and type(bootstrap.seed) is int
         and bootstrap.seed == _BOOTSTRAP_SEED
+        and type(bootstrap.replicate_index) is int
         and bootstrap.replicate_index == _BOOTSTRAP_INDEX
         and tuple(bootstrap.subgroups) == FIXED_SUBGROUPS
     )
@@ -402,16 +456,65 @@ def _subgroups_are_valid(
     return valid
 
 
-def _fold_unknown_reasons(report: DevelopmentQualityReport) -> list[str]:
-    unknown: list[str] = []
+def _exact_subgroup_inventory(entries: object) -> bool:
+    return (
+        type(entries) is tuple
+        and len(entries) == len(FIXED_SUBGROUPS)
+        and all(type(entry) is NamedQualityMetric for entry in entries)
+        and tuple(entry.name for entry in entries) == FIXED_SUBGROUPS
+    )
+
+
+def _report_shape_reasons(report: DevelopmentQualityReport) -> list[str]:
     if (
         type(report.folds) is not tuple
-        or tuple(fold.fold_id for fold in report.folds if type(fold) is FoldQualityReport)
-        != FOLD_IDS
+        or len(report.folds) != len(FOLD_IDS)
         or any(type(fold) is not FoldQualityReport for fold in report.folds)
+        or tuple(fold.fold_id for fold in report.folds) != FOLD_IDS
     ):
         return ["INVALID_FOLD_INVENTORY"]
+    for fold in report.folds:
+        if type(fold.paired_row_count) is not int or fold.paired_row_count < 0:
+            return ["INVALID_REPORT_SHAPE"]
+        if not _exact_subgroup_inventory(fold.subgroups):
+            return [f"INVALID_SUBGROUP_INVENTORY:{fold.fold_id}"]
+    if type(report.pooled_row_count) is not int or report.pooled_row_count < 0:
+        return ["INVALID_REPORT_SHAPE"]
+    if not _exact_subgroup_inventory(report.pooled_subgroups):
+        return ["INVALID_SUBGROUP_INVENTORY:POOLED"]
+    if (
+        type(report.reason_codes) is not tuple
+        or any(type(reason) is not str for reason in report.reason_codes)
+        or any(
+            type(fold.reason_codes) is not tuple
+            or any(type(reason) is not str for reason in fold.reason_codes)
+            for fold in report.folds
+        )
+    ):
+        return ["INVALID_REPORT_SHAPE"]
+    return []
 
+
+def _partition_reasons(
+    scope: str,
+    entries: tuple[NamedQualityMetric, ...],
+    denominator: int,
+) -> list[str]:
+    counts = {entry.name: entry.metric.row_count for entry in entries}
+    partitions = (
+        ("weather", FIXED_SUBGROUPS[:3]),
+        ("day", FIXED_SUBGROUPS[3:5]),
+        ("demand", FIXED_SUBGROUPS[5:]),
+    )
+    return [
+        f"INVALID_PARTITION_TOTAL:{scope}:{name}"
+        for name, groups in partitions
+        if sum(counts[group] for group in groups) != denominator
+    ]
+
+
+def _fold_unknown_reasons(report: DevelopmentQualityReport) -> list[str]:
+    unknown: list[str] = []
     for fold in report.folds:
         if not _complete_receipt(fold.completeness, fold.paired_row_count):
             unknown.append(f"INCOMPLETE_ACCOUNTING:{fold.fold_id}")
@@ -423,8 +526,44 @@ def _fold_unknown_reasons(report: DevelopmentQualityReport) -> list[str]:
             fold.overall, fold.bootstrap.overall
         ):
             unknown.append(f"INVALID_OVERALL_METRIC:{fold.fold_id}")
-        _subgroups_are_valid(fold.fold_id, fold.subgroups, fold.bootstrap, unknown)
+        elif fold.overall.row_count != fold.paired_row_count:
+            unknown.append(f"INVALID_OVERALL_ROW_COUNT:{fold.fold_id}")
+        if _subgroups_are_valid(fold.fold_id, fold.subgroups, fold.bootstrap, unknown):
+            unknown.extend(_partition_reasons(fold.fold_id, fold.subgroups, fold.paired_row_count))
     return unknown
+
+
+def _weighted_sum(metric: QualityMetricReport, row_count: int, attribute: str) -> float:
+    return float(getattr(metric, attribute)) * row_count
+
+
+def _pooled_aggregate_reasons(report: DevelopmentQualityReport) -> list[str]:
+    reasons: list[str] = []
+    for attribute in ("stable_mae", "candidate_mae"):
+        pooled_sum = _weighted_sum(report.pooled_overall, report.pooled_row_count, attribute)
+        fold_sum = sum(
+            _weighted_sum(fold.overall, fold.paired_row_count, attribute) for fold in report.folds
+        )
+        if not math.isclose(pooled_sum, fold_sum, rel_tol=1e-12, abs_tol=1e-12):
+            reasons.append("INVALID_POOLED_AGGREGATE:overall")
+            break
+
+    fold_subgroups = [
+        {entry.name: entry.metric for entry in fold.subgroups} for fold in report.folds
+    ]
+    pooled_subgroups = {entry.name: entry.metric for entry in report.pooled_subgroups}
+    for group in FIXED_SUBGROUPS:
+        pooled_metric = pooled_subgroups[group]
+        for attribute in ("stable_mae", "candidate_mae"):
+            pooled_sum = _weighted_sum(pooled_metric, pooled_metric.row_count, attribute)
+            fold_sum = sum(
+                _weighted_sum(metrics[group], metrics[group].row_count, attribute)
+                for metrics in fold_subgroups
+            )
+            if not math.isclose(pooled_sum, fold_sum, rel_tol=1e-12, abs_tol=1e-12):
+                reasons.append(f"INVALID_POOLED_AGGREGATE:{group}")
+                break
+    return reasons
 
 
 def _pooled_unknown_reasons(report: DevelopmentQualityReport) -> list[str]:
@@ -438,18 +577,44 @@ def _pooled_unknown_reasons(report: DevelopmentQualityReport) -> list[str]:
         report.pooled_overall, report.pooled_bootstrap.overall
     ):
         unknown.append("INVALID_OVERALL_METRIC:POOLED")
+    elif report.pooled_overall.row_count != report.pooled_row_count:
+        unknown.append("INVALID_OVERALL_ROW_COUNT:POOLED")
     if _subgroups_are_valid("POOLED", report.pooled_subgroups, report.pooled_bootstrap, unknown):
+        fold_subgroups = [
+            {entry.name: entry.metric for entry in fold.subgroups} for fold in report.folds
+        ]
         fold_counts = {
-            group: sum(
-                next(entry.metric.row_count for entry in fold.subgroups if entry.name == group)
-                for fold in report.folds
-            )
+            group: sum(metrics[group].row_count for metrics in fold_subgroups)
             for group in FIXED_SUBGROUPS
         }
         for entry in report.pooled_subgroups:
             if entry.metric.row_count != fold_counts[entry.name]:
                 unknown.append(f"INVALID_POOLED_SUBGROUP_COUNT:{entry.name}")
+        unknown.extend(
+            _partition_reasons("POOLED", report.pooled_subgroups, report.pooled_row_count)
+        )
+        unknown.extend(_pooled_aggregate_reasons(report))
     return unknown
+
+
+def _report_matches_row_recomputation(report: DevelopmentQualityReport) -> bool:
+    fold_rows: dict[str, tuple[PairedQualityRow, ...]] = {}
+    receipts: dict[str, CompletenessReceipt] = {}
+    for fold in report.folds:
+        if (
+            type(fold._paired_rows) is not tuple
+            or len(fold._paired_rows) != fold.paired_row_count
+            or any(type(row) is not PairedQualityRow for row in fold._paired_rows)
+        ):
+            return False
+        fold_rows[fold.fold_id] = fold._paired_rows
+        receipts[fold.fold_id] = fold.completeness
+    recomputed = evaluate_pooled(
+        fold_rows,
+        receipts,
+        report.qualification_evidence,
+    )
+    return report == recomputed
 
 
 def _evidence_unknown_reasons(evidence: object) -> list[str]:
@@ -521,16 +686,43 @@ def qualify_trial(
             reason_codes=("INVALID_DEVELOPMENT_REPORT",),
         )
 
-    unknown = _fold_unknown_reasons(report)
-    if "INVALID_FOLD_INVENTORY" in unknown:
+    shape_reasons = _report_shape_reasons(report)
+    if shape_reasons:
         return _qualification_result(
             report,
             trial_id=trial_id,
             family_id=family_id,
             verdict=GateVerdict.UNKNOWN,
             qualified=False,
-            reason_codes=tuple(dict.fromkeys(unknown)),
+            reason_codes=tuple(shape_reasons),
         )
+
+    completeness_reasons = [
+        f"INCOMPLETE_ACCOUNTING:{fold.fold_id}"
+        for fold in report.folds
+        if not _complete_receipt(fold.completeness, fold.paired_row_count)
+    ]
+    if completeness_reasons:
+        return _qualification_result(
+            report,
+            trial_id=trial_id,
+            family_id=family_id,
+            verdict=GateVerdict.UNKNOWN,
+            qualified=False,
+            reason_codes=tuple(completeness_reasons),
+        )
+
+    if not _report_matches_row_recomputation(report):
+        return _qualification_result(
+            report,
+            trial_id=trial_id,
+            family_id=family_id,
+            verdict=GateVerdict.UNKNOWN,
+            qualified=False,
+            reason_codes=("REPORT_RECOMPUTATION_MISMATCH",),
+        )
+
+    unknown = _fold_unknown_reasons(report)
     unknown.extend(_pooled_unknown_reasons(report))
     unknown.extend(_evidence_unknown_reasons(report.qualification_evidence))
     unknown = list(dict.fromkeys(unknown))
