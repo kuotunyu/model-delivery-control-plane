@@ -151,12 +151,27 @@ The caller supplies one exact drive-local Windows destination whose parent alrea
 device, volume-alias, relative, empty, or aliased destinations fail before mutation. Starting from
 the drive root, the writer opens the root once with `CreateFileW(OPEN_EXISTING,
 FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS)` and then opens every descendant component
-strictly handle-relative through the previously verified parent. Every directory handle omits
-`FILE_SHARE_DELETE` and remains open through final-file close; every component must be a directory,
-must not have `FILE_ATTRIBUTE_REPARSE_POINT`, and must remain on the root volume identity. This
-rejects symlinks, junctions, mount points, component substitution, ancestor rename, and cross-volume
-traversal during publication. An existing destination of any type or a missing component fails
-closed. All container bytes and public identity fields are computed before the first create attempt.
+strictly handle-relative through the previously verified parent. Each descendant directory open is
+exactly `NtCreateFile` with disposition `FILE_OPEN`, options
+`FILE_DIRECTORY_FILE|FILE_OPEN_REPARSE_POINT|FILE_SYNCHRONOUS_IO_NONALERT`, and share mode
+`FILE_SHARE_READ|FILE_SHARE_WRITE` without `FILE_SHARE_DELETE`. Every directory handle remains open
+through final-file close; every component must be a directory, must not have
+`FILE_ATTRIBUTE_REPARSE_POINT`, and must remain on the root volume identity.
+
+The textual path oracle runs before opening anything. It requires one NFC-normalized absolute DOS
+drive path; rejects UNC, `\\?\`, `\\.\`, `/`, control characters, `< > : " | ? *` except the single
+drive colon, empty/dot/dot-dot components, any component ending in dot or space, any component
+containing `~`, and every case-insensitive DOS device basename `CON`, `PRN`, `AUX`, `NUL`,
+`COM1..COM9`, or `LPT1..LPT9` before any extension. After each open,
+`GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED|VOLUME_NAME_DOS)` is stripped only of its exact
+`\\?\` transport prefix, NFC-normalized, and compared to the cumulative expected DOS path using
+`CompareStringOrdinal(..., TRUE)`; mismatch fails closed. The tilde ban plus normalized-handle
+comparison rejects 8.3 aliases instead of attempting to expand or accept them.
+
+These rules reject symlinks, junctions, mount points, component substitution, ancestor rename,
+cross-volume traversal, and textual aliases during publication. An existing destination of any
+type or a missing component fails closed. All container bytes and public identity fields are
+computed before the first create attempt.
 
 The write path never calls `mkdir`, never creates a staging name, never performs rename/replace,
 never follows a destination link, and never reopens the destination by absolute path to write.
@@ -362,6 +377,8 @@ The corrective plan shall include observable REDs for at least:
 - natural evidence without the exact permit;
 - exact Windows `NtCreateFile` handle-relative create-new with share mode `0`, retained no-delete
   ancestor handles, and no rename/staging/path-open fallback;
+- descendant `FILE_OPEN_REPARSE_POINT` options plus adversarial junction/symlink, 8.3-tilde,
+  trailing-dot/space, DOS-device, normalized-handle-name, and cross-volume rejection;
 - unconditional pre-mutation `PUBLICATION_UNSUPPORTED` on POSIX and other platforms;
 - source-archive recomputation without `.git`; and
 - H2 `SEALED_NOT_LOADED`, loaded rows `0` throughout.
