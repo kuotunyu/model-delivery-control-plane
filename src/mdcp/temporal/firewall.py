@@ -24,7 +24,6 @@ FORMAL_V2_FIXED_PATHS = (
     "src/mdcp/predictor/app_v2.py",
 )
 FORMAL_TEMPORAL_PACKAGE_ROOT = "src/mdcp/temporal"
-_NON_FORMAL_TEMPORAL_PATHS = frozenset({"src/mdcp/temporal/search_identity.py"})
 
 _FORBIDDEN_MODULES = frozenset(
     {
@@ -418,6 +417,26 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("collections.abc", "Sequence"),
         }
     ),
+    "src/mdcp/temporal/search_identity.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("dataclasses", "dataclass"),
+            ("datetime", "UTC"),
+            ("datetime", "datetime"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.canonical", "parse_json_bytes"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("pathlib", "Path"),
+            ("pydantic", "BaseModel"),
+            ("pydantic", "ConfigDict"),
+            ("pydantic", "StringConstraints"),
+            ("pydantic", "field_validator"),
+            ("subprocess", None),
+            ("typing", "Annotated"),
+            ("typing", "Literal"),
+        }
+    ),
 }
 _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/predictor/app_v2.py": frozenset(
@@ -436,9 +455,11 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Assign",
             "ast.Attribute",
             "ast.AsyncFunctionDef",
+            "ast.BinOp",
             "ast.Call",
             "ast.ClassDef",
             "ast.Constant",
+            "ast.Div",
             "ast.ExceptHandler",
             "ast.FunctionDef",
             "ast.Global",
@@ -532,6 +553,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         }
     ),
     "src/mdcp/temporal/cli.py": frozenset({"argparse.ArgumentParser"}),
+    "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
 }
 _FILE_ACCESS_METHODS = frozenset(
     {
@@ -580,6 +602,12 @@ _ALLOWED_FILE_ACCESS_CALLS = {
     ),
     "src/mdcp/temporal/runner.py": frozenset(
         {("_linux_peak_resident_bytes", "read_text", "Path:/proc/self/status")}
+    ),
+    "src/mdcp/temporal/search_identity.py": frozenset(
+        {
+            ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
+            ("_read_expected_public_file", "read_bytes", "name:expected_path"),
+        }
     ),
 }
 _ALLOWED_ENVIRONMENT_KEYS = {
@@ -683,6 +711,21 @@ _ALLOWED_SUBPROCESS_CALLS = {
     "src/mdcp/temporal/runner.py": {
         "_repository_is_clean": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
     },
+}
+_ALLOWED_SEARCH_IDENTITY_GIT_CALLS = {
+    "verify_search_freeze": frozenset(
+        {
+            ("rev-parse", "HEAD"),
+            ("show", "-s", "--format=%P", "HEAD"),
+        }
+    ),
+    "_is_clean_checkout": frozenset({("status", "--porcelain=v1", "--untracked-files=all")}),
+    "_has_exact_allowlisted_additions": frozenset(
+        {("diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD")}
+    ),
+    "_has_regular_public_evidence": frozenset(
+        {("ls-tree", "name:head", "--", "name:relative_path")}
+    ),
 }
 _SENSITIVE_FILE_CALLABLE_SCOPES = {
     "src/mdcp/temporal/contract_gate.py": {
@@ -864,6 +907,24 @@ def _allowed_dunder_attribute(
             and not node.value.args
             and not node.value.keywords
         )
+    if node.attr == "__setattr__" and logical_path == "src/mdcp/temporal/runtime_guards.py":
+        parent = parents.get(node)
+        return (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "super"
+            and not node.value.args
+            and not node.value.keywords
+            and isinstance(parent, ast.Call)
+            and parent.func is node
+            and len(parent.args) == 2
+            and not parent.keywords
+            and isinstance(parent.args[0], ast.Constant)
+            and parent.args[0].value == "_core"
+            and isinstance(parent.args[1], ast.Name)
+            and parent.args[1].id == "core"
+            and _enclosing_function(node, parents) == "__init__"
+        )
     if node.attr == "__module__" and logical_path == "src/mdcp/temporal/contract_gate.py":
         return isinstance(node.value, ast.Name) and node.value.id in {
             "create_v1_app",
@@ -976,6 +1037,13 @@ def _validate_pinned_file_capability_functions(tree: ast.AST, logical_path: str)
 def _file_receiver_identity(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
         return f"name:{node.id}"
+    if (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Div)
+        and isinstance(node.left, ast.Name)
+        and isinstance(node.right, ast.Name)
+    ):
+        return f"Path:{node.left.id}/{node.right.id}"
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -1217,11 +1285,20 @@ def _allowed_subprocess_call(
         return False
     if not isinstance(node.args[0], ast.Tuple):
         return False
-    command = tuple(_subprocess_argument_identity(argument) for argument in node.args[0].elts)
-    expected = _ALLOWED_SUBPROCESS_CALLS.get(logical_path, {}).get(
-        _enclosing_function(node, parents)
+    command = tuple(
+        (
+            f"name:{argument.value.id}"
+            if isinstance(argument, ast.Starred) and isinstance(argument.value, ast.Name)
+            else _subprocess_argument_identity(argument)
+        )
+        for argument in node.args[0].elts
     )
-    if command != expected:
+    enclosing_function = _enclosing_function(node, parents)
+    expected = _ALLOWED_SUBPROCESS_CALLS.get(logical_path, {}).get(enclosing_function)
+    if logical_path == "src/mdcp/temporal/search_identity.py":
+        if enclosing_function != "_git" or command != ("git", "name:arguments"):
+            return False
+    elif command != expected:
         return False
     keywords = {keyword.arg: keyword.value for keyword in node.keywords}
     expected_text = not (
@@ -1231,13 +1308,48 @@ def _allowed_subprocess_call(
     return (
         set(keywords) == {"cwd", "check", "capture_output", "text"}
         and isinstance(keywords["cwd"], ast.Name)
-        and keywords["cwd"].id == "repository_root"
+        and keywords["cwd"].id
+        == ("root" if logical_path == "src/mdcp/temporal/search_identity.py" else "repository_root")
         and isinstance(keywords["check"], ast.Constant)
         and keywords["check"].value is False
         and isinstance(keywords["capture_output"], ast.Constant)
         and keywords["capture_output"].value is True
         and isinstance(keywords["text"], ast.Constant)
         and keywords["text"].value is expected_text
+    )
+
+
+def _allowed_search_identity_git_call(
+    node: ast.Call,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    if not isinstance(node.func, ast.Name) or node.func.id != "_git":
+        return True
+    if not node.args or node.keywords or not isinstance(node.args[0], ast.Name):
+        return False
+    command = tuple(_subprocess_argument_identity(argument) for argument in node.args[1:])
+    return command in _ALLOWED_SEARCH_IDENTITY_GIT_CALLS.get(
+        _enclosing_function(node, parents), frozenset()
+    )
+
+
+def _allowed_getattr_reference(
+    node: ast.Name,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    parent = parents.get(node)
+    return (
+        logical_path == "src/mdcp/temporal/search_identity.py"
+        and node.id == "getattr"
+        and isinstance(parent, ast.Call)
+        and parent.func is node
+        and _enclosing_function(node, parents) == "_bound_digests_recompute"
+        and len(parent.args) == 2
+        and not parent.keywords
+        and all(isinstance(argument, ast.Name) for argument in parent.args)
+        and parent.args[0].id == "receipt"
+        and parent.args[1].id == "field_name"
     )
 
 
@@ -1423,6 +1535,12 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
             and not _allowed_subprocess_call(parents[node], logical_path, parents)
         ):
             _fail()
+        if (
+            logical_path == "src/mdcp/temporal/search_identity.py"
+            and isinstance(node, ast.Call)
+            and not _allowed_search_identity_git_call(node, parents)
+        ):
+            _fail()
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
             if qualified_name in _SENSITIVE_FILE_CALLABLE_SCOPES.get(
@@ -1446,6 +1564,11 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                     isinstance(node, ast.Name)
                     and qualified_name == "__file__"
                     and _allowed_file_source_name(node, logical_path, parents)
+                )
+                and not (
+                    isinstance(node, ast.Name)
+                    and qualified_name == "getattr"
+                    and _allowed_getattr_reference(node, logical_path, parents)
                 )
             ) or (
                 isinstance(node, ast.Attribute)
@@ -1520,7 +1643,6 @@ def _default_paths(repository_root: Path) -> tuple[str, ...]:
     temporal_paths = tuple(
         path.relative_to(repository_root).as_posix()
         for path in sorted(temporal_root.glob("*.py"), key=lambda item: item.as_posix())
-        if path.relative_to(repository_root).as_posix() not in _NON_FORMAL_TEMPORAL_PATHS
     )
     return tuple(sorted((*FORMAL_V2_FIXED_PATHS, *temporal_paths)))
 

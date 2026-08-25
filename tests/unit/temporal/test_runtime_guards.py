@@ -98,6 +98,31 @@ def test_synthetic_guard_is_not_a_production_runtime_guard(tmp_path: Path) -> No
     assert not isinstance(guard, RuntimeGuard)
 
 
+def test_runtime_guard_rejects_a_forged_authoritative_core(tmp_path: Path) -> None:
+    expected_head = _committed_repository(tmp_path)
+    forged_core = runtime_guards._RuntimeGuardCore(
+        evidence_class="authoritative_runtime",
+        repository_root=tmp_path,
+        expected_head=expected_head,
+        start_ns=0,
+        monotonic_ns=lambda: 1,
+        peak_process_bytes=lambda: 0,
+        tracked_paths=(),
+        repository_inventory_sha256="forged",
+    )
+
+    with pytest.raises(TypeError):
+        RuntimeGuard(forged_core)
+
+
+def test_production_runtime_guard_core_cannot_be_replaced(tmp_path: Path) -> None:
+    expected_head = _committed_repository(tmp_path)
+    guard = build_production_runtime_guard(tmp_path, expected_head)
+
+    with pytest.raises(AttributeError):
+        guard._core = object()  # type: ignore[attr-defined]
+
+
 def test_runtime_guard_detects_a_tracked_filename_containing_a_newline(tmp_path: Path) -> None:
     _committed_repository(tmp_path)
     tracked_path = tmp_path / "tracked\nname.txt"
@@ -199,6 +224,26 @@ def test_runtime_guard_rechecks_head_after_inventory(
         peak_process_bytes=lambda: 0,
     )
     heads = iter((expected_head, "moved-after-inventory"))
+    monkeypatch.setattr(runtime_guards, "_repository_head", lambda _: next(heads))
+
+    result = guard.checkpoint(RuntimeStage.POST_FIT)
+
+    assert result.verdict == "UNKNOWN"
+    assert result.reason_codes == ("REPOSITORY_IDENTITY_CHANGED",)
+
+
+def test_runtime_guard_rechecks_head_after_final_dirty_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_head = _committed_repository(tmp_path)
+    guard = _build_synthetic_runtime_guard(
+        tmp_path,
+        expected_head,
+        monotonic_ns=iter((0, 1)).__next__,
+        peak_process_bytes=lambda: 0,
+    )
+    heads = iter((expected_head, expected_head, "moved-during-final-status"))
     monkeypatch.setattr(runtime_guards, "_repository_head", lambda _: next(heads))
 
     result = guard.checkpoint(RuntimeStage.POST_FIT)

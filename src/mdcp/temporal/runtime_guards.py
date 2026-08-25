@@ -49,7 +49,10 @@ class _CheckpointGuard:
     __slots__ = ("_core",)
 
     def __init__(self, core: _RuntimeGuardCore) -> None:
-        self._core = core
+        super().__setattr__("_core", core)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("runtime guard state is immutable")
 
     def checkpoint(self, stage: RuntimeStage) -> RuntimeObservation:
         del stage
@@ -71,6 +74,8 @@ class _CheckpointGuard:
         if _repository_head(core.repository_root) != core.expected_head:
             return self._unknown("REPOSITORY_IDENTITY_CHANGED", elapsed_ns, peak_process_bytes)
         dirty_after_inventory = _repository_is_dirty(core.repository_root)
+        if _repository_head(core.repository_root) != core.expected_head:
+            return self._unknown("REPOSITORY_IDENTITY_CHANGED", elapsed_ns, peak_process_bytes)
         if inventory_sha256 is None:
             return self._unknown("REPOSITORY_BYTES_UNAVAILABLE", elapsed_ns, peak_process_bytes)
         if inventory_sha256 != core.repository_inventory_sha256:
@@ -100,13 +105,26 @@ class _CheckpointGuard:
         )
 
 
-class RuntimeGuard(_CheckpointGuard):
-    """Authoritative-runtime guard; only the production builder supplies its core."""
+def _make_runtime_guard_type() -> tuple[
+    type[_CheckpointGuard], Callable[[_RuntimeGuardCore], _CheckpointGuard]
+]:
+    construction_token = object()
 
-    def __init__(self, core: _RuntimeGuardCore) -> None:
-        if core.evidence_class != "authoritative_runtime":
-            raise ValueError("production guard requires authoritative runtime evidence")
-        super().__init__(core)
+    class ProductionRuntimeGuard(_CheckpointGuard):
+        """Authoritative-runtime guard created only by the closure-bound production builder."""
+
+        def __init__(self, core: _RuntimeGuardCore, token: object) -> None:
+            if token is not construction_token or core.evidence_class != "authoritative_runtime":
+                raise TypeError("production guard requires authoritative runtime evidence")
+            super().__init__(core)
+
+    def build(core: _RuntimeGuardCore) -> _CheckpointGuard:
+        return ProductionRuntimeGuard(core, construction_token)
+
+    return ProductionRuntimeGuard, build
+
+
+RuntimeGuard, _build_authoritative_runtime_guard = _make_runtime_guard_type()
 
 
 class _SyntheticRuntimeGuard(_CheckpointGuard):
@@ -117,7 +135,7 @@ class _SyntheticRuntimeGuard(_CheckpointGuard):
 
 
 def build_production_runtime_guard(repository_root: Path, expected_head: str) -> RuntimeGuard:
-    return RuntimeGuard(
+    return _build_authoritative_runtime_guard(
         _build_runtime_guard_core(
             repository_root,
             expected_head,

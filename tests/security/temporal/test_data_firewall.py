@@ -816,7 +816,6 @@ def test_real_formal_source_set_passes_with_deterministic_discovery() -> None:
             (REPOSITORY_ROOT / FORMAL_TEMPORAL_PACKAGE_ROOT).glob("*.py"),
             key=lambda path: path.as_posix(),
         )
-        if path.name != "search_identity.py"
     )
 
     assert result.verdict == "PASS"
@@ -831,7 +830,33 @@ def test_runtime_guard_and_command_surfaces_are_discovered() -> None:
         "src/mdcp/temporal/runtime_guards.py",
         "src/mdcp/temporal/runner.py",
         "src/mdcp/temporal/cli.py",
+        "src/mdcp/temporal/search_identity.py",
     }.issubset(result.checked_paths)
+
+
+def test_static_firewall_allows_exact_search_identity_git_calls(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/search_identity.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, source)
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
+
+
+def test_static_firewall_rejects_unapproved_search_identity_git_call(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/search_identity.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    needle = '    head = _git(root, "rev-parse", "HEAD")\n'
+    assert source.count(needle) == 1
+    _write_logical_module(
+        tmp_path,
+        logical_path,
+        source.replace(needle, '    head = _git(root, "status", "--short")\n', 1),
+    )
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
 @pytest.mark.parametrize(
