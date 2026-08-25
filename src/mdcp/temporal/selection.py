@@ -318,17 +318,31 @@ def _replay_digest_material(digests: tuple[ReplayFoldDigests, ...]) -> list[dict
     ]
 
 
-class ReplaySelectionSession:
-    """Transient one-shot authorization bound to qualifications and expected replay bytes."""
+@dataclass(slots=True)
+class _ReplaySessionState:
+    qualification_results: tuple[QualificationResult, ...]
+    expected_digests: tuple[ReplayFoldDigests, ...]
+    qualification_inventory_sha256: str
+    session_sha256: str
+    lock: Lock
+    consumed: bool
 
-    __slots__ = (
-        "_consumed",
-        "_expected_digests",
-        "_lock",
-        "_qualification_inventory_sha256",
-        "_qualification_results",
-        "_session_sha256",
-    )
+
+_REPLAY_SESSION_STATES: dict[object, _ReplaySessionState] = {}
+_REPLAY_SESSION_REGISTRY_LOCK = Lock()
+
+
+def _replay_session_state(session: object) -> _ReplaySessionState:
+    try:
+        return _REPLAY_SESSION_STATES[session]
+    except KeyError as error:
+        raise ValueError("replay selection session state is invalid") from error
+
+
+class ReplaySelectionSession:
+    """Transient one-shot authorization with a closed, immutable public surface."""
+
+    __slots__ = ()
 
     def __init__(
         self,
@@ -353,51 +367,65 @@ class ReplaySelectionSession:
                 }
             )
         )
-        self._qualification_results = qualification_results
-        self._expected_digests = expected_digests
-        self._qualification_inventory_sha256 = qualification_inventory_sha256
-        self._session_sha256 = session_sha256
-        self._lock = Lock()
-        self._consumed = False
+        state = _ReplaySessionState(
+            qualification_results=qualification_results,
+            expected_digests=expected_digests,
+            qualification_inventory_sha256=qualification_inventory_sha256,
+            session_sha256=session_sha256,
+            lock=Lock(),
+            consumed=False,
+        )
+        with _REPLAY_SESSION_REGISTRY_LOCK:
+            if self in _REPLAY_SESSION_STATES:
+                raise RuntimeError("replay selection session is already initialized")
+            _REPLAY_SESSION_STATES[self] = state
 
     @property
     def qualification_inventory_sha256(self) -> str:
         """Return only the safe digest identity, never the raw qualification inventory."""
-        return self._qualification_inventory_sha256
+        return _replay_session_state(self).qualification_inventory_sha256
 
     @property
     def session_sha256(self) -> str:
         """Return the safe one-shot session identity."""
-        return self._session_sha256
+        return _replay_session_state(self).session_sha256
 
     @property
     def consumed(self) -> bool:
         """Read replay-consumption state under the same lock used by the transition."""
-        with self._lock:
-            return self._consumed
+        state = _replay_session_state(self)
+        with state.lock:
+            return state.consumed
 
     def __repr__(self) -> str:
         return (
             "ReplaySelectionSession("
-            f"session_sha256='{self._session_sha256}', consumed={self.consumed})"
+            f"session_sha256='{self.session_sha256}', consumed={self.consumed})"
         )
 
     def __reduce_ex__(self, protocol: int) -> object:
         del protocol
         raise TypeError("replay selection sessions are transient and non-serializable")
 
-    def _consume(self) -> bool:
-        with self._lock:
-            if self._consumed:
+    def consume_once(self) -> bool:
+        """Atomically consume this authorization exactly once, with no reset surface."""
+        state = _replay_session_state(self)
+        with state.lock:
+            if state.consumed:
                 return False
-            self._consumed = True
+            state.consumed = True
             return True
 
-    def _ranked_provisional(self) -> ProvisionalWinner | None:
-        return rank_qualified(self._qualification_results)
+    def ranked_provisional(self) -> ProvisionalWinner | None:
+        """Recompute rank one from the private immutable qualification inventory."""
+        return rank_qualified(_replay_session_state(self).qualification_results)
 
-    def _matches_expected_digests(self, digests: object) -> bool:
-        return _valid_replay_digests(digests) and digests == self._expected_digests
+    def matches_expected_digests(self, digests: object) -> bool:
+        """Compare actual replay evidence byte-for-byte with the trusted baseline."""
+        return (
+            _valid_replay_digests(digests)
+            and digests == _replay_session_state(self).expected_digests
+        )
 
 
 def _no_eligible_decision() -> SelectionDecision:
@@ -428,10 +456,10 @@ def finalize_selection(
     """Atomically consume one replay and promote only exact expected replay bytes."""
     if type(session) is not ReplaySelectionSession:
         raise ValueError("replay selection session is invalid")
-    if not session._consume():
-        return _replay_terminal(session._ranked_provisional(), "REPLAY_ALREADY_CONSUMED")
+    if not session.consume_once():
+        return _replay_terminal(session.ranked_provisional(), "REPLAY_ALREADY_CONSUMED")
 
-    canonical_provisional = session._ranked_provisional()
+    canonical_provisional = session.ranked_provisional()
     if canonical_provisional is None:
         if provisional is None and replay is None:
             return _no_eligible_decision()
@@ -463,7 +491,7 @@ def finalize_selection(
 
     if replay.verdict is not GateVerdict.PASS:
         return _replay_terminal(canonical_provisional, f"REPLAY_{replay.verdict.value}")
-    if not session._matches_expected_digests(replay.digests):
+    if not session.matches_expected_digests(replay.digests):
         return _replay_terminal(canonical_provisional, "REPLAY_DIGEST_MISMATCH")
     return SelectionDecision(
         status="PASS",

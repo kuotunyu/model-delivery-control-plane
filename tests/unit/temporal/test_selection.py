@@ -556,6 +556,26 @@ def test_second_same_or_different_replay_attempt_never_passes() -> None:
     assert second_different.final_winner is None
 
 
+def test_session_consumption_operations_cannot_be_replaced_or_reset() -> None:
+    results = _inventory()
+    provisional = rank_qualified(results)
+    assert provisional is not None
+    session = _session(results)
+
+    with pytest.raises(AttributeError):
+        session.consumed = False  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        session.consume_once = lambda: True  # type: ignore[method-assign]
+
+    first = finalize_selection(session, provisional, _replay(provisional, session))
+    with pytest.raises(RuntimeError, match="already initialized"):
+        session.__init__(results, _digests())
+    second = finalize_selection(session, provisional, _replay(provisional, session))
+
+    assert first.status == "PASS"
+    assert second.status == "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+
+
 def test_concurrent_replay_attempts_have_exactly_one_atomic_winner() -> None:
     results = _inventory()
     provisional = rank_qualified(results)
