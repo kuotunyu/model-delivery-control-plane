@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import copy
 import inspect
 import os
 import sys
@@ -7,7 +9,7 @@ import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -52,6 +54,67 @@ class _StageGuard:
             peak_process_bytes=1024,
             repository_inventory_sha256="f" * 64,
         )
+
+
+def _isolated_factory_engine() -> tuple[Callable[..., object], type]:
+    assert not hasattr(runner, "_run_development_core")
+    assert not hasattr(runner, "_DevelopmentExecutionPlan")
+    source = Path(run_evidence.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    binding = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_MUTATION_BINDINGS"
+            for target in node.targets
+        )
+    )
+    factory = copy.deepcopy(
+        next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_make_evidence_mutation_surface"
+        )
+    )
+    returned = next(node for node in factory.body if isinstance(node, ast.Return))
+    returned.value = ast.Tuple(
+        elts=[
+            ast.Name(id="write_synthetic", ctx=ast.Load()),
+            ast.Name(id="execute", ctx=ast.Load()),
+            ast.Name(id="_run_development_core", ctx=ast.Load()),
+            ast.Name(id="_DevelopmentExecutionPlan", ctx=ast.Load()),
+        ],
+        ctx=ast.Load(),
+    )
+    module = ast.fix_missing_locations(
+        ast.Module(
+            body=[
+                ast.ImportFrom(
+                    module="__future__",
+                    names=[ast.alias(name="annotations")],
+                    level=0,
+                ),
+                factory,
+            ],
+            type_ignores=[],
+        )
+    )
+    namespace = dict(vars(run_evidence))
+    namespace["_MUTATION_BINDINGS"] = eval(
+        compile(ast.Expression(binding.value), "<isolated-bindings>", "eval"),
+        namespace,
+    )
+    exec(compile(module, "<isolated-evidence-factory>", "exec"), namespace)
+    isolated_factory = namespace["_make_evidence_mutation_surface"]
+    assert callable(isolated_factory)
+    values = isolated_factory()
+    assert isinstance(values, tuple) and len(values) == 4
+    core, plan_type = values[2:]
+    assert callable(core) and isinstance(plan_type, type)
+    assert not hasattr(runner, "_run_development_core")
+    assert not hasattr(runner, "_DevelopmentExecutionPlan")
+    return core, plan_type
 
 
 def _fast_bootstrap(
@@ -202,6 +265,84 @@ def _fold_result(
     )
 
 
+def test_isolated_factory_executes_exact_synthetic_80_plus_4() -> None:
+    core, plan_type = _isolated_factory_engine()
+    calls: list[tuple[runner.FitPhase, str, str]] = []
+
+    def fit_fold(phase: runner.FitPhase, trial_id: str, fold_id: str) -> object:
+        calls.append((phase, trial_id, fold_id))
+        return _fold_result(
+            phase,
+            trial_id,
+            fold_id,
+            one_qualified_trial="STAT-A1",
+            contract_invalid_trial=None,
+            changed_replay_digest=False,
+            changed_replay_evidence=None,
+            changed_replay_predictions=False,
+            invalid_typed_verdict=False,
+        )
+
+    result = core(plan_type(fit_fold=fit_fold), _StageGuard())
+
+    assert result.fit_ledger.selection_count == 80
+    assert result.fit_ledger.replay_count == 4
+    assert result.fit_ledger.total_count == 84
+    assert len(calls) == 84
+
+
+def test_fail_only_replay_is_terminal_unknown_without_losing_84_fit_result() -> None:
+    core, plan_type = _isolated_factory_engine()
+    calls: list[tuple[runner.FitPhase, str, str]] = []
+
+    def fit_fold(phase: runner.FitPhase, trial_id: str, fold_id: str) -> object:
+        calls.append((phase, trial_id, fold_id))
+        result = _fold_result(
+            phase,
+            trial_id,
+            fold_id,
+            one_qualified_trial="STAT-A1",
+            contract_invalid_trial=None,
+            changed_replay_digest=False,
+            changed_replay_evidence=None,
+            changed_replay_predictions=False,
+            invalid_typed_verdict=False,
+        )
+        return (
+            replace(result, contract_verdict=GateVerdict.FAIL)
+            if phase is runner.FitPhase.REPLAY
+            else result
+        )
+
+    result = core(plan_type(fit_fold=fit_fold), _StageGuard())
+
+    assert result.fit_ledger.total_count == 84
+    assert result.replay is not None
+    assert result.replay.verdict is GateVerdict.UNKNOWN
+    assert result.selection.status == "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+    assert result.selection.reason_codes == ("REPLAY_UNKNOWN",)
+    assert len(calls) == 84
+
+
+@dataclass(frozen=True, slots=True)
+class _SyntheticOperation:
+    core: Callable[..., runner.DevelopmentRunBundle]
+    plan: object
+    calls: list[tuple[runner.FitPhase, str, str]]
+
+    def run(
+        self,
+        guard: object,
+        *,
+        defer_final_checkpoints: bool = False,
+    ) -> runner.DevelopmentRunBundle:
+        return self.core(
+            self.plan,
+            guard,
+            defer_final_checkpoints=defer_final_checkpoints,
+        )
+
+
 def _synthetic_plan(
     *,
     one_qualified_trial: str | None = "STAT-A1",
@@ -210,7 +351,8 @@ def _synthetic_plan(
     changed_replay_evidence: str | None = None,
     changed_replay_predictions: bool = False,
     invalid_typed_verdict: bool = False,
-) -> tuple[object, list[tuple[runner.FitPhase, str, str]]]:
+) -> _SyntheticOperation:
+    core, plan_type = _isolated_factory_engine()
     calls: list[tuple[runner.FitPhase, str, str]] = []
 
     def fit_fold(phase: runner.FitPhase, trial_id: str, fold_id: str) -> object:
@@ -227,12 +369,11 @@ def _synthetic_plan(
             invalid_typed_verdict=invalid_typed_verdict,
         )
 
-    return runner._DevelopmentExecutionPlan(fit_fold=fit_fold), calls
+    return _SyntheticOperation(core=core, plan=plan_type(fit_fold=fit_fold), calls=calls)
 
 
 def synthetic_run(*, one_qualified_trial: str | None = "STAT-A1") -> runner.DevelopmentRunBundle:
-    plan, _ = _synthetic_plan(one_qualified_trial=one_qualified_trial)
-    return runner._run_development_core(plan, _StageGuard())
+    return _synthetic_plan(one_qualified_trial=one_qualified_trial).run(_StageGuard())
 
 
 @contextmanager
@@ -261,14 +402,14 @@ def _count_forbidden_calls():
 
 
 def _invoke_same_plan_concurrently(
-    plan: object, *, callers: int
+    operation: _SyntheticOperation, *, callers: int
 ) -> tuple[tuple[str, int, int, tuple[str, ...]], ...]:
     barrier = threading.Barrier(callers)
 
     def invoke() -> tuple[str, int, int, tuple[str, ...]]:
         barrier.wait()
         try:
-            result = runner._run_development_core(plan, _StageGuard())
+            result = operation.run(_StageGuard())
         except runner.DevelopmentRunError as error:
             return "FAIL", 0, os.getpid(), error.reason_codes
         return "PASS", result.fit_ledger.total_count, os.getpid(), ()
@@ -278,10 +419,10 @@ def _invoke_same_plan_concurrently(
 
 
 def test_concurrent_synthetic_plan_has_one_ledger_and_at_most_84_fits() -> None:
-    plan, calls = _synthetic_plan()
+    operation = _synthetic_plan()
 
     with _count_forbidden_calls() as forbidden_calls:
-        outcomes = _invoke_same_plan_concurrently(plan, callers=8)
+        outcomes = _invoke_same_plan_concurrently(operation, callers=8)
 
     passes = [outcome for outcome in outcomes if outcome[0] == "PASS"]
     failures = [outcome for outcome in outcomes if outcome[0] == "FAIL"]
@@ -289,7 +430,7 @@ def test_concurrent_synthetic_plan_has_one_ledger_and_at_most_84_fits() -> None:
     assert passes[0][1] == 84
     assert len(failures) == 7
     assert {outcome[3] for outcome in failures} == {("RUN_ALREADY_CONSUMED",)}
-    assert len(calls) == 84
+    assert len(operation.calls) == 84
     assert max(outcome[1] for outcome in outcomes) <= 84
     assert {outcome[2] for outcome in outcomes} == {os.getpid()}
     assert forbidden_calls == dict.fromkeys(_FORBIDDEN_BEHAVIORAL_CALLS, 0)
@@ -382,19 +523,19 @@ def test_synthetic_terminal_matrix_has_no_fallback_or_85th_fit(
     expected_selection: str,
     expected_fits: int,
 ) -> None:
-    plan, calls = _synthetic_plan(
+    operation = _synthetic_plan(
         one_qualified_trial=one_qualified_trial,
         contract_invalid_trial=contract_invalid_trial,
         changed_replay_digest=changed_replay_digest,
     )
 
     with _count_forbidden_calls() as forbidden_calls:
-        result = runner._run_development_core(plan, _StageGuard())
+        result = operation.run(_StageGuard())
 
     assert result.public_result.status == expected_status
     assert result.selection.status == expected_selection
     assert result.fit_ledger.total_count == expected_fits
-    assert len(calls) == expected_fits
+    assert len(operation.calls) == expected_fits
     assert expected_fits <= 84
     assert result.fit_ledger.final_count == 0
     assert forbidden_calls == dict.fromkeys(_FORBIDDEN_BEHAVIORAL_CALLS, 0)
@@ -402,7 +543,7 @@ def test_synthetic_terminal_matrix_has_no_fallback_or_85th_fit(
         assert result.selection.reason_codes == ("QUALIFICATION_UNKNOWN",)
     if result.replay is not None:
         replay_trial = result.replay.trial_id
-        assert {call[1] for call in calls[80:]} == {replay_trial}
+        assert {call[1] for call in operation.calls[80:]} == {replay_trial}
 
 
 def test_synthetic_harness_has_no_formal_authority_or_natural_output_surface() -> None:
@@ -476,22 +617,22 @@ def test_core_uses_existing_rank_one_and_same_session_for_replay() -> None:
 
 
 def test_core_changed_replay_digest_fails_closed_without_another_target() -> None:
-    plan, calls = _synthetic_plan(changed_replay_digest=True)
+    operation = _synthetic_plan(changed_replay_digest=True)
 
-    result = runner._run_development_core(plan, _StageGuard())
+    result = operation.run(_StageGuard())
 
     assert result.fit_ledger.total_count == 84
     assert result.selection.final_winner is None
     assert result.selection.reason_codes == ("REPLAY_DIGEST_MISMATCH",)
-    assert calls[-4:] == [
+    assert operation.calls[-4:] == [
         (runner.FitPhase.REPLAY, "STAT-A1", fold_id) for fold_id in runner.EXACT_FOLD_IDS
     ]
 
 
 def test_core_changed_replay_predictions_cannot_reuse_selection_digest() -> None:
-    plan, _ = _synthetic_plan(changed_replay_predictions=True)
+    operation = _synthetic_plan(changed_replay_predictions=True)
 
-    result = runner._run_development_core(plan, _StageGuard())
+    result = operation.run(_StageGuard())
 
     assert result.selection.final_winner is None
     assert result.selection.reason_codes == ("REPLAY_DIGEST_MISMATCH",)
@@ -501,60 +642,62 @@ def test_core_changed_replay_predictions_cannot_reuse_selection_digest() -> None
 def test_core_changed_typed_replay_evidence_cannot_reuse_declared_digests(
     mutation: str,
 ) -> None:
-    plan, _ = _synthetic_plan(changed_replay_evidence=mutation)
+    operation = _synthetic_plan(changed_replay_evidence=mutation)
 
-    result = runner._run_development_core(plan, _StageGuard())
+    result = operation.run(_StageGuard())
 
     assert result.selection.final_winner is None
     assert result.selection.reason_codes == ("REPLAY_DIGEST_MISMATCH",)
 
 
 def test_core_poor_quality_trial_still_completes_all_four_folds() -> None:
-    plan, calls = _synthetic_plan(one_qualified_trial=None)
+    operation = _synthetic_plan(one_qualified_trial=None)
 
-    result = runner._run_development_core(plan, _StageGuard())
+    result = operation.run(_StageGuard())
 
     assert result.fit_ledger.selection_count == 80
     assert result.fit_ledger.replay_count == 0
     assert result.selection.status == "NO_ELIGIBLE_CANDIDATE"
     for trial_id in runner.EXACT_TRIAL_IDS:
-        assert [call[2] for call in calls if call[1] == trial_id] == list(runner.EXACT_FOLD_IDS)
+        assert [call[2] for call in operation.calls if call[1] == trial_id] == list(
+            runner.EXACT_FOLD_IDS
+        )
 
 
 def test_core_contract_invalid_trial_gets_no_replacement_fit() -> None:
-    plan, calls = _synthetic_plan(
+    operation = _synthetic_plan(
         one_qualified_trial=None,
         contract_invalid_trial="STAT-A1",
     )
 
-    result = runner._run_development_core(plan, _StageGuard())
+    result = operation.run(_StageGuard())
 
     assert result.fit_ledger.selection_count == 80
     assert result.fit_ledger.replay_count == 0
-    assert len([call for call in calls if call[1] == "STAT-A1"]) == 4
+    assert len([call for call in operation.calls if call[1] == "STAT-A1"]) == 4
     assert result.selection.final_winner is None
 
 
 def test_core_rejects_non_enum_fold_verdict_without_replacement() -> None:
-    plan, calls = _synthetic_plan(invalid_typed_verdict=True)
+    operation = _synthetic_plan(invalid_typed_verdict=True)
 
     with pytest.raises(runner.DevelopmentRunError, match="^FOLD_RESULT_INVALID$"):
-        runner._run_development_core(plan, _StageGuard())
+        operation.run(_StageGuard())
 
-    assert calls == [(runner.FitPhase.SELECTION, "CTRL-01", "F1")]
+    assert operation.calls == [(runner.FitPhase.SELECTION, "CTRL-01", "F1")]
 
 
 def test_runtime_failure_stops_before_the_next_fit_and_checkpoints_exit() -> None:
-    plan, calls = _synthetic_plan()
+    operation = _synthetic_plan()
     guard = _StageGuard(
         lambda stages: stages[-1] is RuntimeStage.PRE_FIT
         and stages.count(RuntimeStage.PRE_FIT) == 2
     )
 
     with pytest.raises(runner.DevelopmentRunError, match="^COMPUTE_MEMORY_EXCEEDED$"):
-        runner._run_development_core(plan, guard)
+        operation.run(guard)
 
-    assert calls == [(runner.FitPhase.SELECTION, "CTRL-01", "F1")]
+    assert operation.calls == [(runner.FitPhase.SELECTION, "CTRL-01", "F1")]
     assert guard.stages == [
         RuntimeStage.PRE_LOAD,
         RuntimeStage.PRE_FIT,
@@ -566,12 +709,12 @@ def test_runtime_failure_stops_before_the_next_fit_and_checkpoints_exit() -> Non
 
 
 def test_success_checkpoints_every_started_fit_before_seal_and_exit() -> None:
-    plan, calls = _synthetic_plan()
+    operation = _synthetic_plan()
     guard = _StageGuard()
 
-    result = runner._run_development_core(plan, guard)
+    result = operation.run(guard)
 
-    assert len(calls) == 84
+    assert len(operation.calls) == 84
     assert guard.stages[0] is RuntimeStage.PRE_LOAD
     assert guard.stages[-2:] == [RuntimeStage.PRE_SEAL, RuntimeStage.EXIT]
     assert guard.stages.count(RuntimeStage.PRE_FIT) == 84
@@ -583,31 +726,31 @@ def test_success_checkpoints_every_started_fit_before_seal_and_exit() -> None:
 def test_terminal_seal_or_exit_checkpoint_is_not_retried(
     failed_stage: RuntimeStage,
 ) -> None:
-    plan, _ = _synthetic_plan()
+    operation = _synthetic_plan()
     guard = _StageGuard(lambda stages: stages[-1] is failed_stage)
 
     with pytest.raises(runner.DevelopmentRunError, match="^COMPUTE_MEMORY_EXCEEDED$"):
-        runner._run_development_core(plan, guard)
+        operation.run(guard)
 
     assert guard.stages.count(failed_stage) == 1
 
 
 def test_second_invocation_with_same_plan_is_terminal_without_another_fit() -> None:
-    plan, calls = _synthetic_plan()
-    first = runner._run_development_core(plan, _StageGuard())
-    first_call_count = len(calls)
+    operation = _synthetic_plan()
+    first = operation.run(_StageGuard())
+    first_call_count = len(operation.calls)
 
     with pytest.raises(runner.DevelopmentRunError, match="^RUN_ALREADY_CONSUMED$"):
-        runner._run_development_core(plan, _StageGuard())
+        operation.run(_StageGuard())
 
     assert first.fit_ledger.total_count == 84
-    assert len(calls) == first_call_count
+    assert len(operation.calls) == first_call_count
 
 
 def test_runner_has_no_public_replay_target_or_reconstructed_session_surface() -> None:
-    plan, _ = _synthetic_plan()
+    operation = _synthetic_plan()
 
-    assert tuple(plan.__dataclass_fields__) == ("fit_fold", "_state")
+    assert tuple(operation.plan.__dataclass_fields__) == ("fit_fold", "_state")
     assert not hasattr(runner, "replay_provisional")
     assert not hasattr(runner, "run_selection")
     assert not hasattr(runner, "FormalRunContext")
@@ -624,14 +767,6 @@ def test_private_rows_and_predictions_never_enter_closed_public_result() -> None
     assert "F1-0000" in repr(result.private_bundle)
 
 
-def test_internal_formal_inputs_have_no_dependency_injection_surface() -> None:
-    assert tuple(runner._FormalDevelopmentInputs.__dataclass_fields__) == (
-        "repository_root",
-        "expected_freeze_head",
-        "archive_path",
-        "archive_sha256",
-        "private_container_path",
-        "search_receipt_sha256",
-        "protocol_sha256",
-    )
+def test_internal_formal_inputs_have_no_module_reachable_dependency_injection_surface() -> None:
+    assert not hasattr(runner, "_FormalDevelopmentInputs")
     assert not hasattr(runner, "run_formal_development")

@@ -17,6 +17,9 @@ import mdcp.temporal.run_evidence as run_evidence
 import mdcp.temporal.runner as runner
 import mdcp.temporal.search_identity as search_identity
 from mdcp.temporal.run_evidence import FormalDevelopmentOutcome
+from mdcp.temporal.trials import build_estimator
+from mdcp.workload.dataset import load_uci_development_archive
+from mdcp.workload.splits import split_development_rows
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _TRUSTED_MODULES = (cli, run_evidence, runner, search_identity)
@@ -87,20 +90,12 @@ _EXPECTED_OWNED_SURFACES = {
         "FitLedger",
         "FitPhase",
         "FitRecord",
-        "_DevelopmentExecutionPlan",
         "_DevelopmentFoldResult",
-        "_DevelopmentRunState",
-        "_FormalDevelopmentInputs",
         "_ProcessedFold",
-        "_build_formal_execution_plan",
-        "_checkpoint",
         "_closed_metrics",
         "_evaluate_trial",
-        "_execute_fit",
-        "_fit_formal_fold",
         "_fold_evidence_sha256",
         "_formal_groups",
-        "_load_formal_execution_state",
         "_prediction_material",
         "_private_fold_evidence",
         "_process_fold",
@@ -109,7 +104,6 @@ _EXPECTED_OWNED_SURFACES = {
         "_qualification_digest",
         "_qualification_evidence",
         "_replay_digest",
-        "_run_development_core",
         "_valid_fold_result",
         "_valid_sha256",
     ),
@@ -163,6 +157,24 @@ _FORBIDDEN_NAMED_AUTHORITIES = frozenset(
 )
 _MAPPING_PROXY_TYPE = type(MappingProxyType({}))
 _EMPTY_DATACLASS_METADATA = dataclass_field().metadata
+_FORBIDDEN_RUNNER_AUTHORITIES = frozenset(
+    {
+        "_FormalDevelopmentInputs",
+        "_DevelopmentRunState",
+        "_DevelopmentExecutionPlan",
+        "_checkpoint",
+        "_execute_fit",
+        "_run_development_core",
+        "_build_formal_execution_plan",
+        "_load_formal_execution_state",
+        "_fit_formal_fold",
+    }
+)
+_FORBIDDEN_REACHABLE_CAPABILITIES = (
+    load_uci_development_archive,
+    split_development_rows,
+    build_estimator,
+)
 
 
 def _native_type_metadata(value: type, name: str) -> object:
@@ -192,6 +204,30 @@ def _owned_surface(module: object) -> tuple[str, ...]:
             == module_name
         )
     )
+
+
+def _module_level_invoked_parameters(source: str) -> tuple[tuple[str, str], ...]:
+    tree = ast.parse(source)
+    invoked: list[tuple[str, str]] = []
+    for function in (
+        node for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ):
+        parameters = {
+            argument.arg
+            for argument in (
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            )
+        }
+        invoked.extend(
+            (function.name, node.func.id)
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in parameters
+        )
+    return tuple(invoked)
 
 
 def _native_named_descriptor(value: object, name: str) -> object | None:
@@ -423,6 +459,57 @@ def test_post_import_callable_and_type_surface_is_exact() -> None:
     assert {
         module.__name__: _owned_surface(module) for module in _TRUSTED_MODULES
     } == _EXPECTED_OWNED_SURFACES
+
+
+def test_runner_exposes_no_module_reachable_execution_authority() -> None:
+    assert _FORBIDDEN_RUNNER_AUTHORITIES.isdisjoint(vars(runner))
+
+
+def test_named_reachability_rejects_callback_loader_and_fit_capabilities() -> None:
+    reachable = _named_reachability(
+        (
+            runner,
+            run_evidence.write_synthetic_bundle_no_clobber,
+            run_evidence.execute_authorized_formal_development,
+        )
+    )
+    reachable_names = {name for value in reachable if (name := _named_identity(value)) is not None}
+    assert _FORBIDDEN_RUNNER_AUTHORITIES.isdisjoint(reachable_names)
+    reachable_identities = {id(value) for value in reachable}
+    assert all(
+        id(capability) not in reachable_identities
+        for capability in _FORBIDDEN_REACHABLE_CAPABILITIES
+    )
+
+
+@pytest.mark.parametrize("sink", ("alias", "default", "class", "registry"))
+def test_reachability_proof_detects_actual_fit_capability_through_named_sinks(
+    sink: str,
+) -> None:
+    def holder(default: object = build_estimator) -> object:
+        return default
+
+    class ReturnedState:
+        fit = build_estimator
+
+    roots = {
+        "alias": ({"natural_fit": build_estimator},),
+        "default": (holder,),
+        "class": (ReturnedState(),),
+        "registry": ({"registry": {"fit": build_estimator}},),
+    }[sink]
+    assert build_estimator in _named_reachability(roots)
+
+
+def test_runner_has_no_module_level_callback_invocation() -> None:
+    source = (REPOSITORY_ROOT / "src/mdcp/temporal/runner.py").read_text(encoding="utf-8")
+    assert _module_level_invoked_parameters(source) == ()
+
+
+def test_callback_invocation_proof_rejects_spelling_independent_mutation() -> None:
+    source = (REPOSITORY_ROOT / "src/mdcp/temporal/runner.py").read_text(encoding="utf-8")
+    mutated = source + "\ndef transformed(action):\n    return action()\n"
+    assert _module_level_invoked_parameters(mutated) == (("transformed", "action"),)
 
 
 def test_named_reachability_has_no_intermediate_or_raw_publication_authority() -> None:

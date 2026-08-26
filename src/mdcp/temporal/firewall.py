@@ -390,15 +390,11 @@ _FORMAL_IMPORT_ALLOWLIST = {
     "src/mdcp/temporal/runner.py": frozenset(
         {
             ("__future__", "annotations"),
-            ("collections.abc", "Callable"),
-            ("contextlib", "suppress"),
             ("dataclasses", "asdict"),
             ("dataclasses", "dataclass"),
             ("dataclasses", "field"),
-            ("datetime", "datetime"),
             ("enum", "StrEnum"),
             ("mdcp.common.canonical", "canonicalize_json"),
-            ("mdcp.common.canonical", "parse_json_bytes"),
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.common.enums", "GateVerdict"),
             ("mdcp.temporal.completeness", "AdapterOutcome"),
@@ -415,17 +411,12 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.evaluation", "evaluate_pooled"),
             ("mdcp.temporal.evaluation", "qualify_trial"),
             ("mdcp.temporal.folds", "SourceRowIdentity"),
-            ("mdcp.temporal.folds", "load_fold_specs"),
-            ("mdcp.temporal.folds", "materialize_folds"),
             ("mdcp.temporal.run_evidence", "ClosedMetrics"),
             ("mdcp.temporal.run_evidence", "PrivateFoldEvidence"),
             ("mdcp.temporal.run_evidence", "PrivateRunBundle"),
             ("mdcp.temporal.run_evidence", "PublicDevelopmentResult"),
             ("mdcp.temporal.run_evidence", "PublicFoldReceipt"),
             ("mdcp.temporal.run_evidence", "PublicTrialReceipt"),
-            ("mdcp.temporal.runtime_guards", "RuntimeGuard"),
-            ("mdcp.temporal.runtime_guards", "RuntimeObservation"),
-            ("mdcp.temporal.runtime_guards", "RuntimeStage"),
             ("mdcp.temporal.selection", "ProvisionalWinner"),
             ("mdcp.temporal.selection", "ReplayFoldDigests"),
             ("mdcp.temporal.selection", "ReplayResult"),
@@ -433,15 +424,6 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.selection", "SelectionDecision"),
             ("mdcp.temporal.selection", "finalize_selection"),
             ("mdcp.temporal.trials", "canonical_trial_identity"),
-            ("mdcp.temporal.trials", "_feature_names"),
-            ("mdcp.temporal.trials", "_materialize_features"),
-            ("mdcp.temporal.trials", "build_estimator"),
-            ("mdcp.temporal.trials", "load_trial_specs"),
-            ("mdcp.temporal.trials", "training_rows_for_trial"),
-            ("pathlib", "Path"),
-            ("threading", "Lock"),
-            ("mdcp.workload.dataset", "load_uci_development_archive"),
-            ("mdcp.workload.splits", "split_development_rows"),
         }
     ),
     "src/mdcp/temporal/cli.py": frozenset(
@@ -491,25 +473,55 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("ctypes", "wintypes"),
             ("dataclasses", "asdict"),
             ("dataclasses", "dataclass"),
+            ("dataclasses", "field"),
+            ("contextlib", "suppress"),
+            ("datetime", "datetime"),
             ("json", None),
             ("math", None),
             ("mdcp.common.canonical", "canonicalize_json"),
             ("mdcp.common.canonical", "parse_json_bytes"),
             ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.temporal.completeness", "AdapterOutcome"),
+            ("mdcp.temporal.completeness", "LabelOutcome"),
+            ("mdcp.temporal.completeness", "PredictionOutcome"),
+            ("mdcp.temporal.evaluation", "qualify_trial"),
             ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("mdcp.temporal.folds", "load_fold_specs"),
+            ("mdcp.temporal.folds", "materialize_folds"),
             ("mdcp.temporal.runner", "DevelopmentRunBundle"),
+            ("mdcp.temporal.runner", "DevelopmentRunError"),
             ("mdcp.temporal.runner", "EXACT_FOLD_IDS"),
             ("mdcp.temporal.runner", "EXACT_TRIAL_IDS"),
+            ("mdcp.temporal.runner", "FitLedger"),
             ("mdcp.temporal.runner", "FitPhase"),
-            ("mdcp.temporal.runner", "_FormalDevelopmentInputs"),
-            ("mdcp.temporal.runner", "_build_formal_execution_plan"),
-            ("mdcp.temporal.runner", "_checkpoint"),
-            ("mdcp.temporal.runner", "_run_development_core"),
+            ("mdcp.temporal.runner", "_DevelopmentFoldResult"),
+            ("mdcp.temporal.runner", "_evaluate_trial"),
+            ("mdcp.temporal.runner", "_formal_groups"),
+            ("mdcp.temporal.runner", "_private_fold_evidence"),
+            ("mdcp.temporal.runner", "_process_fold"),
+            ("mdcp.temporal.runner", "_public_result"),
+            ("mdcp.temporal.runner", "_replay_digest"),
+            ("mdcp.temporal.runner", "_valid_fold_result"),
+            ("mdcp.temporal.runtime_guards", "RuntimeObservation"),
             ("mdcp.temporal.runtime_guards", "RuntimeStage"),
             ("mdcp.temporal.runtime_guards", "build_production_runtime_guard"),
             ("mdcp.temporal.search_identity", "FormalRunAuthorization"),
             ("mdcp.temporal.search_identity", "SearchReceipt"),
             ("mdcp.temporal.search_identity", "verify_search_freeze"),
+            ("mdcp.temporal.selection", "ReplayFoldDigests"),
+            ("mdcp.temporal.selection", "ReplayResult"),
+            ("mdcp.temporal.selection", "ReplaySelectionSession"),
+            ("mdcp.temporal.selection", "SelectionDecision"),
+            ("mdcp.temporal.selection", "finalize_selection"),
+            ("mdcp.temporal.trials", "_feature_names"),
+            ("mdcp.temporal.trials", "_materialize_features"),
+            ("mdcp.temporal.trials", "build_estimator"),
+            ("mdcp.temporal.trials", "canonical_trial_identity"),
+            ("mdcp.temporal.trials", "load_trial_specs"),
+            ("mdcp.temporal.trials", "training_rows_for_trial"),
+            ("mdcp.workload.dataset", "load_uci_development_archive"),
+            ("mdcp.workload.splits", "split_development_rows"),
             ("os", None),
             ("pathlib", "Path"),
             ("pathlib", "PurePosixPath"),
@@ -794,11 +806,9 @@ _ALLOWED_FILE_ACCESS_CALLS = {
     "src/mdcp/temporal/cli.py": frozenset(
         {("main", "write", None), ("_emit_check", "write", None)}
     ),
-    "src/mdcp/temporal/runner.py": frozenset(
-        {("_build_formal_execution_plan", "read_bytes", "name:protocol_path")}
-    ),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
+            ("_build_formal_execution_plan", "read_bytes", "name:protocol_path"),
             ("_preflight_windows_destination", "lstat", "name:checked_destination"),
             ("_read_private_container_posix", "open", "name:os"),
             (
@@ -896,7 +906,7 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
     "src/mdcp/temporal/runner.py": (
-        "2cbfb1018957fcc213ea5d89915e7d4209343fbb2485b7f15c20c1125eab3ce0"
+        "39b58f847526c88f0f11d87435514da6b7d1d8317f70696e647081cd415afe59"
     ),
 }
 _ALLOWED_PRIVATE_ATTRIBUTES = {
@@ -914,10 +924,8 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
             "_core",
         }
     ),
-    "src/mdcp/temporal/runner.py": frozenset(
-        {"_provisional", "_records", "_selection_bound", "_state"}
-    ),
-    "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths"}),
+    "src/mdcp/temporal/runner.py": frozenset({"_provisional", "_records", "_selection_bound"}),
+    "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths", "_state"}),
 }
 _ALLOWED_SUBPROCESS_CALLS = {
     "src/mdcp/temporal/runtime_guards.py": {

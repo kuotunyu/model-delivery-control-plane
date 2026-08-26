@@ -11,6 +11,7 @@ import stat
 import unicodedata
 from ctypes import wintypes
 from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Annotated, Literal
@@ -1066,6 +1067,7 @@ def verify_private_container(
 
 _MUTATION_BINDINGS = (
     dataclass,
+    dataclass_field,
     asdict,
     Lock,
     Path,
@@ -1126,6 +1128,7 @@ def _make_evidence_mutation_surface():
     """Bind the complete mutation authority inside one consumed lexical scope."""
     (
         closure_dataclass,
+        closure_field,
         closure_asdict,
         ClosureLock,
         ClosurePath,
@@ -1204,6 +1207,428 @@ def _make_evidence_mutation_surface():
     windll = ctypes.windll if platform == "nt" else None
     attempt_lock = ClosureLock()
     attempt_states: dict[str, str] = {}
+
+    @closure_dataclass(frozen=True, slots=True)
+    class FormalInputs:
+        repository_root: ClosurePath
+        expected_freeze_head: str
+        archive_path: ClosurePath
+        archive_sha256: str
+        search_receipt_sha256: str
+        protocol_sha256: str
+
+    @closure_dataclass(frozen=True, slots=True)
+    class _DevelopmentExecutionPlan:
+        fit_fold: object
+        _state: dict[str, object] = closure_field(default_factory=dict, init=False)
+
+        def __post_init__(self) -> None:
+            self._state.update({"lock": ClosureLock(), "consumed": False})
+
+    def _checkpoint(guard: object, stage: object) -> None:
+        from mdcp.temporal.runner import DevelopmentRunError as CheckpointRunError
+        from mdcp.temporal.runtime_guards import RuntimeObservation
+
+        try:
+            observation = guard.checkpoint(stage)
+        except Exception as error:
+            raise CheckpointRunError("RUNTIME_GUARD_INVALID") from error
+        if type(observation) is not RuntimeObservation or observation.verdict not in (
+            "PASS",
+            "UNKNOWN",
+        ):
+            raise CheckpointRunError("RUNTIME_GUARD_INVALID")
+        if observation.verdict != "PASS":
+            if type(observation.reason_codes) is not tuple or not observation.reason_codes:
+                raise CheckpointRunError("RUNTIME_GUARD_INVALID")
+            raise CheckpointRunError(*observation.reason_codes)
+
+    def _execute_fit(
+        plan: _DevelopmentExecutionPlan,
+        guard: object,
+        ledger: object,
+        phase: object,
+        trial_id: str,
+        fold_id: str,
+    ) -> object:
+        from mdcp.temporal.runner import (
+            DevelopmentRunError as FitRunError,
+        )
+        from mdcp.temporal.runner import (
+            FitPhase as ExecutionFitPhase,
+        )
+        from mdcp.temporal.runner import (
+            _valid_fold_result,
+        )
+        from mdcp.temporal.runtime_guards import RuntimeStage as ExecutionRuntimeStage
+
+        _checkpoint(guard, ExecutionRuntimeStage.PRE_FIT)
+        if phase is ExecutionFitPhase.SELECTION:
+            ledger.record_selection(trial_id, fold_id)
+        else:
+            ledger.record_replay(trial_id, fold_id)
+        callback_error: Exception | None = None
+        result: object = None
+        try:
+            result = plan.fit_fold(phase, trial_id, fold_id)
+        except Exception as error:
+            callback_error = error
+        _checkpoint(guard, ExecutionRuntimeStage.POST_FIT)
+        if callback_error is not None:
+            raise FitRunError("FOLD_EXECUTION_FAILED") from callback_error
+        if not _valid_fold_result(result, trial_id, fold_id):
+            raise FitRunError("FOLD_RESULT_INVALID")
+        return result
+
+    def _run_development_core(
+        plan: _DevelopmentExecutionPlan,
+        guard: object,
+        *,
+        defer_final_checkpoints: bool = False,
+    ) -> object:
+        from contextlib import suppress
+
+        from mdcp.common.enums import GateVerdict as CoreGateVerdict
+        from mdcp.temporal.runner import (
+            EXACT_FOLD_IDS as CORE_FOLD_IDS,
+        )
+        from mdcp.temporal.runner import (
+            EXACT_TRIAL_IDS as CORE_TRIAL_IDS,
+        )
+        from mdcp.temporal.runner import (
+            DevelopmentRunBundle as CoreRunBundle,
+        )
+        from mdcp.temporal.runner import (
+            DevelopmentRunError as CoreRunError,
+        )
+        from mdcp.temporal.runner import (
+            FitLedger,
+            _evaluate_trial,
+            _private_fold_evidence,
+            _process_fold,
+            _public_result,
+            _replay_digest,
+        )
+        from mdcp.temporal.runner import (
+            FitPhase as CoreFitPhase,
+        )
+        from mdcp.temporal.runtime_guards import RuntimeStage as CoreRuntimeStage
+        from mdcp.temporal.selection import (
+            ReplayFoldDigests,
+            ReplayResult,
+            ReplaySelectionSession,
+            SelectionDecision,
+            finalize_selection,
+        )
+
+        if type(plan) is not _DevelopmentExecutionPlan or not callable(plan.fit_fold):
+            raise CoreRunError("DEVELOPMENT_PLAN_INVALID")
+        state = plan._state
+        lock = state.get("lock")
+        if lock is None:
+            raise CoreRunError("DEVELOPMENT_PLAN_INVALID")
+        with lock:
+            if state.get("consumed") is not False:
+                raise CoreRunError("RUN_ALREADY_CONSUMED")
+            state["consumed"] = True
+
+        pre_seal_checked = False
+        exit_checked = False
+        try:
+            _checkpoint(guard, CoreRuntimeStage.PRE_LOAD)
+            ledger = FitLedger()
+            private_files: list[PrivateFoldEvidence] = []
+            baseline: dict[str, tuple[object, ...]] = {}
+            reports: list[object] = []
+            qualifications: list[object] = []
+
+            for trial_id in CORE_TRIAL_IDS:
+                processed: list[object] = []
+                for fold_id in CORE_FOLD_IDS:
+                    result = _execute_fit(
+                        plan,
+                        guard,
+                        ledger,
+                        CoreFitPhase.SELECTION,
+                        trial_id,
+                        fold_id,
+                    )
+                    private_files.append(
+                        _private_fold_evidence(
+                            len(private_files),
+                            CoreFitPhase.SELECTION,
+                            result,
+                        )
+                    )
+                    if trial_id == CORE_TRIAL_IDS[0]:
+                        baseline[fold_id] = result.predictions
+                    stable = baseline.get(fold_id)
+                    if stable is None:
+                        raise CoreRunError("STABLE_BASELINE_MISSING")
+                    processed.append(_process_fold(result, stable))
+                fold_tuple = tuple(processed)
+                report, context = _evaluate_trial(trial_id, fold_tuple)
+                reports.append(report)
+                if trial_id != CORE_TRIAL_IDS[0]:
+                    from mdcp.temporal.evaluation import qualify_trial
+
+                    qualifications.append(qualify_trial(report, context))
+
+            qualification_tuple = tuple(qualifications)
+            session = ReplaySelectionSession(qualification_tuple)
+            provisional = ledger.bind_session(session)
+            replay: ReplayResult | None = None
+            if provisional is None:
+                selection = finalize_selection(session, None, None)
+                if any(result.verdict.value == "UNKNOWN" for result in qualification_tuple):
+                    selection = SelectionDecision(
+                        status="UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+                        provisional_winner=None,
+                        final_winner=None,
+                        retry_allowed=False,
+                        reason_codes=("QUALIFICATION_UNKNOWN",),
+                    )
+            else:
+                replay_digests: list[ReplayFoldDigests] = []
+                for fold_id in CORE_FOLD_IDS:
+                    result = _execute_fit(
+                        plan,
+                        guard,
+                        ledger,
+                        CoreFitPhase.REPLAY,
+                        provisional.trial_id,
+                        fold_id,
+                    )
+                    private_files.append(
+                        _private_fold_evidence(
+                            len(private_files),
+                            CoreFitPhase.REPLAY,
+                            result,
+                        )
+                    )
+                    replay_digests.append(_replay_digest(result, baseline[fold_id]))
+                replay = ReplayResult(
+                    trial_id=provisional.trial_id,
+                    family_id=provisional.family_id,
+                    ranking_key=provisional.ranking_key,
+                    qualification_inventory_sha256=provisional.qualification_inventory_sha256,
+                    session_sha256=session.session_sha256,
+                    verdict=(
+                        CoreGateVerdict.PASS
+                        if all(digest.verdict is CoreGateVerdict.PASS for digest in replay_digests)
+                        else CoreGateVerdict.UNKNOWN
+                    ),
+                    digests=tuple(replay_digests),
+                )
+                selection = finalize_selection(session, provisional, replay)
+
+            private_bundle = PrivateRunBundle(
+                evidence_class="synthetic_test",
+                files=tuple(
+                    sorted(private_files, key=lambda item: item.logical_path.encode("ascii"))
+                ),
+            )
+            public_result = _public_result(
+                tuple(reports),
+                qualification_tuple,
+                selection,
+                ledger,
+            )
+            if not defer_final_checkpoints:
+                pre_seal_checked = True
+                _checkpoint(guard, CoreRuntimeStage.PRE_SEAL)
+                exit_checked = True
+                _checkpoint(guard, CoreRuntimeStage.EXIT)
+            return CoreRunBundle(
+                public_result=public_result,
+                private_bundle=private_bundle,
+                fit_ledger=ledger,
+                qualifications=qualification_tuple,
+                replay=replay,
+                selection=selection,
+            )
+        except CoreRunError as original:
+            if not defer_final_checkpoints and not pre_seal_checked:
+                with suppress(CoreRunError):
+                    _checkpoint(guard, CoreRuntimeStage.PRE_SEAL)
+            if not defer_final_checkpoints and not exit_checked:
+                with suppress(CoreRunError):
+                    _checkpoint(guard, CoreRuntimeStage.EXIT)
+            raise original
+        except Exception as error:
+            if not defer_final_checkpoints and not pre_seal_checked:
+                with suppress(CoreRunError):
+                    _checkpoint(guard, CoreRuntimeStage.PRE_SEAL)
+            if not defer_final_checkpoints and not exit_checked:
+                with suppress(CoreRunError):
+                    _checkpoint(guard, CoreRuntimeStage.EXIT)
+            raise CoreRunError("DEVELOPMENT_RUN_UNKNOWN") from error
+
+    def _build_formal_execution_plan(inputs: FormalInputs) -> _DevelopmentExecutionPlan:
+        from mdcp.temporal.runner import DevelopmentRunError as PlanRunError
+
+        protocol_path = inputs.repository_root / "configs/workload/temporal-development-v2.json"
+        try:
+            protocol_bytes = protocol_path.read_bytes()
+            if closure_sha256_hex(protocol_bytes) != inputs.protocol_sha256:
+                raise PlanRunError("PROTOCOL_IDENTITY_MISMATCH")
+            protocol = closure_parse_json_bytes(protocol_bytes)
+        except PlanRunError:
+            raise
+        except Exception as error:
+            raise PlanRunError("PROTOCOL_INVALID") from error
+        loaded: dict[str, object] = {}
+
+        def fit_fold(phase: object, trial_id: str, fold_id: str) -> object:
+            if not loaded:
+                _load_formal_execution_state(inputs, protocol, loaded)
+            return _fit_formal_fold(loaded, phase, trial_id, fold_id)
+
+        return _DevelopmentExecutionPlan(fit_fold=fit_fold)
+
+    def _load_formal_execution_state(
+        inputs: FormalInputs,
+        protocol: object,
+        state: dict[str, object],
+    ) -> None:
+        from mdcp.temporal.folds import load_fold_specs, materialize_folds
+        from mdcp.temporal.runner import (
+            EXACT_FOLD_IDS as INVENTORY_FOLD_IDS,
+        )
+        from mdcp.temporal.runner import (
+            EXACT_TRIAL_IDS as INVENTORY_TRIAL_IDS,
+        )
+        from mdcp.temporal.runner import (
+            DevelopmentRunError as InventoryRunError,
+        )
+        from mdcp.temporal.trials import load_trial_specs
+        from mdcp.workload.dataset import load_uci_development_archive
+        from mdcp.workload.splits import split_development_rows
+
+        if not isinstance(protocol, dict):
+            raise InventoryRunError("PROTOCOL_INVALID")
+        rows = load_uci_development_archive(inputs.archive_path, inputs.archive_sha256)
+        partitions = split_development_rows(rows)
+        folds = materialize_folds(partitions, load_fold_specs(protocol))
+        trials = load_trial_specs(protocol)
+        if (
+            tuple(fold.spec.fold_id for fold in folds) != INVENTORY_FOLD_IDS
+            or tuple(trial.trial_id for trial in trials) != INVENTORY_TRIAL_IDS
+        ):
+            raise InventoryRunError("FORMAL_INVENTORY_INVALID")
+        state.update(
+            {
+                "folds": {fold.spec.fold_id: fold for fold in folds},
+                "trials": {trial.trial_id: trial for trial in trials},
+            }
+        )
+
+    def _fit_formal_fold(
+        state: dict[str, object],
+        phase: object,
+        trial_id: str,
+        fold_id: str,
+    ) -> object:
+        from datetime import datetime
+
+        from mdcp.common.enums import GateVerdict
+        from mdcp.temporal.completeness import AdapterOutcome, LabelOutcome, PredictionOutcome
+        from mdcp.temporal.runner import (
+            DevelopmentRunError as NaturalFitRunError,
+        )
+        from mdcp.temporal.runner import (
+            _DevelopmentFoldResult,
+            _formal_groups,
+        )
+        from mdcp.temporal.trials import (
+            _feature_names,
+            _materialize_features,
+            build_estimator,
+            canonical_trial_identity,
+            training_rows_for_trial,
+        )
+
+        folds = state["folds"]
+        trials = state["trials"]
+        del phase
+        if not isinstance(folds, dict) or not isinstance(trials, dict):
+            raise NaturalFitRunError("FORMAL_INVENTORY_INVALID")
+        fold = folds[fold_id]
+        trial = trials[trial_id]
+        training = training_rows_for_trial(trial, fold)
+        features = _feature_names(trial)
+        validation = _materialize_features(fold.validation).loc[:, (*features, "cnt")]
+        estimator = build_estimator(trial)
+        estimator.fit(training.loc[:, features], training["cnt"])
+        prediction_values = tuple(
+            float(value) for value in estimator.predict(validation.loc[:, features])
+        )
+        label_values = tuple(float(value) for value in validation["cnt"])
+        adapters = tuple(
+            AdapterOutcome(
+                identity=identity,
+                succeeded=True,
+                calendar_day=datetime.fromisoformat(identity.local_timestamp).date(),
+                groups=_formal_groups(fold.validation.iloc[position]),
+            )
+            for position, identity in enumerate(fold.inventory)
+        )
+        predictions = tuple(
+            PredictionOutcome(identity=identity, succeeded=True, value=value)
+            for identity, value in zip(fold.inventory, prediction_values, strict=True)
+        )
+        labels = tuple(
+            LabelOutcome(identity=identity, succeeded=True, value=value)
+            for identity, value in zip(fold.inventory, label_values, strict=True)
+        )
+        feature_material = [
+            [float(value) for value in row]
+            for row in validation.loc[:, features].itertuples(index=False, name=None)
+        ]
+        training_material = [
+            [float(value) for value in row]
+            for row in training.loc[:, features].itertuples(index=False, name=None)
+        ]
+        declared = {
+            "trial_id": trial_id,
+            "fold_id": fold_id,
+            "preprocessing_state_sha256": closure_sha256_hex(
+                closure_canonicalize_json(
+                    {
+                        "configuration_sha256": canonical_trial_identity(
+                            trial_id
+                        ).configuration_sha256,
+                        "training_features": training_material,
+                        "training_labels": tuple(float(value) for value in training["cnt"]),
+                    }
+                )
+            ),
+            "feature_vector_sha256": closure_sha256_hex(
+                closure_canonicalize_json(feature_material)
+            ),
+            "prediction_vector_sha256": closure_sha256_hex(
+                closure_canonicalize_json(prediction_values)
+            ),
+            "metric_sha256": closure_sha256_hex(
+                closure_canonicalize_json(
+                    {"labels": label_values, "predictions": prediction_values}
+                )
+            ),
+        }
+        return _DevelopmentFoldResult(
+            trial_id=trial_id,
+            fold_id=fold_id,
+            inventory=fold.inventory,
+            adapters=adapters,
+            predictions=predictions,
+            labels=labels,
+            contract_verdict=GateVerdict.PASS,
+            preprocessing_state_sha256=declared["preprocessing_state_sha256"],
+            feature_vector_sha256=declared["feature_vector_sha256"],
+            prediction_vector_sha256=declared["prediction_vector_sha256"],
+            metric_sha256=declared["metric_sha256"],
+            receipt_sha256=closure_sha256_hex(closure_canonicalize_json(declared)),
+        )
 
     @closure_dataclass(frozen=True, slots=True)
     class RetainedAncestor:
@@ -2611,23 +3036,16 @@ def _make_evidence_mutation_surface():
                 del error
 
         try:
-            from mdcp.temporal.runner import (
-                _build_formal_execution_plan,
-                _checkpoint,
-                _FormalDevelopmentInputs,
-                _run_development_core,
-            )
             from mdcp.temporal.runtime_guards import (
                 RuntimeStage,
                 build_production_runtime_guard,
             )
 
-            inputs = _FormalDevelopmentInputs(
+            inputs = FormalInputs(
                 repository_root=repository,
                 expected_freeze_head=request.expected_freeze_head,
                 archive_path=request.archive_path,
                 archive_sha256=receipt.dataset_archive_sha256,
-                private_container_path=request.private_container_path,
                 search_receipt_sha256=receipt_sha256,
                 protocol_sha256=receipt.dataset_contract_sha256,
             )
