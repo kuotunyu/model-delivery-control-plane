@@ -21,7 +21,7 @@ from mdcp.temporal.run_evidence import FormalDevelopmentOutcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _TRUSTED_MODULES = (cli, run_evidence, runner, search_identity)
 _EXPECTED_OWNED_SURFACES = {
-    "mdcp.temporal.cli": ("build_parser", "main"),
+    "mdcp.temporal.cli": ("_emit_check", "build_parser", "main"),
     "mdcp.temporal.run_evidence": (
         "ClosedMetrics",
         "DevelopmentResultCheck",
@@ -115,22 +115,34 @@ _EXPECTED_OWNED_SURFACES = {
     ),
     "mdcp.temporal.search_identity": (
         "FormalRunAuthorization",
+        "SearchEvidenceIndex",
         "SearchFreezeCheck",
         "SearchIdentityInputs",
         "SearchReceipt",
-        "_EvidenceIndex",
+        "SearchSourceCheck",
+        "SearchSourceEntry",
         "_bound_digests_recompute",
         "_fail",
         "_git",
         "_has_exact_allowlisted_additions",
+        "_has_exact_search_source_head_modes",
+        "_has_exact_search_source_modes",
         "_has_regular_public_evidence",
+        "_inventory_sha256",
         "_is_clean_checkout",
         "_is_placeholder_commit",
         "_parse_index",
         "_parse_receipt",
+        "_publish_no_clobber",
         "_read_expected_public_file",
+        "_read_regular_nonlink_file",
+        "_source_fail",
+        "_valid_sha256",
         "build_search_receipt",
+        "build_search_source_inventory",
+        "prepare_search_freeze",
         "verify_search_freeze",
+        "verify_search_source_inventory",
     ),
 }
 _FORBIDDEN_NAMED_AUTHORITIES = frozenset(
@@ -930,6 +942,9 @@ def test_named_public_functions_do_not_combine_raw_natural_content_and_destinati
                 not inspect.isfunction(value)
                 or getattr(value, "__module__", None) != module.__name__
             ):
+                continue
+            if value is search_identity._publish_no_clobber:
+                assert str(inspect.signature(value)) == "(path: 'Path', raw: 'bytes') -> 'None'"
                 continue
             parameters = {name.lower() for name in inspect.signature(value).parameters}
             has_content = any(

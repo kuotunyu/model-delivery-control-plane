@@ -66,6 +66,7 @@ def test_freeze_preflight_rejects_repository_identity_before_evidence_reads(
         return values.get(arguments)
 
     monkeypatch.setattr(search_identity, "_is_clean_checkout", lambda _root: True)
+    monkeypatch.setattr(search_identity, "_has_exact_search_source_head_modes", lambda *_args: True)
     monkeypatch.setattr(search_identity, "_git", fake_git)
     monkeypatch.setattr(
         search_identity,
@@ -473,12 +474,18 @@ def test_non_nt_formal_operation_fails_before_path_access() -> None:
     )
 
 
-def test_task_four_cli_has_exact_command_and_callable_surface() -> None:
+def test_final_cli_has_exact_command_and_callable_surface() -> None:
     parser = cli.build_parser()
     subparsers = next(
         action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
     )
-    assert tuple(subparsers.choices) == ("run-development", "verify-search-freeze")
+    assert tuple(subparsers.choices) == (
+        "run-development",
+        "verify-search-freeze",
+        "prepare-search-freeze",
+        "verify-search-source",
+        "verify-development-result",
+    )
     callables = tuple(
         sorted(
             name
@@ -486,7 +493,7 @@ def test_task_four_cli_has_exact_command_and_callable_surface() -> None:
             if inspect.isfunction(value) and value.__module__ == cli.__name__
         )
     )
-    assert callables == ("build_parser", "main")
+    assert callables == ("_emit_check", "build_parser", "main")
 
 
 def test_formal_operation_closes_terminal_guard_sequence_on_every_exception() -> None:
@@ -665,16 +672,33 @@ def test_cli_output_write_failure_uses_exit_four(monkeypatch: pytest.MonkeyPatch
     assert cli.main(_cli_arguments()) == 4
 
 
-def test_cli_has_no_digest_injection_flags() -> None:
+def test_mutating_cli_commands_have_no_digest_injection_flags() -> None:
     parser = cli.build_parser()
-    options = {option for action in parser._actions for option in action.option_strings}
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            for command in action.choices.values():
-                options.update(
-                    option for child in command._actions for option in child.option_strings
-                )
-    assert not any("sha256" in option or "digest" in option for option in options)
+    subparsers = next(
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    options_by_command = {
+        name: {
+            option
+            for action in command._actions
+            for option in action.option_strings
+            if "sha256" in option or "digest" in option
+        }
+        for name, command in subparsers.choices.items()
+    }
+    assert options_by_command == {
+        "run-development": set(),
+        "verify-search-freeze": set(),
+        "prepare-search-freeze": set(),
+        "verify-search-source": {"--expected-index-sha256"},
+        "verify-development-result": {
+            "--expected-authorization-sha256",
+            "--expected-repository-inventory-sha256",
+            "--expected-seal-record-sha256",
+            "--expected-search-receipt-sha256",
+            "--expected-source-inventory-sha256",
+        },
+    }
 
 
 def _recover(marker: Path, private: Path, terminal: Path) -> run_evidence.FormalSealCheck:
