@@ -51,7 +51,13 @@ _CLOSED_COMMAND_ARGUMENTS = (
     ),
     (
         "prepare-search-freeze",
-        ("prepare-search-freeze", "--created-at-utc", "2026-08-26T00:00:00+00:00"),
+        (
+            "prepare-search-freeze",
+            "--repository-root",
+            "r",
+            "--created-at-utc",
+            "2026-08-26T00:00:00+00:00",
+        ),
     ),
     (
         "verify-search-source",
@@ -210,6 +216,40 @@ def test_verify_search_source_requires_explicit_archive_root() -> None:
                 "a" * 64,
             ]
         )
+
+
+def test_prepare_search_freeze_forwards_exact_root_and_timestamp(
+    monkeypatch: pytest.MonkeyPatch, capfd, tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime
+
+    from mdcp.temporal import cli, search_identity
+
+    root = (tmp_path / "repository").resolve()
+    created_at = datetime(2026, 8, 26, 0, 0, tzinfo=UTC)
+    calls: list[tuple[Path, datetime]] = []
+
+    def capture(repository_root: Path, created_at_utc: datetime) -> None:
+        calls.append((repository_root, created_at_utc))
+
+    monkeypatch.setattr(search_identity, "prepare_search_freeze", capture)
+
+    exit_code = cli.main(
+        [
+            "prepare-search-freeze",
+            "--repository-root",
+            str(root),
+            "--created-at-utc",
+            created_at.isoformat(),
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [(root, created_at)]
+    assert capfd.readouterr().out == (
+        '{"reason_code":"SEARCH_FREEZE_PREPARED","schema_version":'
+        '"mdcp.search-freeze-cli-result.v1","verdict":"PASS"}\n'
+    )
 
 
 def test_verify_search_source_cli_rejects_an_absent_anchor_flag(

@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--receipt", type=Path, required=True)
     verify.add_argument("--index", type=Path, required=True)
     prepare = commands.add_parser("prepare-search-freeze", add_help=False)
+    prepare.add_argument("--repository-root", type=Path, required=True)
     prepare.add_argument("--created-at-utc", type=datetime.fromisoformat, required=True)
     source = commands.add_parser("verify-search-source", add_help=False)
     source.add_argument("--root", type=Path, required=True)
@@ -116,7 +117,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         from mdcp.temporal.search_identity import prepare_search_freeze
 
         try:
-            prepare_search_freeze(Path.cwd(), parsed.created_at_utc)
+            prepare_search_freeze(parsed.repository_root, parsed.created_at_utc)
             verdict, reason = "PASS", "SEARCH_FREEZE_PREPARED"
         except Exception:
             verdict, reason = "FAIL", "SEARCH_FREEZE_PREPARATION_FAILED"
