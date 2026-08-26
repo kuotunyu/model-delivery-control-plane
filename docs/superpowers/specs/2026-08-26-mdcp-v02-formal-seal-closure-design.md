@@ -1,6 +1,6 @@
 # MDCP v0.2 Formal Seal Closure Design Amendment
 
-**Status:** Owner-approved architecture direction; written-spec review pending
+**Status:** Owner-approved written specification
 **Date:** 2026-08-26
 **Repository:** `model-delivery-control-plane`
 **Applies after:** `3c0fcddd7fded5f62d3f731864ff423f815fff16`
