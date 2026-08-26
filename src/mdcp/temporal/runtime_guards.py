@@ -288,6 +288,7 @@ def _windows_peak_process_bytes() -> int | None:
             ("PagefileUsage", ctypes.c_size_t),
             ("PeakPagefileUsage", ctypes.c_size_t),
         ]
+
     try:
         counters = ProcessMemoryCounters()
         counters.cb = ctypes.sizeof(counters)

@@ -2601,11 +2601,14 @@ def _make_evidence_mutation_surface():
         def _finish_terminal_guards() -> None:
             if guard is None:
                 return
-            for attempt in (_attempt_pre_seal, _attempt_exit):
-                try:
-                    attempt()
-                except Exception:
-                    continue
+            try:
+                _attempt_pre_seal()
+            except Exception as error:
+                del error
+            try:
+                _attempt_exit()
+            except Exception as error:
+                del error
 
         try:
             from mdcp.temporal.runner import (

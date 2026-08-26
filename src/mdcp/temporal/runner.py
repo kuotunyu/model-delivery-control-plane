@@ -666,6 +666,14 @@ def _run_development_core(
         replay: ReplayResult | None = None
         if provisional is None:
             selection = finalize_selection(session, None, None)
+            if any(result.verdict is GateVerdict.UNKNOWN for result in qualification_tuple):
+                selection = SelectionDecision(
+                    status="UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+                    provisional_winner=None,
+                    final_winner=None,
+                    retry_allowed=False,
+                    reason_codes=("QUALIFICATION_UNKNOWN",),
+                )
         else:
             replay_digests: list[ReplayFoldDigests] = []
             for fold_id in EXACT_FOLD_IDS:

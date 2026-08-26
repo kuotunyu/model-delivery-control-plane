@@ -6,7 +6,7 @@ import pytest
 
 import mdcp.temporal.run_evidence as run_evidence
 from mdcp.temporal.evidence import public_evidence_violations
-from mdcp.temporal.run_evidence import PrivateBundleIdentity
+from mdcp.temporal.run_evidence import FormalDevelopmentOutcome, PrivateBundleIdentity
 
 
 def test_public_scan_rejects_private_metadata_without_echoing_values() -> None:
@@ -152,6 +152,33 @@ def test_private_bundle_identity_is_public_safe_by_shape_and_value() -> None:
     )
 
     assert public_evidence_violations(identity.model_dump(mode="json")) == ()
+
+
+def test_rejected_formal_outcome_exposes_only_fixed_public_failure_fields() -> None:
+    outcome = FormalDevelopmentOutcome(
+        verdict="FAIL",
+        reason_codes=("FORMAL_RUN_REQUEST_INVALID",),
+        private_identity=None,
+        seal_record_sha256=None,
+        repository_inventory_sha256=None,
+        authorization_sha256="0" * 64,
+        consumption_marker_sha256=None,
+        fit_count=0,
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+    )
+    document = {
+        "reason_code": outcome.reason_codes[0],
+        "schema_version": "mdcp.formal-run-cli-result.v1",
+        "verdict": outcome.verdict,
+    }
+
+    assert document == {
+        "reason_code": "FORMAL_RUN_REQUEST_INVALID",
+        "schema_version": "mdcp.formal-run-cli-result.v1",
+        "verdict": "FAIL",
+    }
+    assert public_evidence_violations(document) == ()
 
 
 def test_private_container_check_exposes_only_sanitized_shape() -> None:

@@ -1,20 +1,40 @@
 from __future__ import annotations
 
+import inspect
+import os
+import sys
+import threading
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+import mdcp.temporal.cli as cli
 import mdcp.temporal.evaluation as evaluation_module
+import mdcp.temporal.run_evidence as run_evidence
 import mdcp.temporal.runner as runner
 from mdcp.common.canonical import canonicalize_json
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.policy.cluster_bootstrap import BootstrapResult, PairedQualityRow, RatioMetric
 from mdcp.temporal.completeness import AdapterOutcome, LabelOutcome, PredictionOutcome
+from mdcp.temporal.evidence import public_evidence_violations
 from mdcp.temporal.folds import SourceRowIdentity
 from mdcp.temporal.runtime_guards import RuntimeObservation, RuntimeStage
+
+_FORBIDDEN_BEHAVIORAL_CALLS = {
+    "mdcp.workload.dataset.load_uci_archive",
+    "mdcp.workload.splits.split_rows",
+    "mdcp.workload.splits.DatasetPartitions.open_h2",
+    ("mdcp.temporal.run_evidence._make_evidence_mutation_surface.<locals>.consume_marker"),
+    ("mdcp.temporal.run_evidence._make_evidence_mutation_surface.<locals>.publish_private"),
+    ("mdcp.temporal.run_evidence._make_evidence_mutation_surface.<locals>.publish_terminal"),
+    "mdcp.temporal.runner._fit_formal_fold",
+}
 
 
 class _StageGuard:
@@ -213,6 +233,234 @@ def _synthetic_plan(
 def synthetic_run(*, one_qualified_trial: str | None = "STAT-A1") -> runner.DevelopmentRunBundle:
     plan, _ = _synthetic_plan(one_qualified_trial=one_qualified_trial)
     return runner._run_development_core(plan, _StageGuard())
+
+
+@contextmanager
+def _count_forbidden_calls():
+    counts = {name: 0 for name in _FORBIDDEN_BEHAVIORAL_CALLS}
+    lock = threading.Lock()
+
+    def profile(frame: object, event: str, _argument: object) -> None:
+        if event != "call":
+            return
+        code = frame.f_code
+        identity = f"{frame.f_globals.get('__name__')}.{code.co_qualname}"
+        if identity in counts:
+            with lock:
+                counts[identity] += 1
+
+    previous_thread = threading.getprofile()
+    previous_process = sys.getprofile()
+    threading.setprofile(profile)
+    sys.setprofile(profile)
+    try:
+        yield counts
+    finally:
+        sys.setprofile(previous_process)
+        threading.setprofile(previous_thread)
+
+
+def _invoke_same_plan_concurrently(
+    plan: object, *, callers: int
+) -> tuple[tuple[str, int, int, tuple[str, ...]], ...]:
+    barrier = threading.Barrier(callers)
+
+    def invoke() -> tuple[str, int, int, tuple[str, ...]]:
+        barrier.wait()
+        try:
+            result = runner._run_development_core(plan, _StageGuard())
+        except runner.DevelopmentRunError as error:
+            return "FAIL", 0, os.getpid(), error.reason_codes
+        return "PASS", result.fit_ledger.total_count, os.getpid(), ()
+
+    with ThreadPoolExecutor(max_workers=callers) as executor:
+        return tuple(executor.map(lambda _index: invoke(), range(callers)))
+
+
+def test_concurrent_synthetic_plan_has_one_ledger_and_at_most_84_fits() -> None:
+    plan, calls = _synthetic_plan()
+
+    with _count_forbidden_calls() as forbidden_calls:
+        outcomes = _invoke_same_plan_concurrently(plan, callers=8)
+
+    passes = [outcome for outcome in outcomes if outcome[0] == "PASS"]
+    failures = [outcome for outcome in outcomes if outcome[0] == "FAIL"]
+    assert len(passes) == 1
+    assert passes[0][1] == 84
+    assert len(failures) == 7
+    assert {outcome[3] for outcome in failures} == {("RUN_ALREADY_CONSUMED",)}
+    assert len(calls) == 84
+    assert max(outcome[1] for outcome in outcomes) <= 84
+    assert {outcome[2] for outcome in outcomes} == {os.getpid()}
+    assert forbidden_calls == dict.fromkeys(_FORBIDDEN_BEHAVIORAL_CALLS, 0)
+
+
+def test_behavioral_profiler_observes_every_forbidden_probe() -> None:
+    evidence_namespace: dict[str, object] = {"__name__": "mdcp.temporal.run_evidence"}
+    exec(
+        "def _make_evidence_mutation_surface():\n"
+        "    def consume_marker():\n"
+        "        return None\n"
+        "    def publish_private():\n"
+        "        return None\n"
+        "    def publish_terminal():\n"
+        "        return None\n"
+        "    return consume_marker, publish_private, publish_terminal\n",
+        evidence_namespace,
+    )
+    evidence_factory = evidence_namespace["_make_evidence_mutation_surface"]
+    assert callable(evidence_factory)
+    evidence_probes = evidence_factory()
+    assert isinstance(evidence_probes, tuple)
+
+    dataset_namespace: dict[str, object] = {"__name__": "mdcp.workload.dataset"}
+    exec("def load_uci_archive():\n    return None\n", dataset_namespace)
+    splits_namespace: dict[str, object] = {"__name__": "mdcp.workload.splits"}
+    exec(
+        "def split_rows():\n"
+        "    return None\n"
+        "class DatasetPartitions:\n"
+        "    def open_h2(self):\n"
+        "        return None\n",
+        splits_namespace,
+    )
+    runner_namespace: dict[str, object] = {"__name__": "mdcp.temporal.runner"}
+    exec("def _fit_formal_fold():\n    return None\n", runner_namespace)
+    partition_type = splits_namespace["DatasetPartitions"]
+    assert isinstance(partition_type, type)
+    probes = (
+        dataset_namespace["load_uci_archive"],
+        splits_namespace["split_rows"],
+        partition_type().open_h2,
+        *evidence_probes,
+        runner_namespace["_fit_formal_fold"],
+    )
+    assert all(callable(probe) for probe in probes)
+
+    with _count_forbidden_calls() as forbidden_calls:
+        for probe in probes:
+            probe()
+
+    assert forbidden_calls == dict.fromkeys(_FORBIDDEN_BEHAVIORAL_CALLS, 1)
+
+
+@pytest.mark.parametrize(
+    (
+        "one_qualified_trial",
+        "contract_invalid_trial",
+        "changed_replay_digest",
+        "expected_status",
+        "expected_selection",
+        "expected_fits",
+    ),
+    (
+        ("STAT-A1", None, False, "PASS", "PASS", 84),
+        (None, None, False, "FAIL", "NO_ELIGIBLE_CANDIDATE", 80),
+        (
+            "STAT-A1",
+            "STAT-A1",
+            False,
+            "UNKNOWN",
+            "UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+            80,
+        ),
+        (
+            "STAT-A1",
+            None,
+            True,
+            "UNKNOWN",
+            "UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+            84,
+        ),
+    ),
+)
+def test_synthetic_terminal_matrix_has_no_fallback_or_85th_fit(
+    one_qualified_trial: str | None,
+    contract_invalid_trial: str | None,
+    changed_replay_digest: bool,
+    expected_status: str,
+    expected_selection: str,
+    expected_fits: int,
+) -> None:
+    plan, calls = _synthetic_plan(
+        one_qualified_trial=one_qualified_trial,
+        contract_invalid_trial=contract_invalid_trial,
+        changed_replay_digest=changed_replay_digest,
+    )
+
+    with _count_forbidden_calls() as forbidden_calls:
+        result = runner._run_development_core(plan, _StageGuard())
+
+    assert result.public_result.status == expected_status
+    assert result.selection.status == expected_selection
+    assert result.fit_ledger.total_count == expected_fits
+    assert len(calls) == expected_fits
+    assert expected_fits <= 84
+    assert result.fit_ledger.final_count == 0
+    assert forbidden_calls == dict.fromkeys(_FORBIDDEN_BEHAVIORAL_CALLS, 0)
+    if expected_selection == "UNKNOWN/NO_ELIGIBLE_CANDIDATE" and expected_fits == 80:
+        assert result.selection.reason_codes == ("QUALIFICATION_UNKNOWN",)
+    if result.replay is not None:
+        replay_trial = result.replay.trial_id
+        assert {call[1] for call in calls[80:]} == {replay_trial}
+
+
+def test_synthetic_harness_has_no_formal_authority_or_natural_output_surface() -> None:
+    parameters = set(inspect.signature(_synthetic_plan).parameters)
+    assert parameters == {
+        "one_qualified_trial",
+        "contract_invalid_trial",
+        "changed_replay_digest",
+        "changed_replay_evidence",
+        "changed_replay_predictions",
+        "invalid_typed_verdict",
+    }
+    assert parameters.isdisjoint(
+        {
+            "archive",
+            "authorization",
+            "destination",
+            "formal_seal",
+            "natural_bundle",
+            "writer",
+        }
+    )
+    result = synthetic_run()
+    assert result.private_bundle.evidence_class == "synthetic_test"
+    assert result.public_result.evidence_class == "synthetic_test"
+    assert not isinstance(result, run_evidence.FormalDevelopmentSeal)
+    assert public_evidence_violations(result.public_result.model_dump(mode="json")) == ()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
+def test_public_synthetic_writer_returns_identity_without_raw_authority(tmp_path: Path) -> None:
+    result = synthetic_run()
+    destination = tmp_path / "synthetic-private.container.json"
+
+    identity = run_evidence.write_synthetic_bundle_no_clobber(destination, result.private_bundle)
+
+    assert type(identity) is run_evidence.PrivateBundleIdentity
+    assert run_evidence.verify_private_container(destination, identity).verdict == "PASS"
+    assert public_evidence_violations(identity.model_dump(mode="json")) == ()
+
+
+def test_invalid_cli_calls_are_concurrently_denied_before_formal_behavior(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    callers = 8
+    with (
+        _count_forbidden_calls() as forbidden_calls,
+        ThreadPoolExecutor(max_workers=callers) as executor,
+    ):
+        outcomes = tuple(executor.map(lambda _index: cli.main(()), range(callers)))
+
+    assert outcomes == (2,) * callers
+    expected = (
+        '{"reason_code":"FORMAL_RUN_REQUEST_INVALID",'
+        '"schema_version":"mdcp.formal-run-cli-result.v1","verdict":"FAIL"}'
+    )
+    assert capfd.readouterr().out.splitlines() == [expected] * callers
+    assert forbidden_calls == dict.fromkeys(_FORBIDDEN_BEHAVIORAL_CALLS, 0)
 
 
 def test_core_uses_existing_rank_one_and_same_session_for_replay() -> None:
