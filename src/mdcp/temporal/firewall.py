@@ -395,8 +395,10 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("dataclasses", "asdict"),
             ("dataclasses", "dataclass"),
             ("dataclasses", "field"),
+            ("datetime", "datetime"),
             ("enum", "StrEnum"),
             ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.canonical", "parse_json_bytes"),
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.common.enums", "GateVerdict"),
             ("mdcp.temporal.completeness", "AdapterOutcome"),
@@ -413,6 +415,8 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.evaluation", "evaluate_pooled"),
             ("mdcp.temporal.evaluation", "qualify_trial"),
             ("mdcp.temporal.folds", "SourceRowIdentity"),
+            ("mdcp.temporal.folds", "load_fold_specs"),
+            ("mdcp.temporal.folds", "materialize_folds"),
             ("mdcp.temporal.run_evidence", "ClosedMetrics"),
             ("mdcp.temporal.run_evidence", "PrivateFoldEvidence"),
             ("mdcp.temporal.run_evidence", "PrivateRunBundle"),
@@ -429,7 +433,15 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.selection", "SelectionDecision"),
             ("mdcp.temporal.selection", "finalize_selection"),
             ("mdcp.temporal.trials", "canonical_trial_identity"),
+            ("mdcp.temporal.trials", "_feature_names"),
+            ("mdcp.temporal.trials", "_materialize_features"),
+            ("mdcp.temporal.trials", "build_estimator"),
+            ("mdcp.temporal.trials", "load_trial_specs"),
+            ("mdcp.temporal.trials", "training_rows_for_trial"),
+            ("pathlib", "Path"),
             ("threading", "Lock"),
+            ("mdcp.workload.dataset", "load_uci_development_archive"),
+            ("mdcp.workload.splits", "split_development_rows"),
         }
     ),
     "src/mdcp/temporal/cli.py": frozenset(
@@ -437,6 +449,12 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("__future__", "annotations"),
             ("argparse", None),
             ("collections.abc", "Sequence"),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.temporal", "run_evidence"),
+            ("mdcp.temporal.search_identity", "verify_search_freeze"),
+            ("os", None),
+            ("pathlib", "Path"),
+            ("sys", None),
         }
     ),
     "src/mdcp/temporal/search_identity.py": frozenset(
@@ -454,6 +472,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic", "ConfigDict"),
             ("pydantic", "StringConstraints"),
             ("pydantic", "field_validator"),
+            ("pydantic", "model_validator"),
             ("subprocess", None),
             ("typing", "Annotated"),
             ("typing", "Literal"),
@@ -465,12 +484,27 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("base64", None),
             ("ctypes", None),
             ("ctypes", "wintypes"),
+            ("dataclasses", "asdict"),
+            ("dataclasses", "dataclass"),
             ("json", None),
             ("math", None),
             ("mdcp.common.canonical", "canonicalize_json"),
             ("mdcp.common.canonical", "parse_json_bytes"),
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("mdcp.temporal.runner", "DevelopmentRunBundle"),
+            ("mdcp.temporal.runner", "EXACT_FOLD_IDS"),
+            ("mdcp.temporal.runner", "EXACT_TRIAL_IDS"),
+            ("mdcp.temporal.runner", "FitPhase"),
+            ("mdcp.temporal.runner", "_FormalDevelopmentInputs"),
+            ("mdcp.temporal.runner", "_build_formal_execution_plan"),
+            ("mdcp.temporal.runner", "_checkpoint"),
+            ("mdcp.temporal.runner", "_run_development_core"),
+            ("mdcp.temporal.runtime_guards", "RuntimeStage"),
+            ("mdcp.temporal.runtime_guards", "build_production_runtime_guard"),
+            ("mdcp.temporal.search_identity", "FormalRunAuthorization"),
+            ("mdcp.temporal.search_identity", "SearchReceipt"),
+            ("mdcp.temporal.search_identity", "verify_search_freeze"),
             ("os", None),
             ("pathlib", "Path"),
             ("pathlib", "PurePosixPath"),
@@ -482,6 +516,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic", "field_validator"),
             ("pydantic", "model_validator"),
             ("stat", None),
+            ("threading", "Lock"),
             ("typing", "Annotated"),
             ("typing", "Literal"),
             ("unicodedata", None),
@@ -583,8 +618,35 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "time.monotonic_ns",
         }
     ),
-    "src/mdcp/temporal/cli.py": frozenset({"argparse.ArgumentParser"}),
-    "src/mdcp/temporal/search_identity.py": frozenset({"subprocess.run"}),
+    "src/mdcp/temporal/cli.py": frozenset(
+        {
+            "argparse.ArgumentParser",
+            "argparse.Namespace",
+            "os.environ",
+            "os.getenv",
+            "mdcp.temporal.run_evidence.FormalDevelopmentOutcome",
+            "mdcp.temporal.run_evidence.FormalDevelopmentRequest",
+            "mdcp.temporal.run_evidence.execute_authorized_formal_development",
+            "pathlib.Path.cwd",
+            "sys.stdout",
+            "sys.stdout.buffer",
+            "sys.stdout.buffer.flush",
+            "sys.stdout.buffer.write",
+        }
+    ),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {"datetime.fromisoformat", "os.name", "pathlib.Path.cwd", "stat.S_ISDIR"}
+    ),
+    "src/mdcp/temporal/search_identity.py": frozenset(
+        {
+            "json.loads",
+            "os.name",
+            "pathlib.Path.cwd",
+            "stat.S_ISDIR",
+            "stat.S_ISREG",
+            "subprocess.run",
+        }
+    ),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
             "base64.b64decode",
@@ -615,6 +677,18 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ctypes.windll.kernel32.WriteFile",
             "ctypes.windll.ntdll",
             "ctypes.windll.ntdll.NtCreateFile",
+            "windll.kernel32",
+            "windll.kernel32.CloseHandle",
+            "windll.kernel32.CompareStringOrdinal",
+            "windll.kernel32.CreateFileW",
+            "windll.kernel32.FlushFileBuffers",
+            "windll.kernel32.GetFileInformationByHandle",
+            "windll.kernel32.GetFinalPathNameByHandleW",
+            "windll.kernel32.GetLastError",
+            "windll.kernel32.SetFileInformationByHandle",
+            "windll.kernel32.WriteFile",
+            "windll.ntdll",
+            "windll.ntdll.NtCreateFile",
             "ctypes.wintypes.BOOL",
             "ctypes.wintypes.DWORD",
             "ctypes.wintypes.FILETIME",
@@ -635,6 +709,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "os.fstat",
             "os.open",
             "os.read",
+            "stat.S_ISDIR",
             "stat.S_ISREG",
             "unicodedata.normalize",
         }
@@ -687,12 +762,18 @@ _ALLOWED_FILE_ACCESS_CALLS = {
     ),
     "src/mdcp/temporal/search_identity.py": frozenset(
         {
+            ("_parse_formal_authorization", "read_text", "name:_FORMAL_AUTHORIZATION_SCHEMA_PATH"),
             ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
             ("_read_expected_public_file", "read_bytes", "name:expected_path"),
         }
     ),
+    "src/mdcp/temporal/cli.py": frozenset({("main", "write", None)}),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {("_build_formal_execution_plan", "read_bytes", "name:protocol_path")}
+    ),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
+            ("_preflight_windows_destination", "lstat", "name:checked_destination"),
             ("_read_private_container_posix", "open", "name:os"),
             (
                 "_checked_in_schema",
@@ -713,7 +794,33 @@ _ALLOWED_ENVIRONMENT_KEYS = {
             "MDCP_ROUTE_REVISION",
         }
     ),
+    "src/mdcp/temporal/cli.py": frozenset(
+        {
+            "BLIS_NUM_THREADS",
+            "LOKY_MAX_CPU_COUNT",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "MDCP_FORMAL_RUN_AUTHORIZATION",
+            "MDCP_FORMAL_RUN_CONSUMPTION_ROOT",
+            "MDCP_UCI_ARCHIVE",
+            "MDCP_V02_PRIVATE_CONTAINER",
+        }
+    ),
 }
+_CLI_THREAD_ENVIRONMENT_KEYS = frozenset(
+    {
+        "BLIS_NUM_THREADS",
+        "LOKY_MAX_CPU_COUNT",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    }
+)
 _PROTECTED_PATH_PARAMETER_FUNCTIONS = {
     "src/mdcp/temporal/contract_gate.py": frozenset({"_checked_json", "_path_digest"}),
     "src/mdcp/temporal/golden_vectors.py": frozenset({"verify_golden_vector_manifest"}),
@@ -763,7 +870,7 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
     "src/mdcp/temporal/runner.py": (
-        "e2ec92a99f190ab14f3355929b342ae6deeca9b747e9f628565ae6b3676925f1"
+        "ee7101a0b55cd2dd18a0b71b55b7b7ad4978383070f5392abedb6270ddf00f04"
     ),
 }
 _ALLOWED_PRIVATE_ATTRIBUTES = {
@@ -797,7 +904,9 @@ _ALLOWED_SEARCH_IDENTITY_GIT_CALLS = {
     "verify_search_freeze": frozenset(
         {
             ("rev-parse", "HEAD"),
+            ("remote",),
             ("show", "-s", "--format=%P", "HEAD"),
+            ("tag", "--points-at", "HEAD"),
         }
     ),
     "_is_clean_checkout": frozenset({("status", "--porcelain=v1", "--untracked-files=all")}),
@@ -1321,11 +1430,24 @@ def _environment_access_allowed(
     allowed_keys = _ALLOWED_ENVIRONMENT_KEYS.get(logical_path, frozenset())
     parent = parents.get(node)
     if qualified_name == "os.environ":
+        if not isinstance(parent, ast.Subscript) or parent.value is not node:
+            return False
+        key = _constant_string(parent.slice)
+        if key not in allowed_keys:
+            return False
+        if isinstance(parent.ctx, ast.Load):
+            return True
+        assignment = parents.get(parent)
         return (
-            isinstance(parent, ast.Subscript)
-            and parent.value is node
-            and isinstance(parent.ctx, ast.Load)
-            and _constant_string(parent.slice) in allowed_keys
+            logical_path == "src/mdcp/temporal/cli.py"
+            and key in _CLI_THREAD_ENVIRONMENT_KEYS
+            and isinstance(parent.ctx, ast.Store)
+            and isinstance(assignment, ast.Assign)
+            and len(assignment.targets) == 1
+            and assignment.targets[0] is parent
+            and isinstance(assignment.value, ast.Constant)
+            and assignment.value.value == "1"
+            and _enclosing_function(parent, parents) is None
         )
     if qualified_name == "os.getenv":
         return (
@@ -1455,6 +1577,7 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                         and logical_path
                         not in {
                             _TRUSTED_FIREWALL_PATH,
+                            "src/mdcp/temporal/cli.py",
                             "src/mdcp/temporal/runtime_guards.py",
                         }
                     )
@@ -1695,6 +1818,14 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 and any(
                     qualified_name.startswith(f"{module_root}.") for module_root in module_roots
                 )
+                and qualified_name not in allowed_module_attributes
+            ):
+                _fail()
+            if (
+                logical_path == "src/mdcp/temporal/run_evidence.py"
+                and isinstance(node, ast.Attribute)
+                and qualified_name is not None
+                and qualified_name.startswith("windll.")
                 and qualified_name not in allowed_module_attributes
             ):
                 _fail()

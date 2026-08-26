@@ -1,0 +1,108 @@
+{
+  "allOf": [
+    {
+      "not": {
+        "properties": {
+          "search_freeze_commit": {
+            "const": "0000000000000000000000000000000000000000"
+          }
+        },
+        "required": [
+          "search_freeze_commit"
+        ]
+      }
+    },
+    {
+      "not": {
+        "properties": {
+          "search_receipt_sha256": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "required": [
+          "search_receipt_sha256"
+        ]
+      }
+    },
+    {
+      "not": {
+        "properties": {
+          "protocol_sha256": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "required": [
+          "protocol_sha256"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "description": "One external owner authorization bound to one exact frozen search.",
+  "properties": {
+    "schema_version": {
+      "const": "mdcp.formal-run-authorization.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "canonicalization_version": {
+      "const": "RFC8785",
+      "title": "Canonicalization Version",
+      "type": "string"
+    },
+    "search_freeze_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Search Freeze Commit",
+      "type": "string"
+    },
+    "search_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Search Receipt Sha256",
+      "type": "string"
+    },
+    "protocol_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Protocol Sha256",
+      "type": "string"
+    },
+    "dataset_archive_sha256": {
+      "const": "b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401",
+      "title": "Dataset Archive Sha256",
+      "type": "string"
+    },
+    "authorization_id": {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "authorized_action": {
+      "const": "ONE_FORMAL_20_TRIAL_DEVELOPMENT_RUN",
+      "title": "Authorized Action",
+      "type": "string"
+    },
+    "authorized_at_utc": {
+      "format": "date-time",
+      "title": "Authorized At Utc",
+      "type": "string"
+    },
+    "consumed": {
+      "const": false,
+      "title": "Consumed",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "canonicalization_version",
+    "search_freeze_commit",
+    "search_receipt_sha256",
+    "protocol_sha256",
+    "dataset_archive_sha256",
+    "authorization_id",
+    "authorized_action",
+    "authorized_at_utc",
+    "consumed"
+  ],
+  "title": "FormalRunAuthorization",
+  "type": "object"
+}

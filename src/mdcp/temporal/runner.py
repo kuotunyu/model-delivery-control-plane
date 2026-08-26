@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from threading import Lock
 
-from mdcp.common.canonical import canonicalize_json
+from mdcp.common.canonical import canonicalize_json, parse_json_bytes
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
 from mdcp.temporal.completeness import (
@@ -205,7 +207,20 @@ class DevelopmentRunBundle:
     public_result: PublicDevelopmentResult
     private_bundle: PrivateRunBundle
     fit_ledger: FitLedger
+    qualifications: tuple[QualificationResult, ...]
+    replay: ReplayResult | None
     selection: SelectionDecision
+
+
+@dataclass(frozen=True, slots=True)
+class _FormalDevelopmentInputs:
+    repository_root: Path
+    expected_freeze_head: str
+    archive_path: Path
+    archive_sha256: str
+    private_container_path: Path
+    search_receipt_sha256: str
+    protocol_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -594,6 +609,8 @@ def _public_result(
 def _run_development_core(
     plan: _DevelopmentExecutionPlan,
     guard: RuntimeGuard,
+    *,
+    defer_final_checkpoints: bool = False,
 ) -> DevelopmentRunBundle:
     """Execute the exact synthetic 80+4 state machine once with one replay session."""
     if type(plan) is not _DevelopmentExecutionPlan or not callable(plan.fit_fold):
@@ -646,6 +663,7 @@ def _run_development_core(
         qualification_tuple = tuple(qualifications)
         session = ReplaySelectionSession(qualification_tuple)
         provisional = ledger.bind_session(session)
+        replay: ReplayResult | None = None
         if provisional is None:
             selection = finalize_selection(session, None, None)
         else:
@@ -692,29 +710,194 @@ def _run_development_core(
             selection,
             ledger,
         )
-        pre_seal_checked = True
-        _checkpoint(guard, RuntimeStage.PRE_SEAL)
-        exit_checked = True
-        _checkpoint(guard, RuntimeStage.EXIT)
+        if not defer_final_checkpoints:
+            pre_seal_checked = True
+            _checkpoint(guard, RuntimeStage.PRE_SEAL)
+            exit_checked = True
+            _checkpoint(guard, RuntimeStage.EXIT)
         return DevelopmentRunBundle(
             public_result=public_result,
             private_bundle=private_bundle,
             fit_ledger=ledger,
+            qualifications=qualification_tuple,
+            replay=replay,
             selection=selection,
         )
     except DevelopmentRunError as original:
-        if not pre_seal_checked:
+        if not defer_final_checkpoints and not pre_seal_checked:
             with suppress(DevelopmentRunError):
                 _checkpoint(guard, RuntimeStage.PRE_SEAL)
-        if not exit_checked:
+        if not defer_final_checkpoints and not exit_checked:
             with suppress(DevelopmentRunError):
                 _checkpoint(guard, RuntimeStage.EXIT)
         raise original
     except Exception as error:
-        if not pre_seal_checked:
+        if not defer_final_checkpoints and not pre_seal_checked:
             with suppress(DevelopmentRunError):
                 _checkpoint(guard, RuntimeStage.PRE_SEAL)
-        if not exit_checked:
+        if not defer_final_checkpoints and not exit_checked:
             with suppress(DevelopmentRunError):
                 _checkpoint(guard, RuntimeStage.EXIT)
         raise DevelopmentRunError("DEVELOPMENT_RUN_UNKNOWN") from error
+
+
+def _build_formal_execution_plan(
+    inputs: _FormalDevelopmentInputs,
+) -> _DevelopmentExecutionPlan:
+    """Build a lazy natural fold executor; no archive byte is opened here."""
+    protocol_path = inputs.repository_root / "configs/workload/temporal-development-v2.json"
+    try:
+        protocol_bytes = protocol_path.read_bytes()
+        if sha256_hex(protocol_bytes) != inputs.protocol_sha256:
+            raise DevelopmentRunError("PROTOCOL_IDENTITY_MISMATCH")
+        protocol = parse_json_bytes(protocol_bytes)
+    except DevelopmentRunError:
+        raise
+    except Exception as error:
+        raise DevelopmentRunError("PROTOCOL_INVALID") from error
+    loaded: dict[str, object] = {}
+
+    def fit_fold(phase: FitPhase, trial_id: str, fold_id: str) -> object:
+        if not loaded:
+            _load_formal_execution_state(inputs, protocol, loaded)
+        return _fit_formal_fold(loaded, phase, trial_id, fold_id)
+
+    return _DevelopmentExecutionPlan(fit_fold=fit_fold)
+
+
+def _load_formal_execution_state(
+    inputs: _FormalDevelopmentInputs,
+    protocol: object,
+    state: dict[str, object],
+) -> None:
+    from mdcp.temporal.folds import load_fold_specs, materialize_folds
+    from mdcp.temporal.trials import load_trial_specs
+    from mdcp.workload.dataset import load_uci_development_archive
+    from mdcp.workload.splits import split_development_rows
+
+    if not isinstance(protocol, dict):
+        raise DevelopmentRunError("PROTOCOL_INVALID")
+    rows = load_uci_development_archive(inputs.archive_path, inputs.archive_sha256)
+    partitions = split_development_rows(rows)
+    folds = materialize_folds(partitions, load_fold_specs(protocol))
+    trials = load_trial_specs(protocol)
+    if (
+        tuple(fold.spec.fold_id for fold in folds) != EXACT_FOLD_IDS
+        or tuple(trial.trial_id for trial in trials) != EXACT_TRIAL_IDS
+    ):
+        raise DevelopmentRunError("FORMAL_INVENTORY_INVALID")
+    state.update(
+        {
+            "folds": {fold.spec.fold_id: fold for fold in folds},
+            "trials": {trial.trial_id: trial for trial in trials},
+        }
+    )
+
+
+def _fit_formal_fold(
+    state: dict[str, object],
+    phase: FitPhase,
+    trial_id: str,
+    fold_id: str,
+) -> _DevelopmentFoldResult:
+    from mdcp.temporal.trials import (
+        _feature_names,
+        _materialize_features,
+        build_estimator,
+        training_rows_for_trial,
+    )
+
+    folds = state["folds"]
+    trials = state["trials"]
+    del phase
+    if not isinstance(folds, dict) or not isinstance(trials, dict):
+        raise DevelopmentRunError("FORMAL_INVENTORY_INVALID")
+    fold = folds[fold_id]
+    trial = trials[trial_id]
+    training = training_rows_for_trial(trial, fold)
+    features = _feature_names(trial)
+    validation = _materialize_features(fold.validation).loc[:, (*features, "cnt")]
+    estimator = build_estimator(trial)
+    estimator.fit(training.loc[:, features], training["cnt"])
+    prediction_values = tuple(
+        float(value) for value in estimator.predict(validation.loc[:, features])
+    )
+    label_values = tuple(float(value) for value in validation["cnt"])
+    adapters = tuple(
+        AdapterOutcome(
+            identity=identity,
+            succeeded=True,
+            calendar_day=datetime.fromisoformat(identity.local_timestamp).date(),
+            groups=_formal_groups(fold.validation.iloc[position]),
+        )
+        for position, identity in enumerate(fold.inventory)
+    )
+    predictions = tuple(
+        PredictionOutcome(identity=identity, succeeded=True, value=value)
+        for identity, value in zip(fold.inventory, prediction_values, strict=True)
+    )
+    labels = tuple(
+        LabelOutcome(identity=identity, succeeded=True, value=value)
+        for identity, value in zip(fold.inventory, label_values, strict=True)
+    )
+    feature_material = [
+        [float(value) for value in row]
+        for row in validation.loc[:, features].itertuples(index=False, name=None)
+    ]
+    training_material = [
+        [float(value) for value in row]
+        for row in training.loc[:, features].itertuples(index=False, name=None)
+    ]
+    declared = {
+        "trial_id": trial_id,
+        "fold_id": fold_id,
+        "preprocessing_state_sha256": sha256_hex(
+            canonicalize_json(
+                {
+                    "configuration_sha256": canonical_trial_identity(trial_id).configuration_sha256,
+                    "training_features": training_material,
+                    "training_labels": tuple(float(value) for value in training["cnt"]),
+                }
+            )
+        ),
+        "feature_vector_sha256": sha256_hex(canonicalize_json(feature_material)),
+        "prediction_vector_sha256": sha256_hex(canonicalize_json(prediction_values)),
+        "metric_sha256": sha256_hex(
+            canonicalize_json(
+                {
+                    "labels": label_values,
+                    "predictions": prediction_values,
+                }
+            )
+        ),
+    }
+    return _DevelopmentFoldResult(
+        trial_id=trial_id,
+        fold_id=fold_id,
+        inventory=fold.inventory,
+        adapters=adapters,
+        predictions=predictions,
+        labels=labels,
+        contract_verdict=GateVerdict.PASS,
+        preprocessing_state_sha256=declared["preprocessing_state_sha256"],
+        feature_vector_sha256=declared["feature_vector_sha256"],
+        prediction_vector_sha256=declared["prediction_vector_sha256"],
+        metric_sha256=declared["metric_sha256"],
+        receipt_sha256=sha256_hex(canonicalize_json(declared)),
+    )
+
+
+def _formal_groups(row: object) -> tuple[str, str, str]:
+    weather = int(row["weathersit"])
+    hour = int(row["hr"])
+    return (
+        (
+            "weather_clear"
+            if weather == 1
+            else "weather_mist"
+            if weather == 2
+            else "weather_adverse"
+        ),
+        "day_working" if int(row["workingday"]) == 1 else "day_non_working",
+        "demand_peak" if hour in {7, 8, 9, 16, 17, 18} else "demand_off_peak",
+    )

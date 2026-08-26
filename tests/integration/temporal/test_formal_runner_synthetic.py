@@ -374,3 +374,16 @@ def test_private_rows_and_predictions_never_enter_closed_public_result() -> None
     assert "request_id" not in repr(public)
     assert "prediction" not in repr(public)
     assert "F1-0000" in repr(result.private_bundle)
+
+
+def test_internal_formal_inputs_have_no_dependency_injection_surface() -> None:
+    assert tuple(runner._FormalDevelopmentInputs.__dataclass_fields__) == (
+        "repository_root",
+        "expected_freeze_head",
+        "archive_path",
+        "archive_sha256",
+        "private_container_path",
+        "search_receipt_sha256",
+        "protocol_sha256",
+    )
+    assert not hasattr(runner, "run_formal_development")

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import ast
 import base64
+import copy
+import ctypes
 import json
 import os
 import subprocess
-import tempfile
-import unicodedata
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -165,6 +169,354 @@ def write_untrusted_container(tmp_path: Path, raw: bytes) -> Path:
     path = tmp_path / "untrusted.container.json"
     path.write_bytes(raw)
     return path
+
+
+def _isolated_mutation_factory_adapter(
+    fake_ctypes: object,
+    *,
+    retained_error: str | None = None,
+    binding_overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Extract the deleted factory and append an in-memory-only test adapter."""
+
+    source_path = Path(run_evidence.__file__)
+    tree = ast.parse(source_path.read_bytes(), filename=str(source_path))
+    factories = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_make_evidence_mutation_surface"
+    ]
+    assert len(factories) == 1
+    binding_assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "_MUTATION_BINDINGS"
+    ]
+    assert len(binding_assignments) == 1
+    factory = copy.deepcopy(factories[0])
+    if retained_error is not None:
+        retained = [
+            node
+            for node in ast.walk(factory)
+            if isinstance(node, ast.FunctionDef) and node.name == "_retained_destination"
+        ]
+        assert len(retained) == 1
+        retained[0].body = [
+            ast.Raise(
+                exc=ast.Call(
+                    func=ast.Name("_PublicationError", ast.Load()),
+                    args=[ast.Constant(retained_error)],
+                    keywords=[],
+                )
+            )
+        ]
+    returns = [
+        node
+        for node in ast.walk(factory)
+        if isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Tuple)
+        and [item.id for item in node.value.elts if isinstance(item, ast.Name)]
+        == ["write_synthetic", "execute"]
+    ]
+    assert len(returns) == 1
+    returns[0].value.elts.append(
+        ast.Dict(
+            keys=[
+                ast.Constant("nt_relative_file"),
+                ast.Constant("classify_marker_observation"),
+                ast.Constant("consume_marker"),
+                ast.Constant("attempt_states"),
+            ],
+            values=[
+                ast.Name("_windows_nt_relative_file", ast.Load()),
+                ast.Name("_classify_marker_observation", ast.Load()),
+                ast.Name("consume_marker", ast.Load()),
+                ast.Name("attempt_states", ast.Load()),
+            ],
+        )
+    )
+    isolated_module = ast.fix_missing_locations(
+        ast.Module(body=[copy.deepcopy(binding_assignments[0]), factory], type_ignores=[])
+    )
+    module_name = f"_mdcp_isolated_run_evidence_{id(fake_ctypes)}"
+    isolated = ModuleType(module_name)
+    namespace = isolated.__dict__
+    namespace.update(vars(run_evidence))
+    namespace.update(
+        {
+            "__name__": module_name,
+            "ctypes": fake_ctypes,
+        }
+    )
+    namespace.update(binding_overrides or {})
+    sys.modules[module_name] = isolated
+    try:
+        exec(compile(isolated_module, str(source_path), "exec"), namespace)
+        result = namespace["_make_evidence_mutation_surface"]()
+    finally:
+        sys.modules.pop(module_name, None)
+    assert len(result) == 3
+    return result[2]
+
+
+class _FakeNtCreateFile:
+    def __init__(
+        self,
+        *,
+        ntstatus: int,
+        iosb_status: int,
+        information: int,
+        handle: int | None,
+    ) -> None:
+        self.ntstatus = ntstatus
+        self.iosb_status = iosb_status
+        self.information = information
+        self.handle = handle
+        self.calls = 0
+        self.argtypes: object = None
+        self.restype: object = None
+
+    def __call__(self, output: object, *_arguments: object) -> int:
+        self.calls += 1
+        io_status = _arguments[2]
+        if self.handle is not None:
+            output._obj.value = self.handle
+        io_status._obj.StatusOrPointer.Status = self.iosb_status
+        io_status._obj.Information = self.information
+        return self.ntstatus
+
+
+class _CtypesProxy:
+    def __init__(self, nt_create_file: object) -> None:
+        self.windll = SimpleNamespace(
+            kernel32=SimpleNamespace(),
+            ntdll=SimpleNamespace(NtCreateFile=nt_create_file),
+        )
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(ctypes, name)
+
+
+@pytest.mark.parametrize(
+    ("ntstatus", "iosb_status", "information", "handle"),
+    (
+        (0, 0, 2, 101),
+        (-1073741771, 0, 0, None),
+        (-1073741771, 0, 0, 202),
+        (0, 0, 2, None),
+        (0, 0, 1, 303),
+        (0, -1, 2, 404),
+        (259, 0, 2, 505),
+    ),
+)
+def test_isolated_factory_preserves_exact_nt_create_observation(
+    ntstatus: int,
+    iosb_status: int,
+    information: int,
+    handle: int | None,
+) -> None:
+    fake = _FakeNtCreateFile(
+        ntstatus=ntstatus,
+        iosb_status=iosb_status,
+        information=information,
+        handle=handle,
+    )
+    adapter = _isolated_mutation_factory_adapter(_CtypesProxy(fake))
+
+    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
+
+    assert observed == (True, ntstatus, iosb_status, information, handle)
+    assert fake.calls == 1
+
+
+def test_isolated_factory_records_pre_call_resolution_failure_without_a_create() -> None:
+    class MissingNtDll:
+        @property
+        def NtCreateFile(self) -> object:
+            raise OSError("unavailable")
+
+    proxy = _CtypesProxy(None)
+    proxy.windll.ntdll = MissingNtDll()
+    adapter = _isolated_mutation_factory_adapter(proxy)
+
+    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
+
+    assert observed == (False, None, None, None, None)
+
+
+def test_nt_wrapper_closes_preparation_exception() -> None:
+    class PreparationFailureProxy(_CtypesProxy):
+        def create_unicode_buffer(self, *_arguments: object) -> object:
+            raise OSError("synthetic preparation failure")
+
+    adapter = _isolated_mutation_factory_adapter(PreparationFailureProxy(None))
+
+    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
+
+    assert observed == (False, None, None, None, None)
+
+
+def test_nt_wrapper_closes_post_call_iosb_observation_exception() -> None:
+    class ExplodingIoStatus:
+        Information = 2
+
+        @property
+        def StatusOrPointer(self) -> object:
+            raise OSError("synthetic IOSB observation failure")
+
+    class SuccessfulNtCreate:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, output: object, *_arguments: object) -> int:
+            output._obj.value = 606
+            return 0
+
+    class ByrefProxy(_CtypesProxy):
+        @staticmethod
+        def POINTER(_value: object) -> object:
+            return object
+
+        @staticmethod
+        def byref(value: object) -> object:
+            return SimpleNamespace(_obj=value)
+
+    adapter = _isolated_mutation_factory_adapter(
+        ByrefProxy(SuccessfulNtCreate()),
+        binding_overrides={"_WindowsIoStatusBlock": ExplodingIoStatus},
+    )
+
+    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
+
+    assert observed == (True, 0, None, None, 606)
+
+
+@pytest.mark.parametrize(
+    ("entered", "status", "iosb", "information", "owned", "leaf", "expected"),
+    (
+        (False, None, None, None, None, "ABSENT", "PRECALL_FAILED"),
+        (False, None, None, None, None, "PRESENT", "COLLISION"),
+        (False, None, None, None, None, "INDETERMINATE", "INDETERMINATE"),
+        (True, -1073741771, 0, 0, None, "ABSENT", "COLLISION"),
+        (True, -1073741771, 0, 0, 202, "PRESENT", "INDETERMINATE"),
+        (True, 0, 0, 2, 101, "INDETERMINATE", "CREATED"),
+        (True, 0, 0, 2, None, "PRESENT", "INDETERMINATE"),
+        (True, 0, 0, 1, 303, "PRESENT", "INDETERMINATE"),
+        (True, 259, 0, 2, None, "ABSENT", "INDETERMINATE"),
+    ),
+)
+def test_marker_observation_matrix_is_closed(
+    entered: bool,
+    status: int | None,
+    iosb: int | None,
+    information: int | None,
+    owned: int | None,
+    leaf: str,
+    expected: str,
+) -> None:
+    adapter = _isolated_mutation_factory_adapter(ctypes)
+
+    result = adapter["classify_marker_observation"](entered, status, iosb, information, owned, leaf)
+
+    assert result == expected
+
+
+def test_marker_preflight_uncertainty_is_never_reported_as_retryable(tmp_path: Path) -> None:
+    adapter = _isolated_mutation_factory_adapter(ctypes, retained_error="TRUSTED_PARENT_REQUIRED")
+    authorization_sha256 = "9" * 64
+
+    result = adapter["consume_marker"](tmp_path, authorization_sha256, b"canonical-marker")
+
+    assert (result.create_entered, result.leaf_state, result.result) == (
+        False,
+        "INDETERMINATE",
+        "INDETERMINATE",
+    )
+    assert adapter["attempt_states"][authorization_sha256] == "UNKNOWN"
+
+
+def test_retained_publication_revalidates_ancestors_and_leaf_before_close() -> None:
+    source_path = Path(run_evidence.__file__)
+    tree = ast.parse(source_path.read_bytes(), filename=str(source_path))
+    factory = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_make_evidence_mutation_surface"
+    )
+    retained_ancestor = next(
+        node
+        for node in factory.body
+        if isinstance(node, ast.ClassDef) and node.name == "RetainedAncestor"
+    )
+    assert [
+        node.target.id
+        for node in retained_ancestor.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ] == ["handle", "volume_serial_number", "file_index"]
+
+    for function_name in ("_publish_retained", "consume_marker"):
+        function = next(
+            node
+            for node in ast.walk(factory)
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        )
+        ordered_calls = [
+            node.func.id
+            for node in sorted(
+                (item for item in ast.walk(function) if isinstance(item, ast.Call)),
+                key=lambda item: (item.lineno, item.col_offset),
+            )
+            if isinstance(node.func, ast.Name)
+        ]
+        assert "_windows_flush" in ordered_calls
+        assert "_revalidate_retained_ancestors" in ordered_calls
+        assert "_revalidate_final_handle" in ordered_calls
+        assert ordered_calls.index("_windows_flush") < ordered_calls.index(
+            "_revalidate_retained_ancestors"
+        )
+        assert ordered_calls.index("_revalidate_retained_ancestors") < ordered_calls.index(
+            "_revalidate_final_handle"
+        )
+
+
+def test_production_factory_is_deleted_and_exposes_exactly_two_wrappers() -> None:
+    source = Path(run_evidence.__file__).read_text(encoding="utf-8")
+    assert source.count("windll.ntdll.NtCreateFile") == 1
+    assert "FlushFileBuffers(parent_handle)" not in source
+    assert not hasattr(run_evidence, "_make_evidence_mutation_surface")
+    assert not hasattr(run_evidence, "_MUTATION_BINDINGS")
+    assert not hasattr(run_evidence, "RetainedDestination")
+    assert not hasattr(run_evidence, "MarkerAttempt")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="formal marker publication is Windows-only")
+def test_isolated_factory_consumes_one_marker_under_eight_callers(tmp_path: Path) -> None:
+    adapter = _isolated_mutation_factory_adapter(ctypes)
+    consumption_root = (tmp_path / "consumption").absolute()
+    consumption_root.mkdir()
+    authorization_sha256 = "9" * 64
+    marker_bytes = canonicalize_json({"authorization_sha256": authorization_sha256})
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = tuple(
+            pool.map(
+                lambda _: adapter["consume_marker"](
+                    consumption_root, authorization_sha256, marker_bytes
+                ),
+                range(8),
+            )
+        )
+
+    assert sum(item.result == "CREATED" for item in outcomes) == 1
+    assert all(item.result in {"CREATED", "COLLISION", "INDETERMINATE"} for item in outcomes)
+    assert adapter["attempt_states"][authorization_sha256] == "CONSUMED"
+    marker_path = consumption_root / f"{authorization_sha256}.consumed.json"
+    assert marker_path.read_bytes() == marker_bytes
+    repeated = adapter["consume_marker"](consumption_root, authorization_sha256, marker_bytes)
+    assert repeated.result == "COLLISION"
 
 
 @pytest.mark.parametrize(
@@ -589,7 +941,7 @@ def test_private_logical_path_matrix_is_closed(logical_path: str) -> None:
 def test_private_writer_rejects_natural_development_without_permit(tmp_path: Path) -> None:
     source = synthetic_private_bundle()
     natural = PrivateRunBundle(evidence_class="natural_development", files=source.files)
-    with pytest.raises(ValueError, match="^FORMAL_RUN_PERMIT_REQUIRED$"):
+    with pytest.raises(ValueError, match="^FORMAL_RUN_SEAL_AUTHORITY_REQUIRED$"):
         write_synthetic_bundle_no_clobber(tmp_path / "new.container.json", natural)
     assert tuple(tmp_path.iterdir()) == ()
 
@@ -613,23 +965,6 @@ def test_private_container_failures_expose_only_fixed_codes(tmp_path: Path) -> N
     result = run_evidence.verify_private_container(path, identity)
     assert result.reason_codes == ("PRIVATE_CONTAINER_INVALID",)
     assert secret not in repr(result)
-
-
-def test_posix_publication_is_unsupported_before_path_work_or_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(run_evidence, "_publication_platform", lambda: "posix")
-    monkeypatch.setattr(
-        run_evidence,
-        "_absolute_destination",
-        lambda _path: pytest.fail("POSIX dispatch reached destination oracle"),
-    )
-    with pytest.raises(ValueError, match="^PUBLICATION_UNSUPPORTED$") as caught:
-        write_synthetic_bundle_no_clobber(
-            tmp_path / "new.container.json", synthetic_private_bundle()
-        )
-    assert caught.value.__cause__ is None
-    assert tuple(tmp_path.iterdir()) == ()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
@@ -668,590 +1003,6 @@ def test_windows_second_publication_is_no_clobber(tmp_path: Path) -> None:
         write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
     assert destination.read_bytes() == original
     assert run_evidence.verify_private_container(destination, identity).verdict == "PASS"
-
-
-def _raw_invalid_destinations(tmp_path: Path) -> tuple[Path, ...]:
-    decomposed = unicodedata.normalize("NFD", "café")
-    return (
-        tmp_path / "SHORT~1" / "bundle.json",
-        tmp_path / "bundle.",
-        tmp_path / "bundle ",
-        *(tmp_path / name for name in ("CON", "PRN", "AUX", "NUL")),
-        *(tmp_path / f"COM{number}" for number in range(1, 10)),
-        *(tmp_path / f"LPT{number}" for number in range(1, 10)),
-        tmp_path / "bundle:stream",
-        Path(r"\\server\share\bundle.json"),
-        Path(r"\\?\C:\bundle.json"),
-        Path(r"\\.\C:\bundle.json"),
-        Path("relative.container.json"),
-        tmp_path / ".." / "bundle.json",
-        tmp_path / decomposed / "bundle.json",
-    )
-
-
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_windows_raw_destination_oracle_rejects_aliases_before_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        run_evidence,
-        "_publish_windows_container",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("destination oracle bypassed")),
-    )
-    for destination in _raw_invalid_destinations(tmp_path):
-        before = tuple(tmp_path.iterdir())
-        with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$") as caught:
-            write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-        assert str(destination) not in str(caught.value)
-        assert tuple(tmp_path.iterdir()) == before
-
-
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-@pytest.mark.parametrize(
-    "raw_case",
-    ("dot", "forward_slash", "unicode_drive", "missing_state", "malformed_state"),
-)
-def test_windows_raw_spelling_is_rejected_before_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_case: str
-) -> None:
-    if raw_case == "dot":
-        destination = Path(str(tmp_path) + r"\.\bundle.container.json")
-    elif raw_case == "forward_slash":
-        destination = Path(tmp_path.as_posix() + "/bundle.container.json")
-    elif raw_case == "unicode_drive":
-        destination = Path(r"Ｃ:\root\bundle.container.json")
-    else:
-        destination = tmp_path / "bundle.container.json"
-        destination._raw_paths = None if raw_case == "missing_state" else [str(tmp_path), 7]
-
-    monkeypatch.setattr(
-        run_evidence,
-        "_publish_windows_container",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("destination oracle bypassed")),
-    )
-    before = tuple(tmp_path.iterdir())
-    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert tuple(tmp_path.iterdir()) == before
-
-
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-@pytest.mark.parametrize("raw_case", ("repeated_separator", "rooted_fragment", "drive_fragment"))
-def test_windows_raw_fragments_cannot_reset_or_hide_empty_components(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_case: str
-) -> None:
-    if raw_case == "repeated_separator":
-        destination = Path(str(tmp_path) + r"\\repeated\bundle.container.json")
-    elif raw_case == "rooted_fragment":
-        destination = tmp_path / Path(r"\reset\bundle.container.json")
-    else:
-        destination = tmp_path / Path(f"{tmp_path.drive}\\reset\\bundle.container.json")
-
-    monkeypatch.setattr(
-        run_evidence,
-        "_publish_windows_container",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("destination oracle bypassed")),
-    )
-    before = tuple(tmp_path.iterdir())
-    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert tuple(tmp_path.iterdir()) == before
-
-
-@pytest.mark.skipif(os.name != "nt", reason="publication is supported only on Windows")
-def test_windows_uses_exact_relative_create_contract(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[tuple[bool, int, int, int]] = []
-    original = run_evidence._windows_nt_relative_file
-
-    def inspect(
-        parent_handle: int,
-        name: str,
-        is_directory: bool,
-        desired_access: int,
-        share_mode: int,
-        create_disposition: int,
-        create_options: int,
-    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
-        calls.append((is_directory, share_mode, create_disposition, create_options))
-        return original(
-            parent_handle,
-            name,
-            is_directory,
-            desired_access,
-            share_mode,
-            create_disposition,
-            create_options,
-        )
-
-    monkeypatch.setattr(run_evidence, "_windows_nt_relative_file", inspect)
-    destination = tmp_path / "bundle.container.json"
-    write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    directory_options = (
-        run_evidence._WINDOWS_FILE_DIRECTORY_FILE
-        | run_evidence._WINDOWS_FILE_OPEN_REPARSE_POINT
-        | run_evidence._WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
-    )
-    final_options = (
-        run_evidence._WINDOWS_FILE_NON_DIRECTORY_FILE
-        | run_evidence._WINDOWS_FILE_WRITE_THROUGH
-        | run_evidence._WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
-    )
-    assert calls[-1] == (
-        False,
-        0,
-        run_evidence._WINDOWS_FILE_CREATE,
-        final_options,
-    )
-    assert all(
-        call[1:]
-        == (
-            run_evidence._WINDOWS_FILE_SHARE_READ_WRITE,
-            run_evidence._WINDOWS_FILE_OPEN,
-            directory_options,
-        )
-        for call in calls[:-1]
-    )
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows protected-handle semantics")
-def test_windows_retains_no_delete_ancestor_handles_until_parent_flush(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    trusted = tmp_path / "trusted"
-    trusted.mkdir()
-    original_flush = run_evidence._windows_flush
-    denied = False
-
-    def probe(handle: int) -> None:
-        nonlocal denied
-        try:
-            os.rename(trusted, tmp_path / "redirected")
-        except OSError:
-            denied = True
-        original_flush(handle)
-
-    monkeypatch.setattr(run_evidence, "_windows_flush", probe)
-    write_synthetic_bundle_no_clobber(trusted / "bundle.container.json", synthetic_private_bundle())
-    assert denied
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows link fixture semantics")
-def test_windows_rejects_linked_ancestor_without_touching_target(tmp_path: Path) -> None:
-    target = tmp_path / "target"
-    target.mkdir()
-    linked = tmp_path / "linked"
-    completed = subprocess.run(
-        ("cmd", "/c", "mklink", "/J", str(linked), str(target)),
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        pytest.skip("the platform cannot create a junction in pytest tmp_path")
-    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
-        write_synthetic_bundle_no_clobber(
-            linked / "bundle.container.json", synthetic_private_bundle()
-        )
-    assert tuple(target.iterdir()) == ()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows cross-volume fixture semantics")
-def test_windows_rejects_cross_volume_junction_ancestor(tmp_path: Path) -> None:
-    target: Path | None = None
-    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
-        drive = Path(f"{letter}:\\")
-        if drive.exists():
-            try:
-                target = Path(tempfile.mkdtemp(prefix="mdcp-cross-volume-", dir=drive))
-            except OSError:
-                continue
-            break
-    if target is None:
-        pytest.skip("no second writable Windows volume is available")
-    linked = tmp_path / "cross-volume"
-    completed = subprocess.run(
-        ("cmd", "/c", "mklink", "/J", str(linked), str(target)),
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        pytest.skip("the platform cannot create a cross-volume junction")
-    try:
-        with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
-            write_synthetic_bundle_no_clobber(
-                linked / "bundle.container.json", synthetic_private_bundle()
-            )
-        assert tuple(target.iterdir()) == ()
-    finally:
-        target.rmdir()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows normalized handle names")
-def test_windows_rejects_normalized_handle_name_mismatch_before_create(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    original = run_evidence._windows_normalized_handle_name
-    calls = 0
-
-    def mismatch(handle: int) -> str:
-        nonlocal calls
-        calls += 1
-        value = original(handle)
-        return value if calls == 1 else value + "-mismatch"
-
-    monkeypatch.setattr(run_evidence, "_windows_normalized_handle_name", mismatch)
-    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
-        write_synthetic_bundle_no_clobber(
-            tmp_path / "bundle.container.json", synthetic_private_bundle()
-        )
-    assert not (tmp_path / "bundle.container.json").exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows create-new semantics")
-def test_windows_destination_create_collision_preserves_attacker_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original = run_evidence._windows_nt_relative_file
-
-    def collide(
-        parent_handle: int,
-        name: str,
-        is_directory: bool,
-        desired_access: int,
-        share_mode: int,
-        create_disposition: int,
-        create_options: int,
-    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
-        if not is_directory and not destination.exists():
-            destination.write_bytes(b"attacker")
-        return original(
-            parent_handle,
-            name,
-            is_directory,
-            desired_access,
-            share_mode,
-            create_disposition,
-            create_options,
-        )
-
-    monkeypatch.setattr(run_evidence, "_windows_nt_relative_file", collide)
-    with pytest.raises(ValueError, match="^DESTINATION_EXISTS$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert destination.read_bytes() == b"attacker"
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows handle cleanup semantics")
-@pytest.mark.parametrize("failure", ("short_write", "file_flush", "parent_flush", "identity"))
-def test_windows_failures_use_handle_bound_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    deleted_handles: list[int] = []
-    original_delete = run_evidence._windows_set_delete_disposition
-    original_flush = run_evidence._windows_flush
-    original_information = run_evidence._windows_file_information
-    flush_calls = 0
-    information_calls = 0
-
-    def record_delete(handle: int) -> bool:
-        deleted_handles.append(handle)
-        return original_delete(handle)
-
-    def fail_flush(handle: int) -> None:
-        nonlocal flush_calls
-        flush_calls += 1
-        if (failure == "file_flush" and flush_calls == 1) or (
-            failure == "parent_flush" and flush_calls == 2
-        ):
-            raise run_evidence._PublicationError("PUBLICATION_FAILED")
-        original_flush(handle)
-
-    def changed_information(handle: int) -> tuple[int, tuple[int, int, int]]:
-        nonlocal information_calls
-        result = original_information(handle)
-        information_calls += 1
-        if failure == "identity" and information_calls > 3:
-            return result[0], (result[1][0], result[1][1], result[1][2] + 1)
-        return result
-
-    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", record_delete)
-    monkeypatch.setattr(run_evidence, "_windows_flush", fail_flush)
-    monkeypatch.setattr(run_evidence, "_windows_file_information", changed_information)
-    if failure == "short_write":
-        monkeypatch.setattr(
-            run_evidence, "_windows_write_chunk", lambda _handle, data: len(data) - 1
-        )
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert len(deleted_handles) == 1
-    assert not destination.exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows handle cleanup semantics")
-def test_windows_cleanup_failure_is_terminal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    monkeypatch.setattr(run_evidence, "_windows_write_chunk", lambda _handle, _data: 0)
-    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", lambda _handle: False)
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert destination.exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows handle cleanup semantics")
-def test_windows_immediate_final_metadata_failure_keeps_handle_for_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original_relative = run_evidence._windows_nt_relative_file
-    original_information = run_evidence._windows_file_information
-    original_delete = run_evidence._windows_set_delete_disposition
-    final_handle: int | None = None
-    deleted_handles: list[int] = []
-
-    def mark_final(
-        parent_handle: int,
-        name: str,
-        is_directory: bool,
-        desired_access: int,
-        share_mode: int,
-        create_disposition: int,
-        create_options: int,
-    ) -> tuple[int | None, tuple[int, int, int] | None, int]:
-        nonlocal final_handle
-        result = original_relative(
-            parent_handle,
-            name,
-            is_directory,
-            desired_access,
-            share_mode,
-            create_disposition,
-            create_options,
-        )
-        if not is_directory:
-            final_handle = result[0]
-        return result
-
-    def unexpected_reparse(handle: int) -> tuple[int, tuple[int, int, int]]:
-        attributes, identity = original_information(handle)
-        if handle == final_handle:
-            attributes |= run_evidence._WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
-        return attributes, identity
-
-    def record_delete(handle: int) -> bool:
-        deleted_handles.append(handle)
-        return original_delete(handle)
-
-    monkeypatch.setattr(run_evidence, "_windows_nt_relative_file", mark_final)
-    monkeypatch.setattr(run_evidence, "_windows_file_information", unexpected_reparse)
-    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", record_delete)
-
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert len(deleted_handles) == 1
-    assert not destination.exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows ancestor handle semantics")
-def test_windows_native_ancestor_name_failure_closes_opened_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original_create = run_evidence._windows_create_file
-    original_close = run_evidence._windows_close
-    opened: list[int] = []
-    closed: list[int] = []
-
-    def record_open(
-        path: Path, desired_access: int, creation: int, flags: int
-    ) -> tuple[int | None, int]:
-        handle, error = original_create(path, desired_access, creation, flags)
-        if handle is not None:
-            opened.append(handle)
-        return handle, error
-
-    def record_close(handle: int) -> bool:
-        closed.append(handle)
-        return original_close(handle)
-
-    monkeypatch.setattr(run_evidence, "_windows_create_file", record_open)
-    monkeypatch.setattr(run_evidence, "_windows_close", record_close)
-    monkeypatch.setattr(
-        run_evidence,
-        "_windows_normalized_handle_name",
-        lambda _handle: (_ for _ in ()).throw(OSError("sensitive path")),
-    )
-
-    with pytest.raises(ValueError, match="^TRUSTED_PARENT_REQUIRED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert opened and closed == opened
-    assert not destination.exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows ancestor close aggregation")
-@pytest.mark.parametrize(("metadata_call", "expected_close_count"), ((1, 1), (2, 2)))
-@pytest.mark.parametrize("close_failure", ("false", "exception"))
-def test_windows_early_ancestor_metadata_close_failure_is_aggregated(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    metadata_call: int,
-    expected_close_count: int,
-    close_failure: str,
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original_information = run_evidence._windows_file_information
-    original_close = run_evidence._windows_close
-    information_calls = 0
-    close_calls: list[int] = []
-
-    def fail_selected_metadata(handle: int) -> tuple[int, tuple[int, int, int]]:
-        nonlocal information_calls
-        information_calls += 1
-        if information_calls == metadata_call:
-            raise run_evidence._PublicationError("PUBLICATION_FAILED")
-        return original_information(handle)
-
-    def raise_first_close(handle: int) -> bool:
-        close_calls.append(handle)
-        result = original_close(handle)
-        if len(close_calls) == 1:
-            if close_failure == "exception":
-                raise OSError("sensitive close failure")
-            return False
-        return result
-
-    monkeypatch.setattr(run_evidence, "_windows_file_information", fail_selected_metadata)
-    monkeypatch.setattr(run_evidence, "_windows_close", raise_first_close)
-
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert len(close_calls) == expected_close_count
-    assert not destination.exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows cleanup handle semantics")
-def test_windows_delete_disposition_exception_still_closes_every_handle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original_close = run_evidence._windows_close
-    closed: list[int] = []
-
-    def record_close(handle: int) -> bool:
-        closed.append(handle)
-        return original_close(handle)
-
-    monkeypatch.setattr(run_evidence, "_windows_write_chunk", lambda _handle, _data: 0)
-    monkeypatch.setattr(
-        run_evidence,
-        "_windows_set_delete_disposition",
-        lambda _handle: (_ for _ in ()).throw(OSError("sensitive path")),
-    )
-    monkeypatch.setattr(run_evidence, "_windows_close", record_close)
-
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-
-    assert len(closed) >= 2
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows close failure semantics")
-@pytest.mark.parametrize("failed_close_index", (1, 2))
-def test_windows_close_failure_after_success_is_terminal_and_all_handles_close(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_close_index: int
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original_close = run_evidence._windows_close
-    close_calls: list[int] = []
-
-    def fail_selected_close(handle: int) -> bool:
-        close_calls.append(handle)
-        original_close(handle)
-        return len(close_calls) != failed_close_index
-
-    monkeypatch.setattr(run_evidence, "_windows_close", fail_selected_close)
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert len(close_calls) >= 2
-    assert destination.is_file()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows close failure semantics")
-def test_windows_close_failure_after_delete_disposition_overrides_prior_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original_close = run_evidence._windows_close
-    original_delete = run_evidence._windows_set_delete_disposition
-    close_calls: list[int] = []
-    delete_calls: list[int] = []
-
-    def fail_write(_handle: int, _content: bytes) -> int:
-        raise run_evidence._PublicationError("PRIOR_FAILURE")
-
-    def record_delete(handle: int) -> bool:
-        delete_calls.append(handle)
-        return original_delete(handle)
-
-    def fail_first_close(handle: int) -> bool:
-        close_calls.append(handle)
-        original_close(handle)
-        return len(close_calls) != 1
-
-    monkeypatch.setattr(run_evidence, "_windows_write_chunk", fail_write)
-    monkeypatch.setattr(run_evidence, "_windows_set_delete_disposition", record_delete)
-    monkeypatch.setattr(run_evidence, "_windows_close", fail_first_close)
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert len(delete_calls) == 1
-    assert len(close_calls) >= 2
-    assert not destination.exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows final identity semantics")
-def test_windows_final_normalized_name_mismatch_is_cleaned_by_handle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    destination = tmp_path / "bundle.container.json"
-    original = run_evidence._windows_normalized_handle_name
-
-    def mismatch_final(handle: int) -> str:
-        value = original(handle)
-        return value + "-mismatch" if value.endswith(destination.name) else value
-
-    monkeypatch.setattr(run_evidence, "_windows_normalized_handle_name", mismatch_final)
-    with pytest.raises(ValueError, match="^PUBLICATION_FAILED$"):
-        write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert not destination.exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows publication surface")
-def test_windows_publisher_has_no_staging_rename_or_destination_path_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root_opens: list[Path] = []
-    original = run_evidence._windows_create_file
-
-    def root_only(
-        path: Path, desired_access: int, creation: int, flags: int
-    ) -> tuple[int | None, int]:
-        root_opens.append(path)
-        return original(path, desired_access, creation, flags)
-
-    monkeypatch.setattr(run_evidence, "_windows_create_file", root_only)
-    destination = tmp_path / "bundle.container.json"
-    identity = write_synthetic_bundle_no_clobber(destination, synthetic_private_bundle())
-    assert root_opens == [Path(destination.anchor)]
-    assert destination.is_file()
-    assert run_evidence.verify_private_container(destination, identity).verdict == "PASS"
-    assert not hasattr(run_evidence, "_windows_rename_noreplace")
-    assert not any("staging" in path.name.lower() for path in tmp_path.iterdir())
 
 
 def test_private_bundle_public_identity_contains_no_private_material() -> None:

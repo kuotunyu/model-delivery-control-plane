@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator, model_validator
 
 from mdcp.common.canonical import canonicalize_json, parse_json_bytes
 from mdcp.common.digests import sha256_hex
@@ -16,6 +16,12 @@ from mdcp.temporal.evidence import public_evidence_violations
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 GitCommit = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
+AuthorizationId = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ),
+]
 
 SEARCH_RECEIPT_RELATIVE_PATH = Path("evidence/public/v02/search/search-receipt.json")
 EVIDENCE_INDEX_RELATIVE_PATH = Path("evidence/public/v02/search/evidence-index.json")
@@ -113,6 +119,86 @@ class SearchReceipt(BaseModel):
         return value
 
 
+class FormalRunAuthorization(BaseModel):
+    """One external owner authorization bound to one exact frozen search."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "not": {
+                        "properties": {field: {"const": zero}},
+                        "required": [field],
+                    }
+                }
+                for field, zero in (
+                    ("search_freeze_commit", "0" * 40),
+                    ("search_receipt_sha256", "0" * 64),
+                    ("protocol_sha256", "0" * 64),
+                )
+            ]
+        },
+    )
+
+    schema_version: Literal["mdcp.formal-run-authorization.v1"]
+    canonicalization_version: Literal["RFC8785"]
+    search_freeze_commit: GitCommit
+    search_receipt_sha256: Sha256
+    protocol_sha256: Sha256
+    dataset_archive_sha256: Literal[
+        "b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401"
+    ]
+    authorization_id: AuthorizationId
+    authorized_action: Literal["ONE_FORMAL_20_TRIAL_DEVELOPMENT_RUN"]
+    authorized_at_utc: datetime
+    consumed: Literal[False]
+
+    @field_validator(
+        "schema_version",
+        "canonicalization_version",
+        "search_freeze_commit",
+        "search_receipt_sha256",
+        "protocol_sha256",
+        "dataset_archive_sha256",
+        "authorization_id",
+        "authorized_action",
+        "authorized_at_utc",
+        mode="before",
+    )
+    @classmethod
+    def _require_string_input(cls, value: object) -> object:
+        if type(value) is not str:
+            raise ValueError("FORMAL_RUN_AUTHORIZATION_INVALID")
+        return value
+
+    @field_validator("consumed", mode="before")
+    @classmethod
+    def _require_false_boolean(cls, value: object) -> object:
+        if type(value) is not bool or value is not False:
+            raise ValueError("FORMAL_RUN_AUTHORIZATION_INVALID")
+        return value
+
+    @field_validator("authorized_at_utc")
+    @classmethod
+    def _require_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value):
+            raise ValueError("FORMAL_RUN_AUTHORIZATION_INVALID")
+        return value
+
+    @model_validator(mode="after")
+    def _reject_zero_identities(self) -> FormalRunAuthorization:
+        if (
+            self.search_freeze_commit == "0" * 40
+            or self.search_receipt_sha256 == "0" * 64
+            or self.protocol_sha256 == "0" * 64
+        ):
+            raise ValueError("FORMAL_RUN_AUTHORIZATION_INVALID")
+        return self
+
+
 class _EvidenceIndex(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -165,7 +251,11 @@ def build_search_receipt(inputs: SearchIdentityInputs) -> SearchReceipt:
 
 
 def verify_search_freeze(
-    repository_root: Path, receipt_path: Path, evidence_index_path: Path
+    repository_root: Path,
+    receipt_path: Path,
+    evidence_index_path: Path,
+    *,
+    expected_head: str | None = None,
 ) -> SearchFreezeCheck:
     """Fail closed unless HEAD is the exact receipt-only child of its source commit."""
     root = repository_root.resolve()
@@ -174,6 +264,14 @@ def verify_search_freeze(
     head = _git(root, "rev-parse", "HEAD")
     if head is None:
         return _fail("SEARCH_FREEZE_HEAD_INVALID")
+    if expected_head is not None and head != expected_head:
+        return _fail("SEARCH_FREEZE_HEAD_MISMATCH")
+    remotes = _git(root, "remote")
+    if remotes is None or remotes:
+        return _fail("SEARCH_FREEZE_REMOTE_INVALID")
+    tags = _git(root, "tag", "--points-at", "HEAD")
+    if tags is None or tags:
+        return _fail("SEARCH_FREEZE_HEAD_TAGGED")
     if not _has_regular_public_evidence(root, head):
         return _fail("SEARCH_FREEZE_PUBLIC_EVIDENCE_NOT_REGULAR")
     receipt_bytes = _read_expected_public_file(root, receipt_path, SEARCH_RECEIPT_RELATIVE_PATH)
