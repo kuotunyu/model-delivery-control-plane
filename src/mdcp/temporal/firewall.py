@@ -449,9 +449,12 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("__future__", "annotations"),
             ("argparse", None),
             ("collections.abc", "Sequence"),
+            ("datetime", "datetime"),
             ("mdcp.common.canonical", "canonicalize_json"),
             ("mdcp.temporal", "run_evidence"),
             ("mdcp.temporal.search_identity", "verify_search_freeze"),
+            ("mdcp.temporal.search_identity", "prepare_search_freeze"),
+            ("mdcp.temporal.search_identity", "verify_search_source_inventory"),
             ("os", None),
             ("pathlib", "Path"),
             ("sys", None),
@@ -467,6 +470,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.common.canonical", "parse_json_bytes"),
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("os", None),
             ("pathlib", "Path"),
             ("pydantic", "BaseModel"),
             ("pydantic", "ConfigDict"),
@@ -474,6 +478,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic", "field_validator"),
             ("pydantic", "model_validator"),
             ("subprocess", None),
+            ("stat", None),
             ("typing", "Annotated"),
             ("typing", "Literal"),
         }
@@ -622,6 +627,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         {
             "argparse.ArgumentParser",
             "argparse.Namespace",
+            "datetime.fromisoformat",
             "os.environ",
             "os.getenv",
             "mdcp.temporal.run_evidence.FormalDevelopmentOutcome",
@@ -632,6 +638,8 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "sys.stdout.buffer",
             "sys.stdout.buffer.flush",
             "sys.stdout.buffer.write",
+            "sys.stdout.flush",
+            "sys.stdout.write",
         }
     ),
     "src/mdcp/temporal/runner.py": frozenset(
@@ -641,9 +649,21 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         {
             "json.loads",
             "os.name",
+            "os.close",
+            "os.O_CREAT",
+            "os.O_EXCL",
+            "os.O_WRONLY",
+            "os.lstat",
+            "os.open",
+            "os.write",
             "pathlib.Path.cwd",
+            "pathlib.Path.exists",
+            "pathlib.Path.mkdir",
+            "pathlib.Path.read_bytes",
+            "pathlib.Path.resolve",
             "stat.S_ISDIR",
             "stat.S_ISREG",
+            "stat.FILE_ATTRIBUTE_REPARSE_POINT",
             "subprocess.run",
         }
     ),
@@ -765,9 +785,15 @@ _ALLOWED_FILE_ACCESS_CALLS = {
             ("_parse_formal_authorization", "read_text", "name:_FORMAL_AUTHORIZATION_SCHEMA_PATH"),
             ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
             ("_read_expected_public_file", "read_bytes", "name:expected_path"),
+            ("_read_regular_nonlink_file", "read_bytes", "name:path"),
+            ("prepare_search_freeze", "read_bytes", "Path:root/path"),
+            ("_publish_no_clobber", "open", "name:os"),
+            ("_publish_no_clobber", "write", "name:os"),
         }
     ),
-    "src/mdcp/temporal/cli.py": frozenset({("main", "write", None)}),
+    "src/mdcp/temporal/cli.py": frozenset(
+        {("main", "write", None), ("_emit_check", "write", None)}
+    ),
     "src/mdcp/temporal/runner.py": frozenset(
         {("_build_formal_execution_plan", "read_bytes", "name:protocol_path")}
     ),
@@ -908,6 +934,13 @@ _ALLOWED_SEARCH_IDENTITY_GIT_CALLS = {
             ("show", "-s", "--format=%P", "HEAD"),
             ("tag", "--points-at", "HEAD"),
         }
+    ),
+    "prepare_search_freeze": frozenset({("rev-parse", "HEAD")}),
+    "_has_exact_search_source_modes": frozenset(
+        {("ls-files", "-s", "--", "name:SEARCH_SOURCE_PATHS")}
+    ),
+    "_has_exact_search_source_head_modes": frozenset(
+        {("ls-tree", "name:head", "--", "name:SEARCH_SOURCE_PATHS")}
     ),
     "_is_clean_checkout": frozenset({("status", "--porcelain=v1", "--untracked-files=all")}),
     "_has_exact_allowlisted_additions": frozenset(
@@ -1525,7 +1558,14 @@ def _allowed_search_identity_git_call(
         return True
     if not node.args or node.keywords or not isinstance(node.args[0], ast.Name):
         return False
-    command = tuple(_subprocess_argument_identity(argument) for argument in node.args[1:])
+    command = tuple(
+        (
+            f"name:{argument.value.id}"
+            if isinstance(argument, ast.Starred) and isinstance(argument.value, ast.Name)
+            else _subprocess_argument_identity(argument)
+        )
+        for argument in node.args[1:]
+    )
     return command in _ALLOWED_SEARCH_IDENTITY_GIT_CALLS.get(
         _enclosing_function(node, parents), frozenset()
     )

@@ -6,7 +6,459 @@ import pytest
 
 import mdcp.temporal.run_evidence as run_evidence
 from mdcp.temporal.evidence import public_evidence_violations
-from mdcp.temporal.run_evidence import FormalDevelopmentOutcome, PrivateBundleIdentity
+from mdcp.temporal.run_evidence import (
+    FormalDevelopmentOutcome,
+    FormalSealCheck,
+    PrivateBundleIdentity,
+)
+
+_FORMAL_REQUEST_INVALID_STDOUT = (
+    '{"reason_code":"FORMAL_RUN_REQUEST_INVALID","schema_version":'
+    '"mdcp.formal-run-cli-result.v1","verdict":"FAIL"}\n'
+)
+_SEARCH_ANCHOR_INVALID_STDOUT = (
+    '{"reason_code":"SEARCH_SOURCE_INDEX_ANCHOR_INVALID","schema_version":'
+    '"mdcp.search-source-cli-result.v1","verdict":"FAIL"}\n'
+)
+_SEARCH_ANCHOR_MISMATCH_STDOUT = (
+    '{"reason_code":"SEARCH_SOURCE_INDEX_ANCHOR_MISMATCH","schema_version":'
+    '"mdcp.search-source-cli-result.v1","verdict":"FAIL"}\n'
+)
+_CLOSED_COMMAND_ARGUMENTS = (
+    (
+        "run-development",
+        (
+            "run-development",
+            "--expected-freeze-head",
+            "a" * 40,
+            "--search-receipt",
+            "r",
+            "--evidence-index",
+            "i",
+            "--authorization-env",
+            "MDCP_FORMAL_RUN_AUTHORIZATION",
+            "--consumption-root-env",
+            "MDCP_FORMAL_RUN_CONSUMPTION_ROOT",
+            "--archive-env",
+            "MDCP_UCI_ARCHIVE",
+            "--private-container-env",
+            "MDCP_V02_PRIVATE_CONTAINER",
+        ),
+    ),
+    (
+        "verify-search-freeze",
+        ("verify-search-freeze", "--receipt", "r", "--index", "i"),
+    ),
+    (
+        "prepare-search-freeze",
+        ("prepare-search-freeze", "--created-at-utc", "2026-08-26T00:00:00+00:00"),
+    ),
+    (
+        "verify-search-source",
+        (
+            "verify-search-source",
+            "--root",
+            "r",
+            "--index",
+            "i",
+            "--expected-index-sha256",
+            "a" * 64,
+        ),
+    ),
+    (
+        "verify-development-result",
+        (
+            "verify-development-result",
+            "--consumption-marker",
+            "m",
+            "--private-container",
+            "p",
+            "--terminal-seal",
+            "t",
+            "--expected-authorization-sha256",
+            "a" * 64,
+            "--expected-search-receipt-sha256",
+            "b" * 64,
+            "--expected-source-inventory-sha256",
+            "c" * 64,
+            "--expected-repository-inventory-sha256",
+            "d" * 64,
+            "--expected-seal-record-sha256",
+            "e" * 64,
+        ),
+    ),
+)
+_OMITTED_REQUIRED_OPTION_CASES = tuple(
+    pytest.param(arguments, option, id=f"{command}-{option[2:]}")
+    for command, arguments in _CLOSED_COMMAND_ARGUMENTS
+    for option in arguments[1::2]
+)
+
+
+def _verify_search_source_arguments(root: Path, index: Path, anchor: str) -> list[str]:
+    return [
+        "verify-search-source",
+        "--root",
+        str(root),
+        "--index",
+        str(index),
+        "--expected-index-sha256",
+        anchor,
+    ]
+
+
+def _capture_search_source_verifier(monkeypatch: pytest.MonkeyPatch):
+    from mdcp.temporal import search_identity
+
+    real_verifier = search_identity.verify_search_source_inventory
+    calls: list[tuple[Path, Path, str]] = []
+
+    def capture(root: Path, index: Path, anchor: str):
+        calls.append((root, index, anchor))
+        return real_verifier(root, index, anchor)
+
+    monkeypatch.setattr(search_identity, "verify_search_source_inventory", capture)
+    return calls
+
+
+def _development_arguments(tmp_path: Path) -> tuple[list[str], tuple[object, ...]]:
+    marker = (tmp_path / "consumption-marker.json").resolve()
+    private = (tmp_path / "private-container.json").resolve()
+    terminal = (tmp_path / "terminal-seal.json").resolve()
+    digests = ("a" * 64, "b" * 64, "c" * 64, "d" * 64, "e" * 64)
+    arguments = [
+        "verify-development-result",
+        "--consumption-marker",
+        str(marker),
+        "--private-container",
+        str(private),
+        "--terminal-seal",
+        str(terminal),
+        "--expected-authorization-sha256",
+        digests[0],
+        "--expected-search-receipt-sha256",
+        digests[1],
+        "--expected-source-inventory-sha256",
+        digests[2],
+        "--expected-repository-inventory-sha256",
+        digests[3],
+        "--expected-seal-record-sha256",
+        digests[4],
+    ]
+    return arguments, (marker, private, terminal, *digests)
+
+
+def _install_offline_denial_sentinels(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    import joblib
+
+    import mdcp.workload.dataset as dataset
+    import mdcp.workload.splits as splits
+
+    calls = {
+        "uci_loader": 0,
+        "h1_loader": 0,
+        "h2_loader": 0,
+        "model_loader": 0,
+        "model_execution": 0,
+    }
+
+    def denial(name: str):
+        def denied(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            calls[name] += 1
+            raise AssertionError(f"offline denial sentinel called: {name}")
+
+        return denied
+
+    monkeypatch.setattr(dataset, "load_uci_archive", denial("uci_loader"))
+    monkeypatch.setattr(dataset, "load_uci_development_archive", denial("h1_loader"))
+    monkeypatch.setattr(splits.DatasetPartitions, "open_h2", denial("h2_loader"))
+    monkeypatch.setattr(joblib, "load", denial("model_loader"))
+    monkeypatch.setattr(
+        run_evidence,
+        "execute_authorized_formal_development",
+        denial("model_execution"),
+    )
+    return calls
+
+
+def test_cli_exposes_only_the_five_closed_commands() -> None:
+    from mdcp.temporal.cli import build_parser
+
+    parser = build_parser()
+    action = next(item for item in parser._actions if item.dest == "command")
+
+    assert tuple(action.choices) == (
+        "run-development",
+        "verify-search-freeze",
+        "prepare-search-freeze",
+        "verify-search-source",
+        "verify-development-result",
+    )
+
+
+def test_verify_search_source_requires_explicit_archive_root() -> None:
+    from mdcp.temporal.cli import build_parser
+
+    with pytest.raises(ValueError, match="^FORMAL_RUN_REQUEST_INVALID$"):
+        build_parser().parse_args(
+            [
+                "verify-search-source",
+                "--index",
+                "index.json",
+                "--expected-index-sha256",
+                "a" * 64,
+            ]
+        )
+
+
+def test_verify_search_source_cli_rejects_an_absent_anchor_flag(
+    monkeypatch: pytest.MonkeyPatch, capfd, tmp_path: Path
+) -> None:
+    from mdcp.temporal import cli, search_identity
+
+    calls = 0
+
+    def denied(*args: object, **kwargs: object):
+        nonlocal calls
+        del args, kwargs
+        calls += 1
+        raise AssertionError("source verifier must not run after parser rejection")
+
+    monkeypatch.setattr(search_identity, "verify_search_source_inventory", denied)
+
+    exit_code = cli.main(
+        [
+            "verify-search-source",
+            "--root",
+            str(tmp_path / "archive"),
+            "--index",
+            str(tmp_path / "index.json"),
+        ]
+    )
+
+    assert exit_code == 2
+    assert capfd.readouterr().out == _FORMAL_REQUEST_INVALID_STDOUT
+    assert calls == 0
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    ("0" * 64, "A" * 64, "a" * 63, "g" + "a" * 63),
+    ids=("zero", "uppercase", "malformed-length", "malformed-character"),
+)
+def test_verify_search_source_cli_rejects_each_invalid_anchor(
+    monkeypatch: pytest.MonkeyPatch, capfd, tmp_path: Path, anchor: str
+) -> None:
+    from mdcp.temporal import cli
+
+    root = (tmp_path / "archive").resolve()
+    root.mkdir()
+    index = (tmp_path / "index.json").resolve()
+    index.write_bytes(b"{}")
+    calls = _capture_search_source_verifier(monkeypatch)
+
+    exit_code = cli.main(_verify_search_source_arguments(root, index, anchor))
+
+    assert exit_code == 2
+    assert capfd.readouterr().out == _SEARCH_ANCHOR_INVALID_STDOUT
+    assert calls == [(root, index, anchor)]
+
+
+def test_verify_search_source_cli_rejects_a_mismatched_anchor(
+    monkeypatch: pytest.MonkeyPatch, capfd, tmp_path: Path
+) -> None:
+    from mdcp.temporal import cli
+
+    root = (tmp_path / "archive").resolve()
+    root.mkdir()
+    index = (tmp_path / "index.json").resolve()
+    index.write_bytes(b"{}")
+    anchor = "a" * 64
+    calls = _capture_search_source_verifier(monkeypatch)
+
+    exit_code = cli.main(_verify_search_source_arguments(root, index, anchor))
+
+    assert exit_code == 2
+    assert capfd.readouterr().out == _SEARCH_ANCHOR_MISMATCH_STDOUT
+    assert calls == [(root, index, anchor)]
+
+
+def test_verify_search_source_forwards_exact_root_and_emits_fixed_success(
+    monkeypatch: pytest.MonkeyPatch, capfd, tmp_path: Path
+) -> None:
+    from mdcp.temporal import cli
+    from mdcp.temporal.search_identity import SearchSourceCheck
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    captured: list[Path] = []
+    monkeypatch.setattr(
+        "mdcp.temporal.search_identity.verify_search_source_inventory",
+        lambda root, index, anchor: (
+            captured.append(root) or SearchSourceCheck("PASS", ("SEARCH_SOURCE_INVENTORY_PASS",))
+        ),
+    )
+
+    assert (
+        cli.main(
+            [
+                "verify-search-source",
+                "--root",
+                str(archive),
+                "--index",
+                str(tmp_path / "index.json"),
+                "--expected-index-sha256",
+                "a" * 64,
+            ]
+        )
+        == 0
+    )
+    assert captured == [archive]
+    assert capfd.readouterr().out == "SEARCH_SOURCE_INVENTORY_PASS\n"
+
+
+@pytest.mark.parametrize(
+    ("verdict", "reason_code", "exit_code"),
+    (
+        ("PASS", "FORMAL_SEAL_PASS", 0),
+        ("FAIL", "FORMAL_SEAL_CHAIN_INVALID", 2),
+        ("UNKNOWN", "FORMAL_SEAL_INCOMPLETE", 3),
+    ),
+)
+def test_development_result_cli_emits_exact_status_and_forwards_exact_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    capfd,
+    tmp_path: Path,
+    verdict: str,
+    reason_code: str,
+    exit_code: int,
+) -> None:
+    from mdcp.temporal import cli
+
+    arguments, expected_forwarding = _development_arguments(tmp_path)
+    calls: list[tuple[object, ...]] = []
+    denial_calls = _install_offline_denial_sentinels(monkeypatch)
+    if verdict == "PASS":
+        check = FormalSealCheck(
+            verdict="PASS",
+            reason_codes=(),
+            private_identity=PrivateBundleIdentity(
+                file_count=5,
+                total_bytes=1,
+                inventory_sha256="f" * 64,
+                manifest_sha256="1" * 64,
+            ),
+            seal_record_sha256="2" * 64,
+            repository_inventory_sha256="3" * 64,
+            fit_count=84,
+            h2_status="SEALED_NOT_LOADED",
+            h2_loaded_rows=0,
+        )
+    else:
+        check = FormalSealCheck(
+            verdict=verdict,
+            reason_codes=(reason_code,),
+            private_identity=None,
+            seal_record_sha256=None,
+            repository_inventory_sha256=None,
+            fit_count=0,
+            h2_status="SEALED_NOT_LOADED",
+            h2_loaded_rows=0,
+        )
+
+    def capture(
+        marker: Path,
+        private: Path,
+        terminal: Path,
+        *,
+        expected_authorization_sha256: str,
+        expected_search_receipt_sha256: str,
+        expected_source_inventory_sha256: str,
+        expected_repository_inventory_sha256: str,
+        expected_seal_record_sha256: str,
+    ) -> FormalSealCheck:
+        calls.append(
+            (
+                marker,
+                private,
+                terminal,
+                expected_authorization_sha256,
+                expected_search_receipt_sha256,
+                expected_source_inventory_sha256,
+                expected_repository_inventory_sha256,
+                expected_seal_record_sha256,
+            )
+        )
+        return check
+
+    monkeypatch.setattr(run_evidence, "verify_formal_development_seal", capture)
+
+    assert cli.main(arguments) == exit_code
+    assert capfd.readouterr().out == (
+        f'{{"reason_code":"{reason_code}","schema_version":'
+        f'"mdcp.development-result-cli-result.v1","verdict":"{verdict}"}}\n'
+    )
+    assert calls == [expected_forwarding]
+    assert len(set(expected_forwarding[:3])) == 3
+    assert len(set(expected_forwarding[3:])) == 5
+    assert denial_calls == {
+        "uci_loader": 0,
+        "h1_loader": 0,
+        "h2_loader": 0,
+        "model_loader": 0,
+        "model_execution": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "omitted_option"),
+    _OMITTED_REQUIRED_OPTION_CASES,
+)
+def test_each_required_cli_option_value_pair_is_independently_required(
+    arguments: tuple[str, ...], omitted_option: str
+) -> None:
+    from mdcp.temporal.cli import build_parser
+
+    position = arguments.index(omitted_option)
+    invalid = (*arguments[:position], *arguments[position + 2 :])
+
+    with pytest.raises(ValueError, match="^FORMAL_RUN_REQUEST_INVALID$"):
+        build_parser().parse_args(invalid)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (pytest.param(arguments, id=command) for command, arguments in _CLOSED_COMMAND_ARGUMENTS),
+)
+def test_each_closed_cli_command_rejects_an_extra_option(
+    arguments: tuple[str, ...],
+) -> None:
+    from mdcp.temporal.cli import build_parser
+
+    with pytest.raises(ValueError, match="^FORMAL_RUN_REQUEST_INVALID$"):
+        build_parser().parse_args((*arguments, "--unexpected", "value"))
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (pytest.param(arguments, id=command) for command, arguments in _CLOSED_COMMAND_ARGUMENTS),
+)
+def test_each_closed_cli_command_rejects_an_extra_positional(
+    arguments: tuple[str, ...],
+) -> None:
+    from mdcp.temporal.cli import build_parser
+
+    with pytest.raises(ValueError, match="^FORMAL_RUN_REQUEST_INVALID$"):
+        build_parser().parse_args((*arguments, "unexpected-positional"))
+
+
+@pytest.mark.parametrize("command", ("unknown", "verify-unknown", ""))
+def test_non_five_commands_are_rejected(command: str) -> None:
+    from mdcp.temporal.cli import build_parser
+
+    with pytest.raises(ValueError, match="^FORMAL_RUN_REQUEST_INVALID$"):
+        build_parser().parse_args([command])
 
 
 def test_public_scan_rejects_private_metadata_without_echoing_values() -> None:

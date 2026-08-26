@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 from mdcp.common.canonical import canonicalize_json
@@ -61,6 +62,21 @@ def build_parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify-search-freeze", add_help=False)
     verify.add_argument("--receipt", type=Path, required=True)
     verify.add_argument("--index", type=Path, required=True)
+    prepare = commands.add_parser("prepare-search-freeze", add_help=False)
+    prepare.add_argument("--created-at-utc", type=datetime.fromisoformat, required=True)
+    source = commands.add_parser("verify-search-source", add_help=False)
+    source.add_argument("--root", type=Path, required=True)
+    source.add_argument("--index", type=Path, required=True)
+    source.add_argument("--expected-index-sha256", required=True)
+    development = commands.add_parser("verify-development-result", add_help=False)
+    development.add_argument("--consumption-marker", type=Path, required=True)
+    development.add_argument("--private-container", type=Path, required=True)
+    development.add_argument("--terminal-seal", type=Path, required=True)
+    development.add_argument("--expected-authorization-sha256", required=True)
+    development.add_argument("--expected-search-receipt-sha256", required=True)
+    development.add_argument("--expected-source-inventory-sha256", required=True)
+    development.add_argument("--expected-repository-inventory-sha256", required=True)
+    development.add_argument("--expected-seal-record-sha256", required=True)
     return parser
 
 
@@ -95,6 +111,48 @@ def main(arguments: Sequence[str] | None = None) -> int:
         except Exception:
             return 4
         return 0 if check.verdict == "PASS" else 2
+
+    if parsed.command == "prepare-search-freeze":
+        from mdcp.temporal.search_identity import prepare_search_freeze
+
+        try:
+            prepare_search_freeze(Path.cwd(), parsed.created_at_utc)
+            verdict, reason = "PASS", "SEARCH_FREEZE_PREPARED"
+        except Exception:
+            verdict, reason = "FAIL", "SEARCH_FREEZE_PREPARATION_FAILED"
+        return _emit_check("mdcp.search-freeze-cli-result.v1", verdict, reason)
+
+    if parsed.command == "verify-search-source":
+        from mdcp.temporal.search_identity import verify_search_source_inventory
+
+        check = verify_search_source_inventory(
+            parsed.root, parsed.index, parsed.expected_index_sha256
+        )
+        if check.verdict == "PASS":
+            try:
+                sys.stdout.write("SEARCH_SOURCE_INVENTORY_PASS\n")
+                sys.stdout.flush()
+            except Exception:
+                return 4
+            return 0
+        return _emit_check("mdcp.search-source-cli-result.v1", check.verdict, check.reason_codes[0])
+
+    if parsed.command == "verify-development-result":
+        check = run_evidence.verify_formal_development_seal(
+            parsed.consumption_marker,
+            parsed.private_container,
+            parsed.terminal_seal,
+            expected_authorization_sha256=parsed.expected_authorization_sha256,
+            expected_search_receipt_sha256=parsed.expected_search_receipt_sha256,
+            expected_source_inventory_sha256=parsed.expected_source_inventory_sha256,
+            expected_repository_inventory_sha256=parsed.expected_repository_inventory_sha256,
+            expected_seal_record_sha256=parsed.expected_seal_record_sha256,
+        )
+        return _emit_check(
+            "mdcp.development-result-cli-result.v1",
+            check.verdict,
+            check.reason_codes[0] if check.reason_codes else "FORMAL_SEAL_PASS",
+        )
 
     authorization = os.getenv("MDCP_FORMAL_RUN_AUTHORIZATION")
     consumption_root = os.getenv("MDCP_FORMAL_RUN_CONSUMPTION_ROOT")
@@ -148,6 +206,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
     except Exception:
         return 4
     return exit_code
+
+
+def _emit_check(schema_version: str, verdict: str, reason_code: str) -> int:
+    document = {
+        "reason_code": reason_code,
+        "schema_version": schema_version,
+        "verdict": verdict,
+    }
+    try:
+        sys.stdout.buffer.write(canonicalize_json(document) + b"\n")
+        sys.stdout.buffer.flush()
+    except Exception:
+        return 4
+    return 0 if verdict == "PASS" else 2 if verdict == "FAIL" else 3
 
 
 if __name__ == "__main__":  # pragma: no cover
