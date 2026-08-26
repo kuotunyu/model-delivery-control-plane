@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import ast
+import base64
 import copy
 import inspect
 import io
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -32,6 +34,7 @@ from mdcp.temporal.run_evidence import (
 
 ZERO = "0" * 64
 A = "a" * 64
+B = "2" * 64
 M = "b" * 64
 R = "c" * 64
 S = "d" * 64
@@ -1136,24 +1139,217 @@ def test_recovery_precedence_for_absent_partial_and_malformed_chain(tmp_path: Pa
         ) == (None, None, None, 0)
 
 
+def _natural_chain_public_result() -> PublicDevelopmentResult:
+    document = public_result().model_dump(mode="json")
+    for trial in document["trials"][2:]:
+        for fold in trial["folds"]:
+            fold["status"] = "FAIL"
+            fold["reason_codes"] = ["QUALITY_THRESHOLD_EXCEEDED"]
+    return PublicDevelopmentResult.model_validate(document)
+
+
+def _fixture_fold_digest(
+    document: dict[str, object],
+    stable_document: dict[str, object],
+    *,
+    replay: bool,
+) -> dict[str, object]:
+    from mdcp.temporal.runner import EXACT_TRIAL_IDS
+    from mdcp.temporal.trials import canonical_trial_identity
+
+    trial_label = document["trial_id"]
+    canonical_trial_id = EXACT_TRIAL_IDS[int(trial_label[-2:]) - 1]
+    receipt_material = {
+        "trial_id": canonical_trial_id,
+        "fold_id": document["fold_id"],
+        "contract_verdict": document["contract_verdict"],
+        "inventory": document["inventory"],
+        "adapters": document["adapters"],
+        "stable_predictions": stable_document["predictions"],
+        "candidate_predictions": document["predictions"],
+        "labels": document["labels"],
+        "declared_digests": {
+            field: document[field]
+            for field in (
+                "preprocessing_state_sha256",
+                "feature_vector_sha256",
+                "prediction_vector_sha256",
+                "metric_sha256",
+                "receipt_sha256",
+            )
+        },
+    }
+    digest = {
+        "fold_id": document["fold_id"],
+        "configuration_sha256": canonical_trial_identity(canonical_trial_id).configuration_sha256,
+        "preprocessing_state_sha256": document["preprocessing_state_sha256"],
+        "feature_vector_sha256": document["feature_vector_sha256"],
+        "prediction_vector_sha256": document["prediction_vector_sha256"],
+        "metric_sha256": document["metric_sha256"],
+        "receipt_sha256": sha256_hex(canonicalize_json(receipt_material)),
+    }
+    if replay:
+        digest["verdict"] = document["contract_verdict"]
+    return digest
+
+
+def _set_false_declared_digests(document: dict[str, object]) -> None:
+    from mdcp.temporal.runner import EXACT_TRIAL_IDS
+
+    trial_label = document["trial_id"]
+    document["prediction_vector_sha256"] = B
+    document["metric_sha256"] = M
+    declared = {
+        "trial_id": EXACT_TRIAL_IDS[int(trial_label[-2:]) - 1],
+        "fold_id": document["fold_id"],
+        "preprocessing_state_sha256": document["preprocessing_state_sha256"],
+        "feature_vector_sha256": document["feature_vector_sha256"],
+        "prediction_vector_sha256": document["prediction_vector_sha256"],
+        "metric_sha256": document["metric_sha256"],
+    }
+    document["receipt_sha256"] = sha256_hex(canonicalize_json(declared))
+
+
+def _refresh_declared_digests(document: dict[str, object]) -> None:
+    from mdcp.temporal.runner import EXACT_TRIAL_IDS
+
+    trial_label = document["trial_id"]
+    prediction_values = tuple(float(item["value"]) for item in document["predictions"])
+    label_values = tuple(float(item["value"]) for item in document["labels"])
+    document["prediction_vector_sha256"] = sha256_hex(canonicalize_json(prediction_values))
+    document["metric_sha256"] = sha256_hex(
+        canonicalize_json({"labels": label_values, "predictions": prediction_values})
+    )
+    declared = {
+        "trial_id": EXACT_TRIAL_IDS[int(trial_label[-2:]) - 1],
+        "fold_id": document["fold_id"],
+        "preprocessing_state_sha256": document["preprocessing_state_sha256"],
+        "feature_vector_sha256": document["feature_vector_sha256"],
+        "prediction_vector_sha256": document["prediction_vector_sha256"],
+        "metric_sha256": document["metric_sha256"],
+    }
+    document["receipt_sha256"] = sha256_hex(canonicalize_json(declared))
+
+
+def _set_false_source_identity_digest(document: dict[str, object]) -> None:
+    document["inventory"][0]["identity_sha256"] = B
+    for collection in ("adapters", "predictions", "labels"):
+        document[collection][0]["identity"]["identity_sha256"] = B
+
+
+def _refresh_selected_chain(documents: dict[str, dict[str, object]]) -> None:
+    summary = documents["trial-summary.json"]
+    selection_by_identity = {
+        (document["trial_id"], document["fold_id"]): document
+        for document in summary["selection_folds"]
+    }
+    stable_by_fold = {
+        fold_id: selection_by_identity[("TRIAL-01", fold_id)]
+        for fold_id in ("F1", "F2", "F3", "F4")
+    }
+    qualification = documents["qualification-report.json"]
+    selected = qualification["qualifications"][0]
+    selected["fold_digests"] = [
+        _fixture_fold_digest(
+            selection_by_identity[("TRIAL-02", fold_id)],
+            stable_by_fold[fold_id],
+            replay=False,
+        )
+        for fold_id in ("F1", "F2", "F3", "F4")
+    ]
+    qualification_sha256 = sha256_hex(canonicalize_json(qualification["qualifications"]))
+    qualification["qualification_inventory_sha256"] = qualification_sha256
+    winners = documents["provisional-winner.json"]
+    for winner_name in ("provisional_winner", "final_winner"):
+        winner = winners[winner_name]
+        if winner is not None:
+            winner["fold_digests"] = selected["fold_digests"]
+            winner["qualification_inventory_sha256"] = qualification_sha256
+    documents["ranking-report.json"]["qualification_inventory_sha256"] = qualification_sha256
+    replay = documents["replay-report.json"]
+    replay["replay_digests"] = [
+        _fixture_fold_digest(document, stable_by_fold[document["fold_id"]], replay=True)
+        for document in replay["replay_folds"]
+    ]
+
+
+def _set_no_winner_chain(
+    documents: dict[str, dict[str, object]],
+    *,
+    qualification_unknown: bool,
+) -> None:
+    qualification = documents["qualification-report.json"]
+    selected = qualification["qualifications"][0]
+    selected["verdict"] = "UNKNOWN" if qualification_unknown else "FAIL"
+    selected["qualified"] = False
+    selected["reason_codes"] = [
+        "EVIDENCE_UNKNOWN" if qualification_unknown else "QUALITY_THRESHOLD_EXCEEDED"
+    ]
+    qualification_sha256 = sha256_hex(canonicalize_json(qualification["qualifications"]))
+    qualification["qualification_inventory_sha256"] = qualification_sha256
+    public_folds = documents["trial-summary.json"]["public_trials"][1]["folds"]
+    for fold in public_folds:
+        fold["status"] = selected["verdict"]
+        if qualification_unknown:
+            fold["metrics"] = dict.fromkeys(
+                ("row_count", "stable_mae", "candidate_mae", "point_ratio", "ucb95")
+            )
+            fold["reason_codes"] = ["METRICS_UNAVAILABLE"]
+        else:
+            fold["reason_codes"] = ["QUALITY_THRESHOLD_EXCEEDED"]
+    documents["provisional-winner.json"]["provisional_winner"] = None
+    documents["provisional-winner.json"]["final_winner"] = None
+    status = "UNKNOWN/NO_ELIGIBLE_CANDIDATE" if qualification_unknown else "NO_ELIGIBLE_CANDIDATE"
+    reason = "QUALIFICATION_UNKNOWN" if qualification_unknown else "NO_QUALIFIED_TRIAL"
+    ranking = documents["ranking-report.json"]
+    ranking["selection_status"] = status
+    ranking["reason_codes"] = [reason]
+    ranking["qualification_inventory_sha256"] = qualification_sha256
+    ranking["provisional_ranking_key"] = None
+    replay = documents["replay-report.json"]
+    replay["selection_status"] = status
+    replay["reason_codes"] = [reason]
+    replay["replay_trial_id"] = None
+    replay["replay_folds"] = []
+    replay["replay_digests"] = []
+
+
 def _write_natural_container(path: Path) -> PrivateBundleIdentity:
-    import base64
+    from mdcp.temporal.runner import EXACT_TRIAL_IDS
+    from mdcp.temporal.trials import canonical_trial_identity
+
+    label_to_trial = {
+        f"TRIAL-{index:02d}": trial_id for index, trial_id in enumerate(EXACT_TRIAL_IDS, start=1)
+    }
 
     def fold_document(trial_id: str, fold_id: str, phase: str) -> dict[str, object]:
-        identity = {
+        identity_material = {
             "fold_id": fold_id,
-            "request_id": f"{trial_id}-{fold_id}-{phase}",
+            "request_id": f"{trial_id}-{fold_id}",
             "local_timestamp": "2011-01-01T00:00:00-05:00",
             "source_position": 1,
-            "identity_sha256": sha256_hex(
-                canonicalize_json({"trial_id": trial_id, "fold_id": fold_id, "phase": phase})
-            ),
+        }
+        identity = {
+            **identity_material,
+            "identity_sha256": sha256_hex(canonicalize_json(identity_material)),
         }
         value = {
             "identity": identity,
             "succeeded": True,
             "value": 1.0,
             "reason_code": None,
+        }
+        preprocessing_sha256 = sha256_hex(f"{trial_id}:{fold_id}:preprocessing".encode())
+        feature_sha256 = sha256_hex(f"{trial_id}:{fold_id}:features".encode())
+        prediction_sha256 = sha256_hex(canonicalize_json((1.0,)))
+        metric_sha256 = sha256_hex(canonicalize_json({"labels": (1.0,), "predictions": (1.0,)}))
+        declared = {
+            "trial_id": label_to_trial[trial_id],
+            "fold_id": fold_id,
+            "preprocessing_state_sha256": preprocessing_sha256,
+            "feature_vector_sha256": feature_sha256,
+            "prediction_vector_sha256": prediction_sha256,
+            "metric_sha256": metric_sha256,
         }
         return {
             "phase": phase,
@@ -1172,26 +1368,20 @@ def _write_natural_container(path: Path) -> PrivateBundleIdentity:
             ],
             "predictions": [value],
             "labels": [value],
-            "preprocessing_state_sha256": A,
-            "feature_vector_sha256": M,
-            "prediction_vector_sha256": R,
-            "metric_sha256": S,
-            "receipt_sha256": INVENTORY,
+            "preprocessing_state_sha256": preprocessing_sha256,
+            "feature_vector_sha256": feature_sha256,
+            "prediction_vector_sha256": prediction_sha256,
+            "metric_sha256": metric_sha256,
+            "receipt_sha256": sha256_hex(canonicalize_json(declared)),
         }
 
-    def fold_digest(fold_id: str, *, replay: bool) -> dict[str, object]:
-        digest = {
-            "fold_id": fold_id,
-            "configuration_sha256": A,
-            "preprocessing_state_sha256": M,
-            "feature_vector_sha256": R,
-            "prediction_vector_sha256": S,
-            "metric_sha256": INVENTORY,
-            "receipt_sha256": P,
-        }
-        if replay:
-            digest["verdict"] = "PASS"
-        return digest
+    def fold_digest(
+        document: dict[str, object],
+        stable_document: dict[str, object],
+        *,
+        replay: bool,
+    ) -> dict[str, object]:
+        return _fixture_fold_digest(document, stable_document, replay=replay)
 
     common = {
         "canonicalization_version": "RFC8785",
@@ -1202,12 +1392,21 @@ def _write_natural_container(path: Path) -> PrivateBundleIdentity:
         for trial in range(1, 21)
         for fold_id in ("F1", "F2", "F3", "F4")
     ]
+    selection_by_identity = {
+        (document["trial_id"], document["fold_id"]): document for document in selection_folds
+    }
+    stable_by_fold = {
+        fold_id: selection_by_identity[("TRIAL-01", fold_id)]
+        for fold_id in ("F1", "F2", "F3", "F4")
+    }
     qualifications = [
         {
-            "trial_id": f"TRIAL-{trial:02d}",
-            "family_id": f"family-{trial:02d}",
-            "configuration_sha256": A,
-            "report_sha256": M,
+            "trial_id": (trial_label := f"TRIAL-{trial:02d}"),
+            "family_id": canonical_trial_identity(label_to_trial[trial_label]).family_id,
+            "configuration_sha256": canonical_trial_identity(
+                label_to_trial[trial_label]
+            ).configuration_sha256,
+            "report_sha256": sha256_hex(f"{trial_label}:report".encode()),
             "verdict": "PASS" if trial == 2 else "FAIL",
             "qualified": trial == 2,
             "reason_codes": [] if trial == 2 else ["QUALITY_THRESHOLD_EXCEEDED"],
@@ -1215,26 +1414,33 @@ def _write_natural_container(path: Path) -> PrivateBundleIdentity:
             "worst_fold_point": 0.9,
             "worst_subgroup_ucb95": 0.9,
             "fold_digests": [
-                fold_digest(fold_id, replay=False) for fold_id in ("F1", "F2", "F3", "F4")
+                fold_digest(
+                    selection_by_identity[(trial_label, fold_id)],
+                    stable_by_fold[fold_id],
+                    replay=False,
+                )
+                for fold_id in ("F1", "F2", "F3", "F4")
             ],
         }
         for trial in range(2, 21)
     ]
     qualification_sha256 = sha256_hex(canonicalize_json(qualifications))
+    selected = qualifications[0]
     winner = {
         "trial_id": "TRIAL-02",
-        "family_id": "family-02",
-        "configuration_sha256": A,
-        "report_sha256": M,
+        "family_id": selected["family_id"],
+        "configuration_sha256": selected["configuration_sha256"],
+        "report_sha256": selected["report_sha256"],
         "pooled_ucb95": 0.9,
         "worst_fold_point": 0.9,
         "worst_subgroup_ucb95": 0.9,
-        "ranking_key": [0.9, 0.9, 0.9, 0, "TRIAL-02"],
-        "fold_digests": [
-            fold_digest(fold_id, replay=False) for fold_id in ("F1", "F2", "F3", "F4")
-        ],
+        "ranking_key": [0.9, 0.9, 0.9, 1, "TRIAL-02"],
+        "fold_digests": selected["fold_digests"],
         "qualification_inventory_sha256": qualification_sha256,
     }
+    replay_folds = [
+        fold_document("TRIAL-02", fold_id, "REPLAY") for fold_id in ("F1", "F2", "F3", "F4")
+    ]
     documents = {
         "provisional-winner.json": {
             "schema_version": "mdcp.natural-provisional-winner.v1",
@@ -1263,11 +1469,10 @@ def _write_natural_container(path: Path) -> PrivateBundleIdentity:
             "selection_status": "PASS",
             "reason_codes": [],
             "replay_trial_id": "TRIAL-02",
-            "replay_folds": [
-                fold_document("TRIAL-02", fold_id, "REPLAY") for fold_id in ("F1", "F2", "F3", "F4")
-            ],
+            "replay_folds": replay_folds,
             "replay_digests": [
-                fold_digest(fold_id, replay=True) for fold_id in ("F1", "F2", "F3", "F4")
+                fold_digest(document, stable_by_fold[document["fold_id"]], replay=True)
+                for document in replay_folds
             ],
         },
         "trial-summary.json": {
@@ -1275,7 +1480,7 @@ def _write_natural_container(path: Path) -> PrivateBundleIdentity:
             **common,
             "selection_fit_count": 80,
             "selection_folds": selection_folds,
-            "public_trials": public_result().model_dump(mode="json")["trials"],
+            "public_trials": _natural_chain_public_result().model_dump(mode="json")["trials"],
         },
     }
     entries = []
@@ -1313,9 +1518,9 @@ def _write_natural_container(path: Path) -> PrivateBundleIdentity:
     )
 
 
-def test_recovery_requires_external_terminal_anchor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _write_valid_recovery_chain(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, FormalDevelopmentSeal, bytes]:
     marker_path = (tmp_path / "marker.json").absolute()
     private_path = (tmp_path / "private.json").absolute()
     terminal_path = (tmp_path / "private.json.public.json").absolute()
@@ -1367,10 +1572,114 @@ def test_recovery_requires_external_terminal_anchor(
         h1_role="OBSERVED_DEVELOPMENT_ONLY",
         h2_status="SEALED_NOT_LOADED",
         h2_loaded_rows=0,
-        development_result=public_result(),
+        development_result=_natural_chain_public_result(),
     )
     terminal_raw = canonicalize_json(seal.model_dump(mode="json"))
     terminal_path.write_bytes(terminal_raw)
+    return marker_path, private_path, terminal_path, seal, terminal_raw
+
+
+def _rewrite_natural_container(
+    path: Path,
+    mutation: Callable[[dict[str, dict[str, object]]], None],
+) -> tuple[PrivateBundleIdentity, dict[str, dict[str, object]]]:
+    container = parse_json_bytes(path.read_bytes())
+    documents = {
+        entry["logical_path"]: parse_json_bytes(base64.b64decode(entry["payload_base64"]))
+        for entry in container["entries"]
+    }
+    mutation(documents)
+    entries = []
+    for logical_path in sorted(documents):
+        payload = canonicalize_json(documents[logical_path])
+        entries.append(
+            {
+                "logical_path": logical_path,
+                "byte_size": len(payload),
+                "sha256": sha256_hex(payload),
+                "payload_base64": base64.b64encode(payload).decode("ascii"),
+            }
+        )
+    inventory = [
+        {key: entry[key] for key in ("logical_path", "byte_size", "sha256")} for entry in entries
+    ]
+    container["entries"] = entries
+    container["total_bytes"] = sum(entry["byte_size"] for entry in entries)
+    container["inventory_sha256"] = sha256_hex(canonicalize_json(inventory))
+    manifest = {
+        key: container[key]
+        for key in (
+            "schema_version",
+            "canonicalization_version",
+            "evidence_class",
+            "file_count",
+            "total_bytes",
+            "inventory_sha256",
+        )
+    }
+    container["manifest_sha256"] = sha256_hex(canonicalize_json(manifest))
+    path.write_bytes(canonicalize_json(container))
+    return (
+        PrivateBundleIdentity(
+            file_count=container["file_count"],
+            total_bytes=container["total_bytes"],
+            inventory_sha256=container["inventory_sha256"],
+            manifest_sha256=container["manifest_sha256"],
+        ),
+        documents,
+    )
+
+
+def _reseal_rewritten_chain(
+    terminal_path: Path,
+    seal: FormalDevelopmentSeal,
+    identity: PrivateBundleIdentity,
+    documents: dict[str, dict[str, object]],
+    *,
+    selection_status: str | None = None,
+    fit_count: int | None = None,
+    development_status: str | None = None,
+) -> bytes:
+    seal_document = seal.model_dump(mode="json")
+    seal_document["private_identity"] = identity.model_dump(mode="json")
+    development_result = seal_document["development_result"]
+    development_result["trials"] = documents["trial-summary.json"]["public_trials"]
+    if selection_status is not None:
+        seal_document["selection_status"] = selection_status
+    if fit_count is not None:
+        seal_document["fit_count"] = fit_count
+    if development_status is not None:
+        development_result["status"] = development_status
+    rewritten = FormalDevelopmentSeal.model_validate(seal_document)
+    raw = canonicalize_json(rewritten.model_dump(mode="json"))
+    terminal_path.write_bytes(raw)
+    return raw
+
+
+def _anchored_recovery(
+    marker_path: Path,
+    private_path: Path,
+    terminal_path: Path,
+    terminal_sha256: str,
+):
+    return run_evidence.verify_formal_development_seal(
+        marker_path,
+        private_path,
+        terminal_path,
+        expected_authorization_sha256=A,
+        expected_search_receipt_sha256=S,
+        expected_source_inventory_sha256=INVENTORY,
+        expected_repository_inventory_sha256=R,
+        expected_seal_record_sha256=terminal_sha256,
+    )
+
+
+def test_recovery_requires_external_terminal_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker_path, private_path, terminal_path, _seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
     original_reader = run_evidence._read_private_container_once
     reads: list[Path] = []
 
@@ -1394,15 +1703,11 @@ def test_recovery_requires_external_terminal_anchor(
         ("FORMAL_SEAL_UNANCHORED",),
     )
     assert reads == [marker_path, private_path, terminal_path]
-    anchored = run_evidence.verify_formal_development_seal(
+    anchored = _anchored_recovery(
         marker_path,
         private_path,
         terminal_path,
-        expected_authorization_sha256=A,
-        expected_search_receipt_sha256=S,
-        expected_source_inventory_sha256=INVENTORY,
-        expected_repository_inventory_sha256=R,
-        expected_seal_record_sha256=sha256_hex(terminal_raw),
+        sha256_hex(terminal_raw),
     )
     assert anchored.verdict == "PASS"
     trust_mismatch = run_evidence.verify_formal_development_seal(
@@ -1420,60 +1725,656 @@ def test_recovery_requires_external_terminal_anchor(
         ("FORMAL_SEAL_TRUST_MISMATCH",),
     )
 
-    import base64
 
-    container = parse_json_bytes(private_path.read_bytes())
-    summary_entry = next(
-        item for item in container["entries"] if item["logical_path"] == "trial-summary.json"
+def test_coordinated_terminal_mutation_fails_against_unchanged_external_anchor(
+    tmp_path: Path,
+) -> None:
+    marker_path, private_path, terminal_path, seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
     )
-    summary = parse_json_bytes(base64.b64decode(summary_entry["payload_base64"]))
-    summary["selection_folds"][0]["trial_id"] = "TRIAL-20"
-    payload = canonicalize_json(summary)
-    summary_entry["payload_base64"] = base64.b64encode(payload).decode("ascii")
-    summary_entry["byte_size"] = len(payload)
-    summary_entry["sha256"] = sha256_hex(payload)
-    container["total_bytes"] = sum(item["byte_size"] for item in container["entries"])
-    inventory = [
-        {key: item[key] for key in ("logical_path", "byte_size", "sha256")}
-        for item in container["entries"]
-    ]
-    container["inventory_sha256"] = sha256_hex(canonicalize_json(inventory))
-    manifest = {
-        key: container[key]
-        for key in (
-            "schema_version",
-            "canonicalization_version",
-            "evidence_class",
-            "file_count",
-            "total_bytes",
-            "inventory_sha256",
-        )
-    }
-    container["manifest_sha256"] = sha256_hex(canonicalize_json(manifest))
-    private_path.write_bytes(canonicalize_json(container))
-    coordinated_identity = PrivateBundleIdentity(
-        file_count=container["file_count"],
-        total_bytes=container["total_bytes"],
-        inventory_sha256=container["inventory_sha256"],
-        manifest_sha256=container["manifest_sha256"],
+    changed = seal.model_dump(mode="json")
+    changed["development_result"]["result_sha256"] = B
+    assert seal.development_result.result_sha256 != B
+    terminal_path.write_bytes(
+        canonicalize_json(FormalDevelopmentSeal.model_validate(changed).model_dump(mode="json"))
     )
-    coordinated_seal = FormalDevelopmentSeal.model_validate(
-        {**seal.model_dump(mode="json"), "private_identity": coordinated_identity.model_dump()}
-    )
-    coordinated_terminal = canonicalize_json(coordinated_seal.model_dump(mode="json"))
-    terminal_path.write_bytes(coordinated_terminal)
-    coordinated = run_evidence.verify_formal_development_seal(
+
+    check = _anchored_recovery(
         marker_path,
         private_path,
         terminal_path,
-        expected_authorization_sha256=A,
-        expected_search_receipt_sha256=S,
-        expected_source_inventory_sha256=INVENTORY,
-        expected_repository_inventory_sha256=R,
-        expected_seal_record_sha256=sha256_hex(coordinated_terminal),
+        sha256_hex(terminal_raw),
     )
-    assert (coordinated.verdict, coordinated.private_identity, coordinated.fit_count) == (
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_TRUST_MISMATCH",),
+    )
+
+
+def test_recovery_rejects_winner_not_equal_to_selected_qualification(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        winners = documents["provisional-winner.json"]
+        winners["provisional_winner"]["configuration_sha256"] = B
+        winners["final_winner"]["configuration_sha256"] = B
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_rejects_replay_document_digest_divergence(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        documents["replay-report.json"]["replay_folds"][0]["prediction_vector_sha256"] = B
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_coordinated_five_file_rehash_still_requires_one_semantic_chain(
+    tmp_path: Path,
+) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        selection = next(
+            document
+            for document in documents["trial-summary.json"]["selection_folds"]
+            if (document["trial_id"], document["fold_id"]) == ("TRIAL-02", "F1")
+        )
+        replay = documents["replay-report.json"]["replay_folds"][0]
+        _set_false_declared_digests(selection)
+        _set_false_declared_digests(replay)
+        _refresh_selected_chain(documents)
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_rejects_qualified_trial_with_failed_selection_contract(
+    tmp_path: Path,
+) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        selection = next(
+            document
+            for document in documents["trial-summary.json"]["selection_folds"]
+            if (document["trial_id"], document["fold_id"]) == ("TRIAL-02", "F1")
+        )
+        selection["contract_verdict"] = "UNKNOWN"
+        documents["replay-report.json"]["replay_folds"][0]["contract_verdict"] = "UNKNOWN"
+        _refresh_selected_chain(documents)
+        documents["provisional-winner.json"]["final_winner"] = None
+        for name in ("ranking-report.json", "replay-report.json"):
+            documents[name]["selection_status"] = "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+            documents[name]["reason_codes"] = ["REPLAY_UNKNOWN"]
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(
+        terminal_path,
+        seal,
+        identity,
+        documents,
+        selection_status="UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+        fit_count=84,
+        development_status="UNKNOWN",
+    )
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_rejects_canonical_raw_trial_tie_break_mismatch(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        qualification = documents["qualification-report.json"]
+        trial_three = qualification["qualifications"][1]
+        trial_three["verdict"] = "PASS"
+        trial_three["qualified"] = True
+        trial_three["reason_codes"] = []
+        for fold in documents["trial-summary.json"]["public_trials"][2]["folds"]:
+            fold["status"] = "PASS"
+            fold["reason_codes"] = []
+        _refresh_selected_chain(documents)
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_classifies_deterministic_private_container_mismatch_as_invalid(
+    tmp_path: Path,
+) -> None:
+    marker_path, private_path, terminal_path, _seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+    container = parse_json_bytes(private_path.read_bytes())
+    container["entries"][0]["sha256"] = B
+    private_path.write_bytes(canonicalize_json(container))
+
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_keeps_malformed_private_bytes_incomplete(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, _seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+    private_path.write_bytes(b"{")
+
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+    assert (check.verdict, check.reason_codes) == (
         "UNKNOWN",
-        None,
-        0,
+        ("FORMAL_SEAL_INCOMPLETE",),
     )
+
+
+def test_recovery_rejects_coordinated_false_source_identity_digest(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        selection = next(
+            document
+            for document in documents["trial-summary.json"]["selection_folds"]
+            if (document["trial_id"], document["fold_id"]) == ("TRIAL-02", "F1")
+        )
+        replay = documents["replay-report.json"]["replay_folds"][0]
+        _set_false_source_identity_digest(selection)
+        _set_false_source_identity_digest(replay)
+        _refresh_selected_chain(documents)
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_rejects_false_stable_control_inner_digests(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        stable = documents["trial-summary.json"]["selection_folds"][0]
+        _set_false_declared_digests(stable)
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_rejects_nonqualified_fail_with_unknown_selection_contract(
+    tmp_path: Path,
+) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        selection = next(
+            document
+            for document in documents["trial-summary.json"]["selection_folds"]
+            if (document["trial_id"], document["fold_id"]) == ("TRIAL-02", "F1")
+        )
+        selection["contract_verdict"] = "UNKNOWN"
+        _refresh_selected_chain(documents)
+        _set_no_winner_chain(documents, qualification_unknown=False)
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(
+        terminal_path,
+        seal,
+        identity,
+        documents,
+        selection_status="NO_ELIGIBLE_CANDIDATE",
+        fit_count=80,
+        development_status="FAIL",
+    )
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_rejects_qualification_metric_that_contradicts_trial_summary(
+    tmp_path: Path,
+) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        for fold in documents["trial-summary.json"]["public_trials"][1]["folds"]:
+            fold["metrics"]["point_ratio"] = 999.0
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_rejects_selection_document_qualification_digest_divergence(
+    tmp_path: Path,
+) -> None:
+    from mdcp.temporal.runner import EXACT_TRIAL_IDS
+
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        selection = next(
+            document
+            for document in documents["trial-summary.json"]["selection_folds"]
+            if (document["trial_id"], document["fold_id"]) == ("TRIAL-02", "F1")
+        )
+        selection["predictions"][0]["value"] = 2.0
+        selection["prediction_vector_sha256"] = sha256_hex(canonicalize_json((2.0,)))
+        selection["metric_sha256"] = sha256_hex(
+            canonicalize_json({"labels": (1.0,), "predictions": (2.0,)})
+        )
+        declared = {
+            "trial_id": EXACT_TRIAL_IDS[1],
+            "fold_id": "F1",
+            "preprocessing_state_sha256": selection["preprocessing_state_sha256"],
+            "feature_vector_sha256": selection["feature_vector_sha256"],
+            "prediction_vector_sha256": selection["prediction_vector_sha256"],
+            "metric_sha256": selection["metric_sha256"],
+        }
+        selection["receipt_sha256"] = sha256_hex(canonicalize_json(declared))
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "selection_order",
+        "selection_cardinality",
+        "qualification_order",
+        "qualification_cardinality",
+        "qualification_family",
+        "qualification_configuration",
+        "qualification_fold_order",
+        "qualification_fold_missing",
+        "qualification_fold_extra",
+        "qualification_fold_duplicate",
+        "ranking_key",
+        "ranking_reason",
+        "replay_reason",
+        "replay_fold_cardinality",
+        "replay_fold_extra",
+        "replay_fold_duplicate",
+        "replay_digest_cardinality",
+        "replay_digest_extra",
+        "replay_digest_duplicate",
+        "replay_order",
+        "replay_trial_id",
+        "final_winner",
+    ),
+)
+def test_recovery_rejects_semantic_inventory_and_terminal_mutations(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate_chain(documents: dict[str, dict[str, object]]) -> None:
+        if mutation == "selection_order":
+            folds = documents["trial-summary.json"]["selection_folds"]
+            folds[0], folds[1] = folds[1], folds[0]
+        elif mutation == "selection_cardinality":
+            documents["trial-summary.json"]["selection_folds"].pop()
+        elif mutation == "qualification_order":
+            qualifications = documents["qualification-report.json"]["qualifications"]
+            qualifications[0], qualifications[1] = qualifications[1], qualifications[0]
+            qualification_sha256 = sha256_hex(canonicalize_json(qualifications))
+            documents["qualification-report.json"]["qualification_inventory_sha256"] = (
+                qualification_sha256
+            )
+            documents["ranking-report.json"]["qualification_inventory_sha256"] = (
+                qualification_sha256
+            )
+            for name in ("provisional_winner", "final_winner"):
+                documents["provisional-winner.json"][name]["qualification_inventory_sha256"] = (
+                    qualification_sha256
+                )
+        elif mutation == "qualification_cardinality":
+            qualification = documents["qualification-report.json"]
+            qualification["qualifications"].pop()
+            qualification_sha256 = sha256_hex(canonicalize_json(qualification["qualifications"]))
+            qualification["qualification_inventory_sha256"] = qualification_sha256
+            documents["ranking-report.json"]["qualification_inventory_sha256"] = (
+                qualification_sha256
+            )
+            for name in ("provisional_winner", "final_winner"):
+                documents["provisional-winner.json"][name]["qualification_inventory_sha256"] = (
+                    qualification_sha256
+                )
+        elif mutation in {"qualification_family", "qualification_configuration"}:
+            qualification = documents["qualification-report.json"]
+            selected = qualification["qualifications"][0]
+            winners = documents["provisional-winner.json"]
+            if mutation == "qualification_family":
+                selected["family_id"] = "STAT"
+                for name in ("provisional_winner", "final_winner"):
+                    winners[name]["family_id"] = "STAT"
+                    winners[name]["ranking_key"][3] = 0
+                documents["ranking-report.json"]["provisional_ranking_key"][3] = 0
+            else:
+                selected["configuration_sha256"] = B
+                for name in ("provisional_winner", "final_winner"):
+                    winners[name]["configuration_sha256"] = B
+            qualification_sha256 = sha256_hex(canonicalize_json(qualification["qualifications"]))
+            qualification["qualification_inventory_sha256"] = qualification_sha256
+            documents["ranking-report.json"]["qualification_inventory_sha256"] = (
+                qualification_sha256
+            )
+            for name in ("provisional_winner", "final_winner"):
+                winners[name]["qualification_inventory_sha256"] = qualification_sha256
+        elif mutation.startswith("qualification_fold_"):
+            qualification = documents["qualification-report.json"]
+            fold_digests = qualification["qualifications"][0]["fold_digests"]
+            if mutation == "qualification_fold_order":
+                fold_digests[0], fold_digests[1] = fold_digests[1], fold_digests[0]
+            elif mutation == "qualification_fold_missing":
+                fold_digests.pop()
+            elif mutation == "qualification_fold_extra":
+                fold_digests.append(copy.deepcopy(fold_digests[-1]))
+            elif mutation == "qualification_fold_duplicate":
+                fold_digests[1] = copy.deepcopy(fold_digests[0])
+            else:
+                raise AssertionError("unknown qualification fold mutation")
+            qualification_sha256 = sha256_hex(canonicalize_json(qualification["qualifications"]))
+            qualification["qualification_inventory_sha256"] = qualification_sha256
+            documents["ranking-report.json"]["qualification_inventory_sha256"] = (
+                qualification_sha256
+            )
+            for name in ("provisional_winner", "final_winner"):
+                winner = documents["provisional-winner.json"][name]
+                winner["fold_digests"] = fold_digests
+                winner["qualification_inventory_sha256"] = qualification_sha256
+        elif mutation == "ranking_key":
+            documents["ranking-report.json"]["provisional_ranking_key"][-1] = "TRIAL-03"
+        elif mutation == "ranking_reason":
+            documents["ranking-report.json"]["reason_codes"] = ["NO_QUALIFIED_TRIAL"]
+        elif mutation == "replay_reason":
+            documents["replay-report.json"]["reason_codes"] = ["REPLAY_UNKNOWN"]
+        elif mutation == "replay_fold_cardinality":
+            documents["replay-report.json"]["replay_folds"].pop()
+            documents["replay-report.json"]["replay_digests"].pop()
+        elif mutation == "replay_fold_extra":
+            replay = documents["replay-report.json"]
+            replay["replay_folds"].append(copy.deepcopy(replay["replay_folds"][-1]))
+        elif mutation == "replay_fold_duplicate":
+            replay = documents["replay-report.json"]
+            replay["replay_folds"][1] = copy.deepcopy(replay["replay_folds"][0])
+        elif mutation == "replay_digest_cardinality":
+            documents["replay-report.json"]["replay_digests"].pop()
+        elif mutation == "replay_digest_extra":
+            replay = documents["replay-report.json"]
+            replay["replay_digests"].append(copy.deepcopy(replay["replay_digests"][-1]))
+        elif mutation == "replay_digest_duplicate":
+            replay = documents["replay-report.json"]
+            replay["replay_digests"][1] = copy.deepcopy(replay["replay_digests"][0])
+        elif mutation == "replay_order":
+            replay = documents["replay-report.json"]
+            replay["replay_folds"][0], replay["replay_folds"][1] = (
+                replay["replay_folds"][1],
+                replay["replay_folds"][0],
+            )
+            replay["replay_digests"][0], replay["replay_digests"][1] = (
+                replay["replay_digests"][1],
+                replay["replay_digests"][0],
+            )
+        elif mutation == "replay_trial_id":
+            documents["replay-report.json"]["replay_trial_id"] = "TRIAL-03"
+        elif mutation == "final_winner":
+            documents["provisional-winner.json"]["final_winner"] = None
+        else:
+            raise AssertionError("unknown test mutation")
+
+    identity, documents = _rewrite_natural_container(private_path, mutate_chain)
+    terminal_raw = _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_accepts_closed_no_eligible_chain_with_eighty_fits(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        qualification = documents["qualification-report.json"]
+        selected = qualification["qualifications"][0]
+        selected["verdict"] = "FAIL"
+        selected["qualified"] = False
+        selected["reason_codes"] = ["QUALITY_THRESHOLD_EXCEEDED"]
+        qualification_sha256 = sha256_hex(canonicalize_json(qualification["qualifications"]))
+        qualification["qualification_inventory_sha256"] = qualification_sha256
+        for fold in documents["trial-summary.json"]["public_trials"][1]["folds"]:
+            fold["status"] = "FAIL"
+            fold["reason_codes"] = ["QUALITY_THRESHOLD_EXCEEDED"]
+        documents["provisional-winner.json"]["provisional_winner"] = None
+        documents["provisional-winner.json"]["final_winner"] = None
+        ranking = documents["ranking-report.json"]
+        ranking["selection_status"] = "NO_ELIGIBLE_CANDIDATE"
+        ranking["reason_codes"] = ["NO_QUALIFIED_TRIAL"]
+        ranking["qualification_inventory_sha256"] = qualification_sha256
+        ranking["provisional_ranking_key"] = None
+        replay = documents["replay-report.json"]
+        replay["selection_status"] = "NO_ELIGIBLE_CANDIDATE"
+        replay["reason_codes"] = ["NO_QUALIFIED_TRIAL"]
+        replay["replay_trial_id"] = None
+        replay["replay_folds"] = []
+        replay["replay_digests"] = []
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(
+        terminal_path,
+        seal,
+        identity,
+        documents,
+        selection_status="NO_ELIGIBLE_CANDIDATE",
+        fit_count=80,
+        development_status="FAIL",
+    )
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes, check.fit_count) == ("PASS", (), 80)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "extra", "duplicate"))
+def test_recovery_rejects_non_exact_natural_five_file_inventory(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    marker_path, private_path, terminal_path, seal, original_terminal_raw = (
+        _write_valid_recovery_chain(tmp_path)
+    )
+    if mutation in {"missing", "extra"}:
+
+        def mutate_documents(documents: dict[str, dict[str, object]]) -> None:
+            if mutation == "missing":
+                documents.pop("replay-report.json")
+            else:
+                documents["unexpected.json"] = copy.deepcopy(documents["ranking-report.json"])
+
+        identity, documents = _rewrite_natural_container(private_path, mutate_documents)
+    else:
+        identity, documents = _rewrite_natural_container(private_path, lambda _: None)
+        container = parse_json_bytes(private_path.read_bytes())
+        container["entries"].append(copy.deepcopy(container["entries"][0]))
+        container["entries"].sort(key=lambda item: item["logical_path"].encode("ascii"))
+        container["file_count"] = len(container["entries"])
+        container["total_bytes"] = sum(item["byte_size"] for item in container["entries"])
+        inventory = [
+            {key: item[key] for key in ("logical_path", "byte_size", "sha256")}
+            for item in container["entries"]
+        ]
+        container["inventory_sha256"] = sha256_hex(canonicalize_json(inventory))
+        manifest = {
+            key: container[key]
+            for key in (
+                "schema_version",
+                "canonicalization_version",
+                "evidence_class",
+                "file_count",
+                "total_bytes",
+                "inventory_sha256",
+            )
+        }
+        container["manifest_sha256"] = sha256_hex(canonicalize_json(manifest))
+        private_path.write_bytes(canonicalize_json(container))
+        identity = PrivateBundleIdentity(
+            file_count=container["file_count"],
+            total_bytes=container["total_bytes"],
+            inventory_sha256=container["inventory_sha256"],
+            manifest_sha256=container["manifest_sha256"],
+        )
+    terminal_raw = (
+        original_terminal_raw
+        if mutation == "duplicate"
+        else _reseal_rewritten_chain(terminal_path, seal, identity, documents)
+    )
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_CHAIN_INVALID",),
+    )
+
+
+def test_recovery_accepts_closed_qualification_unknown_chain(tmp_path: Path) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        _set_no_winner_chain(documents, qualification_unknown=True)
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(
+        terminal_path,
+        seal,
+        identity,
+        documents,
+        selection_status="UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+        fit_count=80,
+        development_status="UNKNOWN",
+    )
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes, check.fit_count) == ("PASS", (), 80)
+
+
+@pytest.mark.parametrize("reason_code", ("REPLAY_UNKNOWN", "REPLAY_DIGEST_MISMATCH"))
+def test_recovery_accepts_closed_replay_unknown_chains(
+    tmp_path: Path,
+    reason_code: str,
+) -> None:
+    marker_path, private_path, terminal_path, seal, _terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+
+    def mutate(documents: dict[str, dict[str, object]]) -> None:
+        replay = documents["replay-report.json"]
+        if reason_code == "REPLAY_UNKNOWN":
+            replay["replay_folds"][0]["contract_verdict"] = "UNKNOWN"
+        else:
+            replay["replay_folds"][0]["predictions"][0]["value"] = 2.0
+            _refresh_declared_digests(replay["replay_folds"][0])
+        _refresh_selected_chain(documents)
+        documents["provisional-winner.json"]["final_winner"] = None
+        for name in ("ranking-report.json", "replay-report.json"):
+            documents[name]["selection_status"] = "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+            documents[name]["reason_codes"] = [reason_code]
+
+    identity, documents = _rewrite_natural_container(private_path, mutate)
+    terminal_raw = _reseal_rewritten_chain(
+        terminal_path,
+        seal,
+        identity,
+        documents,
+        selection_status="UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+        fit_count=84,
+        development_status="UNKNOWN",
+    )
+    check = _anchored_recovery(marker_path, private_path, terminal_path, sha256_hex(terminal_raw))
+
+    assert (check.verdict, check.reason_codes, check.fit_count) == ("PASS", (), 84)

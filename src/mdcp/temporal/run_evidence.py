@@ -3349,7 +3349,7 @@ def _exact_keys(value: object, expected: frozenset[str]) -> bool:
 
 
 def _valid_source_identity(value: object, fold_id: str) -> bool:
-    return bool(
+    if not (
         _exact_keys(
             value,
             frozenset(
@@ -3370,7 +3370,15 @@ def _valid_source_identity(value: object, fold_id: str) -> bool:
         and type(value["source_position"]) is int
         and value["source_position"] >= 0
         and _valid_sha256(value["identity_sha256"], nonzero=True)
-    )
+    ):
+        return False
+    identity_material = {
+        "fold_id": value["fold_id"],
+        "request_id": value["request_id"],
+        "local_timestamp": value["local_timestamp"],
+        "source_position": value["source_position"],
+    }
+    return value["identity_sha256"] == sha256_hex(canonicalize_json(identity_material))
 
 
 def _valid_fold_document(
@@ -3539,6 +3547,9 @@ def _valid_winner(value: object, qualification_sha256: str) -> bool:
 
 def _valid_natural_container(raw: bytes, seal: FormalDevelopmentSeal) -> bool:
     try:
+        from mdcp.temporal.runner import EXACT_TRIAL_IDS
+        from mdcp.temporal.trials import canonical_trial_identity
+
         container = _PrivateContainer.model_validate(parse_json_bytes(raw))
         if (
             canonicalize_json(container.model_dump(mode="json")) != raw
@@ -3566,6 +3577,82 @@ def _valid_natural_container(raw: bytes, seal: FormalDevelopmentSeal) -> bool:
             "canonicalization_version": "RFC8785",
             "evidence_class": "natural_development",
         }
+        trial_labels = {
+            f"TRIAL-{index:02d}": trial_id
+            for index, trial_id in enumerate(EXACT_TRIAL_IDS, start=1)
+        }
+        family_order = {"STAT": 0, "REC": 1, "NL": 2}
+
+        def fold_digest_from_document(
+            document: dict[str, object],
+            stable_document: dict[str, object],
+            *,
+            replay: bool,
+        ) -> dict[str, object]:
+            canonical_trial_id = trial_labels[document["trial_id"]]
+            identity = canonical_trial_identity(canonical_trial_id)
+            predictions = document["predictions"]
+            labels = document["labels"]
+            if any(
+                outcome["succeeded"] is not True
+                or outcome["reason_code"] is not None
+                or type(outcome["value"]) not in (int, float)
+                or not math.isfinite(outcome["value"])
+                for outcomes in (predictions, labels)
+                for outcome in outcomes
+            ):
+                raise ValueError
+            prediction_values = tuple(float(outcome["value"]) for outcome in predictions)
+            label_values = tuple(float(outcome["value"]) for outcome in labels)
+            prediction_sha256 = sha256_hex(canonicalize_json(prediction_values))
+            metric_sha256 = sha256_hex(
+                canonicalize_json({"labels": label_values, "predictions": prediction_values})
+            )
+            declared = {
+                "trial_id": canonical_trial_id,
+                "fold_id": document["fold_id"],
+                "preprocessing_state_sha256": document["preprocessing_state_sha256"],
+                "feature_vector_sha256": document["feature_vector_sha256"],
+                "prediction_vector_sha256": prediction_sha256,
+                "metric_sha256": metric_sha256,
+            }
+            receipt_sha256 = sha256_hex(canonicalize_json(declared))
+            if (
+                document["prediction_vector_sha256"] != prediction_sha256
+                or document["metric_sha256"] != metric_sha256
+                or document["receipt_sha256"] != receipt_sha256
+            ):
+                raise ValueError
+            receipt_material = {
+                "trial_id": canonical_trial_id,
+                "fold_id": document["fold_id"],
+                "contract_verdict": document["contract_verdict"],
+                "inventory": document["inventory"],
+                "adapters": document["adapters"],
+                "stable_predictions": stable_document["predictions"],
+                "candidate_predictions": document["predictions"],
+                "labels": document["labels"],
+                "declared_digests": {
+                    "preprocessing_state_sha256": declared["preprocessing_state_sha256"],
+                    "feature_vector_sha256": declared["feature_vector_sha256"],
+                    "prediction_vector_sha256": prediction_sha256,
+                    "metric_sha256": metric_sha256,
+                    "receipt_sha256": receipt_sha256,
+                },
+            }
+            digest = {
+                "fold_id": document["fold_id"],
+                "configuration_sha256": identity.configuration_sha256,
+                "preprocessing_state_sha256": document["preprocessing_state_sha256"],
+                "feature_vector_sha256": document["feature_vector_sha256"],
+                "prediction_vector_sha256": prediction_sha256,
+                "metric_sha256": metric_sha256,
+                "receipt_sha256": sha256_hex(canonicalize_json(receipt_material)),
+            }
+            if replay:
+                digest["verdict"] = document["contract_verdict"]
+            return digest
+
         summary = documents["trial-summary.json"]
         if (
             not _exact_keys(
@@ -3599,6 +3686,19 @@ def _valid_natural_container(raw: bytes, seal: FormalDevelopmentSeal) -> bool:
                 )
             )
             or summary["public_trials"] != seal.development_result.model_dump(mode="json")["trials"]
+        ):
+            return False
+        selection_by_identity = {
+            (document["trial_id"], document["fold_id"]): document
+            for document in summary["selection_folds"]
+        }
+        stable_by_fold = {
+            fold_id: selection_by_identity[("TRIAL-01", fold_id)] for fold_id in _FOLD_IDS
+        }
+        if any(fold["status"] != "PASS" for fold in summary["public_trials"][0]["folds"]) or any(
+            document["contract_verdict"] != "PASS"
+            or not fold_digest_from_document(document, document, replay=False)
+            for document in stable_by_fold.values()
         ):
             return False
         qualification = documents["qualification-report.json"]
@@ -3639,38 +3739,62 @@ def _valid_natural_container(raw: bytes, seal: FormalDevelopmentSeal) -> bool:
             }
         )
         for item, trial_id in zip(qualification["qualifications"], _TRIAL_IDS[1:], strict=True):
+            canonical_identity = canonical_trial_identity(trial_labels[trial_id])
+            public_folds = summary["public_trials"][int(trial_id[-2:]) - 1]["folds"]
+            public_fold_points = tuple(fold["metrics"]["point_ratio"] for fold in public_folds)
+            metrics = (
+                item["pooled_ucb95"] if isinstance(item, dict) else None,
+                item["worst_fold_point"] if isinstance(item, dict) else None,
+                item["worst_subgroup_ucb95"] if isinstance(item, dict) else None,
+            )
             if (
                 not _exact_keys(item, qualification_keys)
                 or item["trial_id"] != trial_id
-                or type(item["family_id"]) is not str
+                or item["family_id"] != canonical_identity.family_id
+                or item["configuration_sha256"] != canonical_identity.configuration_sha256
                 or item["verdict"] not in {"PASS", "FAIL", "UNKNOWN"}
                 or type(item["qualified"]) is not bool
                 or not isinstance(item["reason_codes"], list)
-                or not all(type(reason) is str for reason in item["reason_codes"])
-                or not all(
-                    value is None or _valid_sha256(value, nonzero=True)
-                    for value in (item["configuration_sha256"], item["report_sha256"])
-                )
-                or not all(
-                    value is None
-                    or type(value) in (int, float)
-                    and math.isfinite(value)
-                    and value >= 0.0
-                    for value in (
-                        item["pooled_ucb95"],
-                        item["worst_fold_point"],
-                        item["worst_subgroup_ucb95"],
-                    )
-                )
+                or not all(type(reason) is str and bool(reason) for reason in item["reason_codes"])
+                or len(item["reason_codes"]) != len(set(item["reason_codes"]))
+                or item["qualified"] is not (item["verdict"] == "PASS")
+                or (item["verdict"] == "PASS") is bool(item["reason_codes"])
+                or not _valid_sha256(item["report_sha256"], nonzero=True)
                 or not (
-                    item["fold_digests"] is None
-                    or isinstance(item["fold_digests"], list)
-                    and len(item["fold_digests"]) == 4
-                    and all(
-                        _valid_fold_digest(digest, fold_id, replay=False)
-                        for digest, fold_id in zip(item["fold_digests"], _FOLD_IDS, strict=True)
+                    all(value is None for value in metrics)
+                    or all(
+                        type(value) in (int, float) and math.isfinite(value) and value >= 0.0
+                        for value in metrics
                     )
                 )
+                or item["qualified"] is True
+                and any(value is None for value in metrics)
+                or item["verdict"] in {"PASS", "FAIL"}
+                and any(
+                    selection_by_identity[(trial_id, fold_id)]["contract_verdict"] != "PASS"
+                    for fold_id in _FOLD_IDS
+                )
+                or item["verdict"] in {"PASS", "FAIL"}
+                and (
+                    not all(
+                        type(value) in (int, float) and math.isfinite(value)
+                        for value in public_fold_points
+                    )
+                    or item["worst_fold_point"] != max(public_fold_points)
+                )
+                or not isinstance(item["fold_digests"], list)
+                or len(item["fold_digests"]) != 4
+                or not all(
+                    _valid_fold_digest(digest, fold_id, replay=False)
+                    and digest
+                    == fold_digest_from_document(
+                        selection_by_identity[(trial_id, fold_id)],
+                        stable_by_fold[fold_id],
+                        replay=False,
+                    )
+                    for digest, fold_id in zip(item["fold_digests"], _FOLD_IDS, strict=True)
+                )
+                or any(fold["status"] != item["verdict"] for fold in public_folds)
             ):
                 return False
         ranking = documents["ranking-report.json"]
@@ -3715,18 +3839,50 @@ def _valid_natural_container(raw: bytes, seal: FormalDevelopmentSeal) -> bool:
             return False
         provisional = winners["provisional_winner"]
         final = winners["final_winner"]
-        if provisional is None:
-            if ranking["provisional_ranking_key"] is not None or final is not None:
-                return False
-        elif (
-            not _valid_winner(provisional, qualification_sha256)
-            or ranking["provisional_ranking_key"] != provisional["ranking_key"]
-            or not (
-                final is None or _valid_winner(final, qualification_sha256) and final == provisional
+        qualified = [
+            item
+            for item in qualification["qualifications"]
+            if item["qualified"] is True and item["verdict"] == "PASS"
+        ]
+        selected = (
+            None
+            if not qualified
+            else min(
+                qualified,
+                key=lambda item: (
+                    item["pooled_ucb95"],
+                    item["worst_fold_point"],
+                    item["worst_subgroup_ucb95"],
+                    family_order[item["family_id"]],
+                    trial_labels[item["trial_id"]],
+                ),
             )
+        )
+        expected_winner = (
+            None
+            if selected is None
+            else {
+                "trial_id": selected["trial_id"],
+                "family_id": selected["family_id"],
+                "configuration_sha256": selected["configuration_sha256"],
+                "report_sha256": selected["report_sha256"],
+                "pooled_ucb95": selected["pooled_ucb95"],
+                "worst_fold_point": selected["worst_fold_point"],
+                "worst_subgroup_ucb95": selected["worst_subgroup_ucb95"],
+                "ranking_key": [
+                    selected["pooled_ucb95"],
+                    selected["worst_fold_point"],
+                    selected["worst_subgroup_ucb95"],
+                    family_order[selected["family_id"]],
+                    selected["trial_id"],
+                ],
+                "fold_digests": selected["fold_digests"],
+                "qualification_inventory_sha256": qualification_sha256,
+            }
+        )
+        if provisional != expected_winner or (
+            provisional is not None and not _valid_winner(provisional, qualification_sha256)
         ):
-            return False
-        if (seal.selection_status == "PASS") != (final is not None):
             return False
         replay = documents["replay-report.json"]
         if (
@@ -3753,17 +3909,35 @@ def _valid_natural_container(raw: bytes, seal: FormalDevelopmentSeal) -> bool:
         ):
             return False
         if provisional is None:
-            return (
-                replay["replay_trial_id"] is None
+            expected_status = (
+                "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+                if any(item["verdict"] == "UNKNOWN" for item in qualification["qualifications"])
+                else "NO_ELIGIBLE_CANDIDATE"
+            )
+            expected_reasons = (
+                ["QUALIFICATION_UNKNOWN"]
+                if expected_status == "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+                else ["NO_QUALIFIED_TRIAL"]
+            )
+            return bool(
+                ranking["selection_status"] == expected_status
+                and ranking["reason_codes"] == expected_reasons
+                and ranking["provisional_ranking_key"] is None
+                and final is None
+                and replay["selection_status"] == expected_status
+                and replay["reason_codes"] == expected_reasons
+                and replay["replay_trial_id"] is None
                 and replay["replay_folds"] == []
                 and replay["replay_digests"] == []
+                and seal.selection_status == expected_status
+                and seal.fit_count == 80
             )
         trial_id = provisional["trial_id"]
-        return bool(
-            replay["replay_trial_id"] == trial_id
-            and len(replay["replay_folds"]) == 4
-            and len(replay["replay_digests"]) == 4
-            and all(
+        if (
+            replay["replay_trial_id"] != trial_id
+            or len(replay["replay_folds"]) != 4
+            or len(replay["replay_digests"]) != 4
+            or not all(
                 _valid_fold_document(
                     document,
                     phase="REPLAY",
@@ -3772,10 +3946,41 @@ def _valid_natural_container(raw: bytes, seal: FormalDevelopmentSeal) -> bool:
                 )
                 for document, fold_id in zip(replay["replay_folds"], _FOLD_IDS, strict=True)
             )
-            and all(
-                _valid_fold_digest(digest, fold_id, replay=True)
-                for digest, fold_id in zip(replay["replay_digests"], _FOLD_IDS, strict=True)
+        ):
+            return False
+        recomputed_replay = [
+            fold_digest_from_document(
+                document,
+                stable_by_fold[fold_id],
+                replay=True,
             )
+            for document, fold_id in zip(replay["replay_folds"], _FOLD_IDS, strict=True)
+        ]
+        if replay["replay_digests"] != recomputed_replay or not all(
+            _valid_fold_digest(digest, fold_id, replay=True)
+            for digest, fold_id in zip(replay["replay_digests"], _FOLD_IDS, strict=True)
+        ):
+            return False
+        expected_replay = [{**digest, "verdict": "PASS"} for digest in provisional["fold_digests"]]
+        if any(digest["verdict"] != "PASS" for digest in recomputed_replay):
+            expected_status = "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+            expected_reasons = ["REPLAY_UNKNOWN"]
+        elif recomputed_replay != expected_replay:
+            expected_status = "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+            expected_reasons = ["REPLAY_DIGEST_MISMATCH"]
+        else:
+            expected_status = "PASS"
+            expected_reasons = []
+        expected_final = provisional if expected_status == "PASS" else None
+        return bool(
+            ranking["selection_status"] == expected_status
+            and ranking["reason_codes"] == expected_reasons
+            and ranking["provisional_ranking_key"] == provisional["ranking_key"]
+            and replay["selection_status"] == expected_status
+            and replay["reason_codes"] == expected_reasons
+            and final == expected_final
+            and seal.selection_status == expected_status
+            and seal.fit_count == 84
         )
     except Exception:
         return False
@@ -3840,13 +4045,18 @@ def verify_formal_development_seal(
             raise ValueError
     except Exception:
         return _seal_check("UNKNOWN", "FORMAL_SEAL_INCOMPLETE")
-    private_check = _verify_private_container_raw(private_raw, seal.private_identity)
-    if (
-        private_check.verdict != "PASS"
-        or private_check.identity is None
-        or not _valid_natural_container(private_raw, seal)
-    ):
+    try:
+        private_document = parse_json_bytes(private_raw)
+        private_container = _PrivateContainer.model_validate(private_document)
+        if canonicalize_json(private_container.model_dump(mode="json")) != private_raw:
+            raise ValueError
+    except Exception:
         return _seal_check("UNKNOWN", "FORMAL_SEAL_INCOMPLETE")
+    private_check = _verify_private_container_raw(private_raw, seal.private_identity)
+    if private_check.verdict != "PASS" or private_check.identity is None:
+        return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_INVALID")
+    if not _valid_natural_container(private_raw, seal):
+        return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_INVALID")
     marker_sha256 = sha256_hex(marker_raw)
     seal_sha256 = sha256_hex(terminal_raw)
     exit_sha256 = sha256_hex(
