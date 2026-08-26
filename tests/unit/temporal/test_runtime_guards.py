@@ -269,9 +269,7 @@ def test_runtime_guard_rechecks_head_after_final_dirty_observation(
         ("dirty_untracked", "REPOSITORY_DIRTY"),
     ],
 )
-def test_runtime_checkpoint_fails_closed(
-    tmp_path: Path, mutation: str, reason: str
-) -> None:
+def test_runtime_checkpoint_fails_closed(tmp_path: Path, mutation: str, reason: str) -> None:
     guard = guarded_fixture(tmp_path, mutation)
 
     result = guard.checkpoint(RuntimeStage.POST_FIT)
