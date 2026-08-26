@@ -460,7 +460,9 @@ def test_source_inventory_is_the_exact_ascii_ordered_43_path_closure(tmp_path: P
     assert "evidence/public/v02/search/evidence-index.json" not in SEARCH_SOURCE_PATHS
 
 
-def test_source_archive_verifier_requires_an_external_nonzero_index_anchor(tmp_path: Path) -> None:
+def test_source_archive_without_dot_git_requires_an_external_nonzero_index_anchor(
+    tmp_path: Path,
+) -> None:
     archive = tmp_path / "source-archive"
     _archive_source_tree(archive)
     entries = _independent_source_entries(archive)
