@@ -467,8 +467,9 @@ def verify_search_freeze(
     tags = _git(root, "tag", "--points-at", "HEAD")
     if tags is None or tags:
         return _fail("SEARCH_FREEZE_HEAD_TAGGED")
-    if not _has_regular_public_evidence(root, head):
-        return _fail("SEARCH_FREEZE_PUBLIC_EVIDENCE_NOT_REGULAR")
+    public_evidence_error = _has_regular_public_evidence(root, head)
+    if public_evidence_error is not None:
+        return _fail(public_evidence_error)
     receipt_bytes = _read_expected_public_file(root, receipt_path, SEARCH_RECEIPT_RELATIVE_PATH)
     if receipt_bytes is None:
         return _fail("SEARCH_RECEIPT_MISSING")
@@ -669,11 +670,17 @@ def _has_exact_allowlisted_additions(root: Path) -> bool:
     )
 
 
-def _has_regular_public_evidence(root: Path, head: str) -> bool:
-    for relative_path in _ALLOWLISTED_FREEZE_ADDITIONS:
+def _has_regular_public_evidence(root: Path, head: str) -> str | None:
+    expected_entries = (
+        (SEARCH_RECEIPT_RELATIVE_PATH.as_posix(), "SEARCH_RECEIPT_MISSING"),
+        (EVIDENCE_INDEX_RELATIVE_PATH.as_posix(), "SEARCH_EVIDENCE_INDEX_MISSING"),
+    )
+    for relative_path, missing_error in expected_entries:
         entry = _git(root, "ls-tree", head, "--", relative_path)
+        if entry == "":
+            return missing_error
         if entry is None:
-            return False
+            return "SEARCH_FREEZE_PUBLIC_EVIDENCE_NOT_REGULAR"
         metadata, separator, path = entry.partition("\t")
         fields = metadata.split()
         if (
@@ -683,8 +690,8 @@ def _has_regular_public_evidence(root: Path, head: str) -> bool:
             or fields[0] != "100644"
             or fields[1] != "blob"
         ):
-            return False
-    return True
+            return "SEARCH_FREEZE_PUBLIC_EVIDENCE_NOT_REGULAR"
+    return None
 
 
 def _bound_digests_recompute(root: Path, receipt: SearchReceipt) -> bool:

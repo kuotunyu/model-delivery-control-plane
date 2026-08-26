@@ -309,6 +309,30 @@ def _freeze(repository: Path, mutation: str | None = None) -> tuple[Path, Path]:
     return receipt_path, index_path
 
 
+def test_preflight_reports_missing_receipt_at_clean_source_head(
+    git_fixture: Path,
+) -> None:
+    receipt, index = _receipt_and_index(git_fixture)
+
+    result = verify_search_freeze(git_fixture, receipt, index)
+
+    assert result.verdict == "FAIL"
+    assert result.reason_codes == ("SEARCH_RECEIPT_MISSING",)
+
+
+def test_preflight_reports_missing_index_before_parsing_a_partial_freeze(
+    git_fixture: Path,
+) -> None:
+    _write(git_fixture, RECEIPT_RELATIVE_PATH, b"{}")
+    _commit(git_fixture, "partial freeze")
+    receipt, index = _receipt_and_index(git_fixture)
+
+    result = verify_search_freeze(git_fixture, receipt, index)
+
+    assert result.verdict == "FAIL"
+    assert result.reason_codes == ("SEARCH_EVIDENCE_INDEX_MISSING",)
+
+
 def test_preflight_accepts_a_clean_exact_receipt_only_child(git_fixture: Path) -> None:
     receipt, index = _freeze(git_fixture)
 
