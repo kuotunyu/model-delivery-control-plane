@@ -803,9 +803,7 @@ _ALLOWED_FILE_ACCESS_CALLS = {
             ("_publish_no_clobber", "write", "name:os"),
         }
     ),
-    "src/mdcp/temporal/cli.py": frozenset(
-        {("main", "write", None), ("_emit_check", "write", None)}
-    ),
+    "src/mdcp/temporal/cli.py": frozenset({("main", "write", None)}),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
             ("_build_formal_execution_plan", "read_bytes", "name:protocol_path"),
@@ -1606,7 +1604,11 @@ def _import_allowed(logical_path: str, module: str, imported_name: str | None) -
 
 
 def _bind_import(bindings: dict[str, str], local_name: str, qualified_name: str) -> None:
-    if local_name in bindings or local_name in _RESERVED_BINDING_NAMES:
+    if local_name in bindings:
+        if bindings[local_name] == qualified_name:
+            return
+        _fail()
+    if local_name in _RESERVED_BINDING_NAMES:
         _fail()
     bindings[local_name] = qualified_name
 

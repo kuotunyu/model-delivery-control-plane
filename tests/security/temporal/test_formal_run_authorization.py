@@ -498,7 +498,7 @@ def test_final_cli_has_exact_command_and_callable_surface() -> None:
             if inspect.isfunction(value) and value.__module__ == cli.__name__
         )
     )
-    assert callables == ("_emit_check", "build_parser", "main")
+    assert callables == ("build_parser", "main")
 
 
 def test_formal_operation_closes_terminal_guard_sequence_on_every_exception() -> None:

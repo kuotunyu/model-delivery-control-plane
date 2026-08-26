@@ -791,6 +791,37 @@ def test_static_firewall_allows_only_the_closed_run_evidence_capabilities(tmp_pa
     assert result.checked_paths == (logical_path,)
 
 
+def test_static_firewall_allows_same_qualified_import_in_separate_scopes(
+    tmp_path: Path,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (
+        "from mdcp.temporal.runner import EXACT_TRIAL_IDS\n"
+        "def recover():\n"
+        "    from mdcp.temporal.runner import EXACT_TRIAL_IDS\n"
+        "    return EXACT_TRIAL_IDS\n"
+    )
+    _write_logical_module(tmp_path, logical_path, source)
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
+
+
+def test_static_firewall_rejects_conflicting_duplicate_import_binding(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (
+        "from mdcp.temporal.runner import EXACT_TRIAL_IDS\n"
+        "def recover():\n"
+        "    from mdcp.temporal.runner import EXACT_FOLD_IDS as EXACT_TRIAL_IDS\n"
+        "    return EXACT_TRIAL_IDS\n"
+    )
+    _write_logical_module(tmp_path, logical_path, source)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 def test_static_firewall_rejects_unapproved_run_evidence_capability(tmp_path: Path) -> None:
     logical_path = "src/mdcp/temporal/run_evidence.py"
     source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")

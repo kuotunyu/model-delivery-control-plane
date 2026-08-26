@@ -121,7 +121,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
             verdict, reason = "PASS", "SEARCH_FREEZE_PREPARED"
         except Exception:
             verdict, reason = "FAIL", "SEARCH_FREEZE_PREPARATION_FAILED"
-        return _emit_check("mdcp.search-freeze-cli-result.v1", verdict, reason)
+        document = {
+            "reason_code": reason,
+            "schema_version": "mdcp.search-freeze-cli-result.v1",
+            "verdict": verdict,
+        }
+        try:
+            sys.stdout.buffer.write(canonicalize_json(document) + b"\n")
+            sys.stdout.buffer.flush()
+        except Exception:
+            return 4
+        return 0 if verdict == "PASS" else 2
 
     if parsed.command == "verify-search-source":
         from mdcp.temporal.search_identity import verify_search_source_inventory
@@ -136,7 +146,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
             except Exception:
                 return 4
             return 0
-        return _emit_check("mdcp.search-source-cli-result.v1", check.verdict, check.reason_codes[0])
+        document = {
+            "reason_code": check.reason_codes[0],
+            "schema_version": "mdcp.search-source-cli-result.v1",
+            "verdict": check.verdict,
+        }
+        try:
+            sys.stdout.buffer.write(canonicalize_json(document) + b"\n")
+            sys.stdout.buffer.flush()
+        except Exception:
+            return 4
+        return 2 if check.verdict == "FAIL" else 3
 
     if parsed.command == "verify-development-result":
         check = run_evidence.verify_formal_development_seal(
@@ -149,11 +169,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
             expected_repository_inventory_sha256=parsed.expected_repository_inventory_sha256,
             expected_seal_record_sha256=parsed.expected_seal_record_sha256,
         )
-        return _emit_check(
-            "mdcp.development-result-cli-result.v1",
-            check.verdict,
-            check.reason_codes[0] if check.reason_codes else "FORMAL_SEAL_PASS",
-        )
+        document = {
+            "reason_code": (check.reason_codes[0] if check.reason_codes else "FORMAL_SEAL_PASS"),
+            "schema_version": "mdcp.development-result-cli-result.v1",
+            "verdict": check.verdict,
+        }
+        try:
+            sys.stdout.buffer.write(canonicalize_json(document) + b"\n")
+            sys.stdout.buffer.flush()
+        except Exception:
+            return 4
+        return 0 if check.verdict == "PASS" else 2 if check.verdict == "FAIL" else 3
 
     authorization = os.getenv("MDCP_FORMAL_RUN_AUTHORIZATION")
     consumption_root = os.getenv("MDCP_FORMAL_RUN_CONSUMPTION_ROOT")
@@ -207,20 +233,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
     except Exception:
         return 4
     return exit_code
-
-
-def _emit_check(schema_version: str, verdict: str, reason_code: str) -> int:
-    document = {
-        "reason_code": reason_code,
-        "schema_version": schema_version,
-        "verdict": verdict,
-    }
-    try:
-        sys.stdout.buffer.write(canonicalize_json(document) + b"\n")
-        sys.stdout.buffer.flush()
-    except Exception:
-        return 4
-    return 0 if verdict == "PASS" else 2 if verdict == "FAIL" else 3
 
 
 if __name__ == "__main__":  # pragma: no cover
