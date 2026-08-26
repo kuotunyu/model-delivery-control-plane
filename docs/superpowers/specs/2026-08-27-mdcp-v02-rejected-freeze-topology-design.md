@@ -1,6 +1,6 @@
 # MDCP v0.2 Rejected-Freeze Topology Design
 
-Status: proposed design amendment, pending owner written-spec review
+Status: owner approved
 
 Date: 2026-08-27
 
