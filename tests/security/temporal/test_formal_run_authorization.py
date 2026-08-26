@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import inspect
 import io
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -527,6 +529,375 @@ def test_formal_operation_closes_terminal_guard_sequence_on_every_exception() ->
         and node.func.id == "_finish_terminal_guards"
     ]
     assert len(finish_calls) == 1
+
+
+def _isolated_formal_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    failure_phase: str,
+    private_container_path: Path,
+) -> tuple[FormalDevelopmentOutcome, dict[str, object]]:
+    source_path = Path(run_evidence.__file__)
+    tree = ast.parse(source_path.read_bytes(), filename=str(source_path))
+    factory = copy.deepcopy(
+        next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_make_evidence_mutation_surface"
+        )
+    )
+    bindings = copy.deepcopy(
+        next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "_MUTATION_BINDINGS"
+        )
+    )
+    overrides = {
+        "_read_bounded_regular": "return test_raw_by_name.get(path.name)",
+        "_retained_destination": "return test_retained_destination(destination)",
+        "_windows_nt_relative_file": ("return test_nt_relative_file(parent_handle, name)"),
+        "_windows_file_information": "return test_file_information(handle)",
+        "_windows_normalized_handle_name": "return 'trusted'",
+        "_windows_names_equal": "return True",
+        "_windows_write_all": "return None",
+        "_windows_flush": "return None",
+        "_revalidate_retained_ancestors": "return None",
+        "_revalidate_final_handle": "return None",
+        "_marker_leaf_state": "return test_marker_leaf_state()",
+        "_windows_close": "return test_close(handle)",
+        "_build_formal_execution_plan": "return test_plan",
+        "_run_development_core": (
+            "test_calls['loader'] += 1\ntest_calls['fit'] += 1\nreturn test_run_result"
+        ),
+        "formalize": "return test_files, test_public_result, 'PASS'",
+        "encode_natural": "return b'private', test_private_identity",
+        "_checkpoint": "return None",
+    }
+    for function_name, body_source in overrides.items():
+        matches = [
+            node
+            for node in ast.walk(factory)
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        ]
+        assert len(matches) == 1
+        matches[0].body = ast.parse(body_source).body
+    returns = [
+        node
+        for node in ast.walk(factory)
+        if isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Tuple)
+        and [item.id for item in node.value.elts if isinstance(item, ast.Name)]
+        == ["write_synthetic", "execute"]
+    ]
+    assert len(returns) == 1
+    returns[0].value.elts.append(ast.Name("formal_operation", ast.Load()))
+    returns[0].value.elts.append(ast.Name("attempt_states", ast.Load()))
+    returns[0].value.elts.append(ast.Name("consume_marker", ast.Load()))
+
+    repository = tmp_path / "repository"
+    repository.mkdir(exist_ok=True)
+    consumption_root = tmp_path / "consumption"
+    consumption_root.mkdir(exist_ok=True)
+    private_container_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_raw = (
+        source_path.parents[3] / "evidence/public/v02/search/search-receipt.json"
+    ).read_bytes()
+    receipt = search_identity.SearchReceipt.model_validate(parse_json_bytes(receipt_raw))
+    authorization_raw = canonicalize_json(
+        search_identity.FormalRunAuthorization(
+            schema_version="mdcp.formal-run-authorization.v1",
+            canonicalization_version="RFC8785",
+            search_freeze_commit=FREEZE,
+            search_receipt_sha256=sha256_hex(receipt_raw),
+            protocol_sha256=receipt.dataset_contract_sha256,
+            dataset_archive_sha256=receipt.dataset_archive_sha256,
+            authorization_id="12345678-1234-4234-8234-123456789abc",
+            authorized_action="ONE_FORMAL_20_TRIAL_DEVELOPMENT_RUN",
+            authorized_at_utc="2026-08-27T00:00:00Z",
+            consumed=False,
+        ).model_dump(mode="json")
+    )
+    calls: dict[str, object] = {
+        "preflight": 0,
+        "marker": 0,
+        "loader": 0,
+        "fit": 0,
+        "nt": 0,
+        "closes": [],
+        "reentrant": [],
+    }
+    operation_holder: dict[str, object] = {}
+    reentered = False
+    private_destination = SimpleNamespace(
+        absolute_path=private_container_path,
+        leaf_name=private_container_path.name,
+        ancestors=(SimpleNamespace(handle=301, volume_serial_number=1, file_index=1),),
+        parent_handle=301,
+        created=False,
+        closed=False,
+    )
+    terminal_path = private_container_path.with_name(f"{private_container_path.name}.public.json")
+    terminal_destination = SimpleNamespace(
+        absolute_path=terminal_path,
+        leaf_name=terminal_path.name,
+        ancestors=(SimpleNamespace(handle=302, volume_serial_number=1, file_index=2),),
+        parent_handle=302,
+        created=False,
+        closed=False,
+    )
+    marker_destination = SimpleNamespace(
+        absolute_path=consumption_root / "marker.json",
+        leaf_name="marker.json",
+        ancestors=(SimpleNamespace(handle=303, volume_serial_number=1, file_index=3),),
+        parent_handle=303,
+        created=False,
+        closed=False,
+    )
+
+    def test_retained_destination(path: Path) -> object:
+        nonlocal reentered
+        if path.name.endswith(".consumed.json"):
+            calls["marker"] += 1
+            marker_destination.absolute_path = path
+            marker_destination.leaf_name = path.name
+            return marker_destination
+        calls["preflight"] += 1
+        if failure_phase == "preflight_reentry" and not reentered:
+            reentered = True
+            calls["reentrant"].append(operation_holder["operation"](operation_holder["request"]))
+        if path.name.endswith(".public.json"):
+            if failure_phase == "preflight":
+                raise RuntimeError("synthetic retained-terminal failure")
+            return terminal_destination
+        return private_destination
+
+    def test_nt_relative_file(_parent_handle: int, _leaf_name: str) -> tuple[object, ...]:
+        calls["nt"] += 1
+        number = calls["nt"]
+        if failure_phase in ("precall_pair", "precall_clean"):
+            return False, None, None, None, None
+        handle = {1: 201, 2: 202, 3: 203}[number]
+        if failure_phase == "marker_owned" and number == 1:
+            return True, 259, 0, 0, handle
+        return True, 0, 0, 2, handle
+
+    def test_file_information(_handle: int) -> tuple[int, tuple[int, int, int]]:
+        return 0, (1, 2, 3)
+
+    def test_marker_leaf_state() -> str:
+        return "ABSENT" if failure_phase in ("precall_pair", "precall_clean") else "PRESENT"
+
+    failing_handle = {
+        "preflight": 301,
+        "marker_owned": 201,
+        "precall_pair": 302,
+        "private_publish": 202,
+        "terminal_publish": 203,
+    }.get(failure_phase)
+
+    def test_close(handle: int) -> bool:
+        calls["closes"].append(handle)
+        return handle != failing_handle
+
+    test_public_result = public_result()
+    identity = private_identity()
+    namespace = dict(vars(run_evidence))
+    namespace.update(
+        {
+            "__name__": f"_mdcp_formal_operation_{id(tmp_path)}",
+            "test_calls": calls,
+            "test_failure_phase": failure_phase,
+            "test_raw_by_name": {
+                "receipt.json": receipt_raw,
+                "index.json": b"{}",
+                "authorization.json": authorization_raw,
+            },
+            "test_retained_destination": test_retained_destination,
+            "test_nt_relative_file": test_nt_relative_file,
+            "test_file_information": test_file_information,
+            "test_marker_leaf_state": test_marker_leaf_state,
+            "test_close": test_close,
+            "test_plan": object(),
+            "test_run_result": SimpleNamespace(fit_ledger=SimpleNamespace(total_count=84)),
+            "test_files": (),
+            "test_public_result": test_public_result,
+            "test_private_identity": identity,
+        }
+    )
+    module = ast.fix_missing_locations(ast.Module(body=[bindings, factory], type_ignores=[]))
+    isolated = ModuleType(namespace["__name__"])
+    isolated.__dict__.update(namespace)
+    monkeypatch.setitem(sys.modules, namespace["__name__"], isolated)
+    exec(compile(module, str(source_path), "exec"), isolated.__dict__)
+    values = isolated.__dict__["_make_evidence_mutation_surface"]()
+    operation = values[2]
+    attempt_states = values[3]
+    consume_marker = values[4]
+
+    monkeypatch.chdir(repository)
+    monkeypatch.setattr(
+        search_identity,
+        "verify_search_freeze",
+        lambda *_args, **_kwargs: SimpleNamespace(verdict="PASS"),
+    )
+
+    class PassingGuard:
+        @staticmethod
+        def checkpoint(_stage: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                verdict="PASS",
+                reason_codes=(),
+                repository_inventory_sha256=R,
+                elapsed_ns=1,
+                peak_process_bytes=1,
+            )
+
+    monkeypatch.setattr(
+        "mdcp.temporal.runtime_guards.build_production_runtime_guard",
+        lambda *_args, **_kwargs: PassingGuard(),
+    )
+    request = FormalDevelopmentRequest(
+        repository_root=repository,
+        expected_freeze_head=FREEZE,
+        search_receipt_path=repository / "receipt.json",
+        evidence_index_path=repository / "index.json",
+        authorization_path=repository / "authorization.json",
+        consumption_root=consumption_root,
+        archive_path=repository / "archive.zip",
+        private_container_path=private_container_path,
+    )
+    operation_holder.update({"operation": operation, "request": request})
+    outcome = operation(request)
+    authorization_sha256 = sha256_hex(authorization_raw)
+    calls["attempt_state"] = attempt_states.get(authorization_sha256)
+    if failure_phase in {
+        "preflight",
+        "marker_owned",
+        "precall_pair",
+        "precall_clean",
+        "private_publish",
+        "terminal_publish",
+    }:
+        calls["retry_result"] = consume_marker(
+            consumption_root,
+            authorization_sha256,
+            b"canonical-marker",
+        ).result
+    return outcome, calls
+
+
+def test_ignored_repository_destination_fails_before_marker_and_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    private = repository / "runtime" / "formal.json"
+    outcome, calls = _isolated_formal_operation(
+        tmp_path,
+        monkeypatch,
+        failure_phase="none",
+        private_container_path=private,
+    )
+
+    assert (outcome.verdict, outcome.reason_codes) == (
+        "FAIL",
+        ("FORMAL_RUN_DESTINATION_INVALID",),
+    )
+    assert calls["preflight"] == calls["marker"] == calls["loader"] == calls["fit"] == 0
+
+
+def test_same_digest_reentry_is_blocked_during_output_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private = tmp_path / "external" / "formal.json"
+    outcome, calls = _isolated_formal_operation(
+        tmp_path,
+        monkeypatch,
+        failure_phase="preflight_reentry",
+        private_container_path=private,
+    )
+
+    assert outcome.verdict == "PASS"
+    assert len(calls["reentrant"]) == 1
+    reentrant = calls["reentrant"][0]
+    assert (reentrant.verdict, reentrant.reason_codes) == (
+        "UNKNOWN",
+        ("FORMAL_RUN_CONSUMPTION_UNKNOWN",),
+    )
+    assert (calls["preflight"], calls["marker"], calls["loader"], calls["fit"]) == (
+        2,
+        1,
+        1,
+        1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected"),
+    (
+        ("preflight", ("FAIL", "FORMAL_RUN_DESTINATION_INVALID")),
+        ("marker_owned", ("UNKNOWN", "FORMAL_RUN_CONSUMPTION_UNKNOWN")),
+        ("precall_pair", ("UNKNOWN", "FORMAL_RUN_CONSUMPTION_UNKNOWN")),
+        ("precall_clean", ("FAIL", "FORMAL_RUN_CONSUMPTION_FAILED")),
+        ("private_publish", ("UNKNOWN", "FORMAL_RUN_EXECUTION_UNKNOWN")),
+        ("terminal_publish", ("UNKNOWN", "FORMAL_RUN_SEAL_UNKNOWN")),
+    ),
+)
+def test_each_checked_close_failure_is_consumed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    expected: tuple[str, str],
+) -> None:
+    private = tmp_path / "external" / "formal.json"
+    outcome, calls = _isolated_formal_operation(
+        tmp_path,
+        monkeypatch,
+        failure_phase=phase,
+        private_container_path=private,
+    )
+
+    assert (outcome.verdict, outcome.reason_codes[0]) == expected
+    expected_closes = {
+        "preflight": [301],
+        "marker_owned": [201, 303, 302, 301],
+        "precall_pair": [303, 302, 301],
+        "precall_clean": [303, 302, 301],
+        "private_publish": [201, 303, 202, 302, 301],
+        "terminal_publish": [201, 303, 202, 203, 302, 301],
+    }
+    assert calls["closes"] == expected_closes[phase]
+    expected_states = {
+        "preflight": "UNKNOWN",
+        "marker_owned": "UNKNOWN",
+        "precall_pair": "UNKNOWN",
+        "precall_clean": None,
+        "private_publish": "CONSUMED",
+        "terminal_publish": "CONSUMED",
+    }
+    assert calls["attempt_state"] == expected_states[phase]
+    expected_retries = {
+        "preflight": "INDETERMINATE",
+        "marker_owned": "INDETERMINATE",
+        "precall_pair": "INDETERMINATE",
+        "precall_clean": "PRECALL_FAILED",
+        "private_publish": "COLLISION",
+        "terminal_publish": "COLLISION",
+    }
+    assert calls["retry_result"] == expected_retries[phase]
+    expected_attempt_counts = {
+        "preflight": (0, 0),
+        "marker_owned": (1, 1),
+        "precall_pair": (1, 1),
+        "precall_clean": (2, 2),
+        "private_publish": (1, 2),
+        "terminal_publish": (1, 3),
+    }
+    assert (calls["marker"], calls["nt"]) == expected_attempt_counts[phase]
 
 
 def _cli_arguments() -> tuple[str, ...]:

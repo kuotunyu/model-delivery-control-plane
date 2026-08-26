@@ -1977,9 +1977,10 @@ def _make_evidence_mutation_surface():
                     )
                 except _PublicationError:
                     raise _PublicationError("TRUSTED_PARENT_REQUIRED") from None
+                if handle is not None:
+                    owned_handles.append(handle)
                 if not entered or status != 0 or iosb_status != 0 or handle is None:
                     raise _PublicationError("TRUSTED_PARENT_REQUIRED")
-                owned_handles.append(handle)
                 try:
                     attributes, identity = _windows_file_information(handle)
                 except _PublicationError:
@@ -2222,13 +2223,21 @@ def _make_evidence_mutation_surface():
             _WINDOWS_FILE_OPEN,
             _WINDOWS_FILE_NON_DIRECTORY_FILE | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT,
         )
-        if entered and status == 0 and iosb_status == 0 and handle is not None:
-            _windows_close(handle)
-            _windows_close_all([item[0] for item in reversed(ancestors)])
-            raise _PublicationError("DESTINATION_EXISTS")
-        if status not in (-1073741772, -1073741766):
-            _windows_close_all([item[0] for item in reversed(ancestors)])
-            raise _PublicationError("TRUSTED_PARENT_REQUIRED")
+        exists = entered and status == 0 and iosb_status == 0 and handle is not None
+        absent = status in (-1073741772, -1073741766) and handle is None
+        if exists or not absent:
+            close_failed = False
+            if handle is not None:
+                try:
+                    if not _windows_close(handle):
+                        close_failed = True
+                except Exception:
+                    close_failed = True
+            if not _windows_close_all([item[0] for item in reversed(ancestors)]):
+                close_failed = True
+            if close_failed:
+                raise _PublicationError("PUBLICATION_FAILED") from None
+            raise _PublicationError("DESTINATION_EXISTS" if exists else "TRUSTED_PARENT_REQUIRED")
         retained = tuple(
             RetainedAncestor(
                 handle=item[0],
@@ -2267,7 +2276,8 @@ def _make_evidence_mutation_surface():
         try:
             terminal = _retained_destination(terminal_path)
         except Exception:
-            close_destination(private)
+            if not close_destination(private):
+                raise _PublicationError("PUBLICATION_FAILED") from None
             raise
         return RetainedPublicationPair(private=private, terminal=terminal)
 
@@ -2665,8 +2675,16 @@ def _make_evidence_mutation_surface():
                 _WINDOWS_FILE_OPEN,
                 _WINDOWS_FILE_NON_DIRECTORY_FILE | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT,
             )
-            if entered and status == 0 and iosb_status == 0 and handle is not None:
-                return "PRESENT" if _windows_close(handle) else "INDETERMINATE"
+            if handle is not None:
+                try:
+                    closed = _windows_close(handle)
+                except Exception:
+                    return "INDETERMINATE"
+                if not closed:
+                    return "INDETERMINATE"
+                if entered and status == 0 and iosb_status == 0:
+                    return "PRESENT"
+                return "INDETERMINATE"
             if status in (-1073741772, -1073741766):
                 return "ABSENT"
         except Exception:
@@ -2695,13 +2713,27 @@ def _make_evidence_mutation_surface():
         consumption_root: ClosurePath,
         authorization_sha256: str,
         marker_bytes: bytes,
+        *,
+        preflight_owned: bool = False,
     ) -> MarkerAttempt:
         marker_path = consumption_root / f"{authorization_sha256}.consumed.json"
         with attempt_lock:
             state = attempt_states.get(authorization_sha256)
-            if state == "CONSUMED":
+            if preflight_owned:
+                if state != "PREFLIGHT":
+                    return MarkerAttempt(
+                        False,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "INDETERMINATE",
+                        "INDETERMINATE",
+                        None,
+                    )
+            elif state == "CONSUMED":
                 return MarkerAttempt(False, None, None, None, None, "PRESENT", "COLLISION", None)
-            if state in ("IN_PROGRESS", "UNKNOWN"):
+            elif state in ("PREFLIGHT", "IN_PROGRESS", "UNKNOWN"):
                 return MarkerAttempt(
                     False,
                     None,
@@ -2733,8 +2765,34 @@ def _make_evidence_mutation_surface():
             )
         with attempt_lock:
             state = attempt_states.get(authorization_sha256)
-            if state is not None:
-                close_destination(destination)
+            if preflight_owned:
+                if state != "PREFLIGHT":
+                    if not close_destination(destination):
+                        attempt_states[authorization_sha256] = "UNKNOWN"
+                    return MarkerAttempt(
+                        False,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "INDETERMINATE",
+                        "INDETERMINATE",
+                        None,
+                    )
+                attempt_states[authorization_sha256] = "IN_PROGRESS"
+            elif state is not None:
+                if not close_destination(destination):
+                    attempt_states[authorization_sha256] = "UNKNOWN"
+                    return MarkerAttempt(
+                        False,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "INDETERMINATE",
+                        "INDETERMINATE",
+                        None,
+                    )
                 return MarkerAttempt(
                     False,
                     None,
@@ -2745,7 +2803,8 @@ def _make_evidence_mutation_surface():
                     "COLLISION" if state == "CONSUMED" else "INDETERMINATE",
                     None,
                 )
-            attempt_states[authorization_sha256] = "IN_PROGRESS"
+            else:
+                attempt_states[authorization_sha256] = "IN_PROGRESS"
         entered, status, iosb_status, information, owned = _windows_nt_relative_file(
             destination.parent_handle,
             destination.leaf_name,
@@ -2773,6 +2832,8 @@ def _make_evidence_mutation_surface():
         )
         observed_owned = owned
         if result == "CREATED":
+            work_failed = False
+            close_failed = False
             try:
                 marker_attributes, marker_identity = _windows_file_information(owned)
                 if (
@@ -2789,12 +2850,22 @@ def _make_evidence_mutation_surface():
                 _windows_flush(owned)
                 _revalidate_retained_ancestors(destination)
                 _revalidate_final_handle(destination, owned, marker_identity)
-                if not _windows_close(owned):
-                    raise _PublicationError("PUBLICATION_FAILED")
-                owned = None
-                if not close_destination(destination):
-                    raise _PublicationError("PUBLICATION_FAILED")
             except Exception:
+                work_failed = True
+            finally:
+                if owned is not None:
+                    try:
+                        if not _windows_close(owned):
+                            close_failed = True
+                    except Exception:
+                        close_failed = True
+                    owned = None
+                try:
+                    if not close_destination(destination):
+                        close_failed = True
+                except Exception:
+                    close_failed = True
+            if work_failed or close_failed:
                 with attempt_lock:
                     attempt_states[authorization_sha256] = "UNKNOWN"
                 return MarkerAttempt(
@@ -2820,12 +2891,28 @@ def _make_evidence_mutation_surface():
                 "CREATED",
                 digest,
             )
+        close_failed = False
         if owned is not None:
             try:
-                _windows_close(owned)
+                if not _windows_close(owned):
+                    close_failed = True
             except Exception:
-                owned = None
-        close_destination(destination)
+                close_failed = True
+        if not close_destination(destination):
+            close_failed = True
+        if close_failed:
+            with attempt_lock:
+                attempt_states[authorization_sha256] = "UNKNOWN"
+            return MarkerAttempt(
+                entered,
+                status,
+                iosb_status,
+                information,
+                observed_owned,
+                "INDETERMINATE",
+                "INDETERMINATE",
+                None,
+            )
         if result == "COLLISION":
             with attempt_lock:
                 attempt_states[authorization_sha256] = "CONSUMED"
@@ -2840,8 +2927,6 @@ def _make_evidence_mutation_surface():
                 None,
             )
         if result == "PRECALL_FAILED":
-            with attempt_lock:
-                attempt_states.pop(authorization_sha256, None)
             return MarkerAttempt(
                 False,
                 status,
@@ -2957,9 +3042,32 @@ def _make_evidence_mutation_surface():
                 "FORMAL_RUN_CONSUMPTION_ROOT_INVALID",
                 authorization_sha256=authorization_sha256,
             )
+        if not _safe_external_directory(request.private_container_path.parent, repository):
+            return _outcome(
+                "FAIL",
+                "FORMAL_RUN_DESTINATION_INVALID",
+                authorization_sha256=authorization_sha256,
+            )
+        with attempt_lock:
+            state = attempt_states.get(authorization_sha256)
+            if state == "CONSUMED":
+                return _outcome(
+                    "FAIL",
+                    "FORMAL_RUN_AUTHORIZATION_CONSUMED",
+                    authorization_sha256=authorization_sha256,
+                )
+            if state is not None:
+                return _outcome(
+                    "UNKNOWN",
+                    "FORMAL_RUN_CONSUMPTION_UNKNOWN",
+                    authorization_sha256=authorization_sha256,
+                )
+            attempt_states[authorization_sha256] = "PREFLIGHT"
         try:
             pair = preflight_pair(request.private_container_path)
         except Exception:
+            with attempt_lock:
+                attempt_states[authorization_sha256] = "UNKNOWN"
             return _outcome(
                 "FAIL",
                 "FORMAL_RUN_DESTINATION_INVALID",
@@ -2980,23 +3088,50 @@ def _make_evidence_mutation_surface():
             request.consumption_root,
             authorization_sha256,
             marker_bytes,
+            preflight_owned=True,
         )
         if marker_attempt.result == "COLLISION":
-            close_pair(pair)
+            if not close_pair(pair):
+                return _outcome(
+                    "UNKNOWN",
+                    "FORMAL_RUN_CONSUMPTION_UNKNOWN",
+                    authorization_sha256=authorization_sha256,
+                )
             return _outcome(
                 "FAIL",
                 "FORMAL_RUN_AUTHORIZATION_CONSUMED",
                 authorization_sha256=authorization_sha256,
             )
         if marker_attempt.result == "PRECALL_FAILED":
-            close_pair(pair)
+            if not close_pair(pair):
+                with attempt_lock:
+                    attempt_states[authorization_sha256] = "UNKNOWN"
+                return _outcome(
+                    "UNKNOWN",
+                    "FORMAL_RUN_CONSUMPTION_UNKNOWN",
+                    authorization_sha256=authorization_sha256,
+                )
+            with attempt_lock:
+                if attempt_states.get(authorization_sha256) != "IN_PROGRESS":
+                    attempt_states[authorization_sha256] = "UNKNOWN"
+                    return _outcome(
+                        "UNKNOWN",
+                        "FORMAL_RUN_CONSUMPTION_UNKNOWN",
+                        authorization_sha256=authorization_sha256,
+                    )
+                attempt_states.pop(authorization_sha256)
             return _outcome(
                 "FAIL",
                 "FORMAL_RUN_CONSUMPTION_FAILED",
                 authorization_sha256=authorization_sha256,
             )
         if marker_attempt.result != "CREATED" or marker_attempt.marker_sha256 is None:
-            close_pair(pair)
+            if not close_pair(pair):
+                return _outcome(
+                    "UNKNOWN",
+                    "FORMAL_RUN_CONSUMPTION_UNKNOWN",
+                    authorization_sha256=authorization_sha256,
+                )
             return _outcome(
                 "UNKNOWN",
                 "FORMAL_RUN_CONSUMPTION_UNKNOWN",
@@ -3057,10 +3192,10 @@ def _make_evidence_mutation_surface():
             )
             fit_count = result.fit_ledger.total_count
             files, public_result, selection_status = formalize(result)
-            phase = "SEAL"
             private_bytes, private_identity = encode_natural(files)
             _attempt_pre_seal()
             publish_private(pair, private_bytes)
+            phase = "SEAL"
             exit_observation = _attempt_exit()
             if (
                 exit_observation is None
@@ -3131,10 +3266,20 @@ def _make_evidence_mutation_surface():
             )
         except Exception:
             _finish_terminal_guards()
-            close_pair(pair)
+            reason = (
+                "FORMAL_RUN_SEAL_UNKNOWN" if phase == "SEAL" else "FORMAL_RUN_EXECUTION_UNKNOWN"
+            )
+            if not close_pair(pair):
+                return _outcome(
+                    "UNKNOWN",
+                    reason,
+                    authorization_sha256=authorization_sha256,
+                    marker_sha256=marker_sha256,
+                    fit_count=fit_count if phase == "EXECUTION" else fit_count or 80,
+                )
             return _outcome(
                 "UNKNOWN",
-                "FORMAL_RUN_SEAL_UNKNOWN" if phase == "SEAL" else "FORMAL_RUN_EXECUTION_UNKNOWN",
+                reason,
                 authorization_sha256=authorization_sha256,
                 marker_sha256=marker_sha256,
                 fit_count=fit_count if phase == "EXECUTION" else fit_count or 80,

@@ -176,6 +176,8 @@ def _isolated_mutation_factory_adapter(
     *,
     retained_error: str | None = None,
     binding_overrides: dict[str, object] | None = None,
+    function_overrides: dict[str, str] | None = None,
+    exports: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Extract the deleted factory and append an in-memory-only test adapter."""
 
@@ -213,6 +215,14 @@ def _isolated_mutation_factory_adapter(
                 )
             )
         ]
+    for function_name, body_source in (function_overrides or {}).items():
+        matches = [
+            node
+            for node in ast.walk(factory)
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        ]
+        assert len(matches) == 1
+        matches[0].body = ast.parse(body_source).body
     returns = [
         node
         for node in ast.walk(factory)
@@ -229,12 +239,14 @@ def _isolated_mutation_factory_adapter(
                 ast.Constant("classify_marker_observation"),
                 ast.Constant("consume_marker"),
                 ast.Constant("attempt_states"),
+                *(ast.Constant(name) for name in exports),
             ],
             values=[
                 ast.Name("_windows_nt_relative_file", ast.Load()),
                 ast.Name("_classify_marker_observation", ast.Load()),
                 ast.Name("consume_marker", ast.Load()),
                 ast.Name("attempt_states", ast.Load()),
+                *(ast.Name(name, ast.Load()) for name in exports),
             ],
         )
     )
@@ -480,6 +492,202 @@ def test_retained_publication_revalidates_ancestors_and_leaf_before_close() -> N
         assert ordered_calls.index("_revalidate_retained_ancestors") < ordered_calls.index(
             "_revalidate_final_handle"
         )
+
+
+@pytest.mark.parametrize(
+    ("nt_result", "failing_handle", "expected_error", "expected_closes"),
+    (
+        ((True, 0, 0, 1, 202), None, "DESTINATION_EXISTS", (202, 101)),
+        ((True, 259, 0, 0, 202), None, "TRUSTED_PARENT_REQUIRED", (202, 101)),
+        ((True, 0, 0, 1, 202), 202, "PUBLICATION_FAILED", (202, 101)),
+        ((True, 259, 0, 0, 202), 101, "PUBLICATION_FAILED", (202, 101)),
+    ),
+)
+def test_retained_destination_closes_every_observed_handle(
+    nt_result: tuple[bool, int, int, int, int],
+    failing_handle: int | None,
+    expected_error: str,
+    expected_closes: tuple[int, ...],
+) -> None:
+    closes: list[int] = []
+
+    def test_close(handle: int) -> bool:
+        closes.append(handle)
+        return handle != failing_handle
+
+    adapter = _isolated_mutation_factory_adapter(
+        ctypes,
+        binding_overrides={
+            "test_ancestors": [(101, (1, 2, 3), "C:\\")],
+            "test_close": test_close,
+            "test_nt_result": nt_result,
+        },
+        function_overrides={
+            "_absolute_destination": "return destination",
+            "_windows_open_trusted_ancestors": "return test_ancestors",
+            "_windows_nt_relative_file": "return test_nt_result",
+            "_windows_close": "return test_close(handle)",
+        },
+        exports=("_retained_destination",),
+    )
+
+    with pytest.raises(ValueError, match=f"^{expected_error}$"):
+        adapter["_retained_destination"](Path("C:/outside/result.json"))
+
+    assert tuple(closes) == expected_closes
+
+
+@pytest.mark.parametrize(
+    ("close_behavior", "expected_error"),
+    (
+        ("pass", "TRUSTED_PARENT_REQUIRED"),
+        ("false", "PUBLICATION_FAILED"),
+        ("raise", "PUBLICATION_FAILED"),
+    ),
+)
+def test_trusted_ancestor_cleanup_owns_anomalous_nonnull_handle_before_validation(
+    close_behavior: str,
+    expected_error: str,
+) -> None:
+    closes: list[int] = []
+
+    def test_close(handle: int) -> bool:
+        closes.append(handle)
+        if close_behavior == "raise":
+            raise OSError("synthetic close failure")
+        return close_behavior != "false"
+
+    adapter = _isolated_mutation_factory_adapter(
+        ctypes,
+        binding_overrides={"test_close": test_close},
+        function_overrides={
+            "_windows_create_file": "return (101, 0)",
+            "_windows_file_information": (
+                "return (_WINDOWS_FILE_ATTRIBUTE_DIRECTORY, (1, 0, handle))"
+            ),
+            "_windows_normalized_handle_name": "return 'trusted'",
+            "_windows_names_equal": "return True",
+            "_windows_nt_relative_file": "return (True, 259, 0, 0, 202)",
+            "_windows_close": "return test_close(handle)",
+        },
+        exports=("_windows_open_trusted_ancestors",),
+    )
+
+    with pytest.raises(ValueError, match=f"^{expected_error}$"):
+        adapter["_windows_open_trusted_ancestors"](Path("C:/root/parent/result.json"))
+
+    assert closes == [202, 101]
+
+
+@pytest.mark.parametrize("close_behavior", ("pass", "false", "raise"))
+def test_marker_probe_anomalous_handle_is_closed_and_never_proves_absence(
+    close_behavior: str,
+) -> None:
+    closes: list[int] = []
+
+    def test_close(handle: int) -> bool:
+        closes.append(handle)
+        if close_behavior == "raise":
+            raise OSError("synthetic close failure")
+        return close_behavior != "false"
+
+    adapter = _isolated_mutation_factory_adapter(
+        ctypes,
+        binding_overrides={"test_close": test_close},
+        function_overrides={
+            "_windows_nt_relative_file": "return (False, -1073741772, 0, 0, 202)",
+            "_windows_close": "return test_close(handle)",
+        },
+        exports=("_marker_leaf_state",),
+    )
+    destination = SimpleNamespace(parent_handle=101, leaf_name="marker.json")
+
+    assert adapter["_marker_leaf_state"](destination) == "INDETERMINATE"
+    assert closes == [202]
+
+
+def test_clean_precall_keeps_in_progress_until_outer_pair_close_resolves(
+    tmp_path: Path,
+) -> None:
+    destination = SimpleNamespace(
+        parent_handle=101,
+        leaf_name="marker.json",
+        absolute_path=tmp_path / "marker.json",
+        ancestors=(SimpleNamespace(handle=101, volume_serial_number=1),),
+        closed=False,
+    )
+    adapter = _isolated_mutation_factory_adapter(
+        ctypes,
+        binding_overrides={"test_destination": destination},
+        function_overrides={
+            "_retained_destination": "return test_destination",
+            "_windows_nt_relative_file": "return (False, None, None, None, None)",
+            "_marker_leaf_state": "return 'ABSENT'",
+            "close_destination": "return True",
+        },
+    )
+    authorization_sha256 = "8" * 64
+
+    first = adapter["consume_marker"](
+        tmp_path,
+        authorization_sha256,
+        b"canonical-marker",
+    )
+    second = adapter["consume_marker"](
+        tmp_path,
+        authorization_sha256,
+        b"canonical-marker",
+    )
+
+    assert first.result == "PRECALL_FAILED"
+    assert adapter["attempt_states"][authorization_sha256] == "IN_PROGRESS"
+    assert second.result == "INDETERMINATE"
+
+
+@pytest.mark.parametrize("close_behavior", ("pass", "false", "raise"))
+def test_created_marker_exception_closes_owned_leaf_and_retained_ancestors(
+    tmp_path: Path,
+    close_behavior: str,
+) -> None:
+    closes: list[int] = []
+
+    def test_close(handle: int) -> bool:
+        closes.append(handle)
+        if close_behavior == "raise":
+            raise OSError("synthetic close failure")
+        return close_behavior != "false"
+
+    destination = SimpleNamespace(
+        parent_handle=101,
+        leaf_name="marker.json",
+        absolute_path=tmp_path / "marker.json",
+        ancestors=(SimpleNamespace(handle=101, volume_serial_number=1),),
+        closed=False,
+    )
+    adapter = _isolated_mutation_factory_adapter(
+        ctypes,
+        binding_overrides={
+            "test_close": test_close,
+            "test_destination": destination,
+        },
+        function_overrides={
+            "_retained_destination": "return test_destination",
+            "_windows_nt_relative_file": "return (True, 0, 0, 2, 202)",
+            "_windows_file_information": ("raise _PublicationError('PUBLICATION_FAILED')"),
+            "_windows_close": "return test_close(handle)",
+        },
+    )
+    authorization_sha256 = "9" * 64
+
+    result = adapter["consume_marker"](
+        tmp_path,
+        authorization_sha256,
+        b"canonical-marker",
+    )
+
+    assert (result.result, result.leaf_state) == ("INDETERMINATE", "PRESENT")
+    assert adapter["attempt_states"][authorization_sha256] == "UNKNOWN"
+    assert closes == [202, 101]
 
 
 def test_production_factory_is_deleted_and_exposes_exactly_two_wrappers() -> None:
