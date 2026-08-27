@@ -125,8 +125,10 @@ tombstone followed immediately by one no-clobber `A/A` receipt-only freeze.
   executable Python value can cross from supervisor to worker.
 - Keep archive bytes, development rows, estimators, predictions, labels, private evidence, and fit
   state out of the supervisor process.
-- Require the worker to independently verify every identity and path before consuming authorization
-  or reading the archive.
+- Require the worker to independently verify every execution-source, evidence, authorization, and
+  destination identity before consuming authorization or reading archive content. Full Git
+  HEAD/index/clean-state authority remains in the trusted supervisor because the worker has no Git
+  child-process capability.
 - Bind the exact worker source, protocol, request, and launch profile into the formal seal chain.
 - Make timeout, crash, oversized output, nonzero exit, and malformed IPC deterministic fail-closed
   states with no automatic retry.
@@ -199,12 +201,14 @@ trusted CLI/controller process
 The supervisor:
 
 - owns the public callable and fixed process-launch policy;
-- validates the request, repository, freeze, source inventory, authorization bytes, and textual
-  output boundaries without opening the archive;
+- validates the request, Git HEAD/clean state, freeze topology, complete repository inventory,
+  source inventory, authorization bytes, and textual output boundaries without opening the
+  archive;
 - constructs and hashes one canonical worker request;
 - launches the worker exactly once;
 - accepts at most one bounded canonical response;
-- observes timeout and process exit;
+- observes timeout and process exit, then repeats the exact Git HEAD/clean/repository-inventory
+  checks before authenticating live success;
 - reads no UCI row, H1 row, H2 row, model, prediction, label, or private-container payload; and
 - returns `PASS` only after zero exit, exact response validation, and public terminal-seal identity
   validation.
@@ -212,8 +216,9 @@ The supervisor:
 The worker:
 
 - starts in a fresh interpreter with no caller Python objects;
-- revalidates the repository, freeze, source inventory, authorization, archive identity, and both
-  output destinations independently;
+- derives its source root from the verified script, recomputes the exact 47-path source inventory,
+  and revalidates the freeze/evidence bindings, authorization, archive identity, and both output
+  destinations independently;
 - acquires and retains authoritative Windows publication handles;
 - consumes authorization before importing or calling natural loaders or estimator builders;
 - owns every natural row, estimator, fit, prediction, private document, and private byte;
@@ -223,6 +228,23 @@ The worker:
 - exits without spawning a child process.
 
 No worker pool, reuse, reconnect, resume, or second attempt exists.
+
+Git trust is deliberately asymmetric. The supervisor is the sole Git-capable process. It binds the
+pre-launch `expected_freeze_head` and full `repository_inventory_sha256` into the canonical request,
+and repeats both observations after child exit. The worker never resolves `git.exe`, inherits no
+`PATH`, and launches no Git helper. Instead, every worker runtime checkpoint rereads the exact
+47-path execution inventory as regular non-link, non-reparse files and requires its canonical digest
+to remain equal to `source_inventory_sha256`. The worker records the supervisor-observed repository
+digest as a sealed request binding, not as a worker-observed Git fact. A post-launch Git mismatch
+prevents the supervisor from retaining a terminal digest or returning live `PASS`; any already
+published terminal leaf is therefore unanchored and recovery remains `UNKNOWN`.
+
+A plan-time feasibility probe reproduced the boundary with `-I -B -S` and an environment containing
+only `SYSTEMROOT` and `WINDIR`: `shutil.which("git")` returned `None`, and the current Git-backed
+repository-head guard returned `None`. A separate no-site probe successfully imported the project,
+NumPy, and scikit-learn after inserting only the script-derived source root and the
+interpreter-derived dependency directory directly. This evidence rules out an implicit Git lookup
+inside the worker and supports the split above without adding a dependency or inherited `PATH`.
 
 ## 7. Module and callable boundary
 
@@ -243,6 +265,9 @@ verify_formal_development_seal
 `execute_authorized_formal_development` becomes a supervisor. It may validate trusted bytes and
 launch the fixed worker, but it cannot import or call the UCI loader, materialize development rows,
 construct an estimator, fit, replay, encode natural private evidence, or publish a natural leaf.
+Its Git and process modules are imported only inside supervisor-only functions; importing
+`run_evidence.py` inside the worker must not load `subprocess` or expose a worker call edge to the
+launcher.
 
 `src/mdcp/temporal/cli.py` continues to expose exactly `build_parser` and `main`. The CLI dispatches
 the supervisor once and emits only its closed sanitized result.
@@ -252,6 +277,12 @@ the supervisor once and emits only its closed sanitized result.
 `src/mdcp/temporal/formal_worker_protocol.py` contains only frozen request/response models,
 canonicalization, fixed limits, fixed reason codes, and digest validation. It performs no file,
 environment, clock, network, process, dataset, model, or publication operation.
+
+It also owns the closed, process-free authorization, search-receipt, and evidence-index binding
+models needed by the worker. `search_identity.py` may import and re-export the authoritative
+authorization type for compatibility, but the worker never imports `search_identity.py`; this keeps
+Git/subprocess capability outside the worker import closure without creating a second schema
+meaning.
 
 ### 7.3 Worker surface
 
@@ -267,7 +298,8 @@ process entry function named `main`.
 - derives the repository and source roots from its own canonical script path, and rejects a request
   whose `repository_root` differs;
 - never accepts a stream, callback, backend, module, registry, class, or callable parameter; and
-- is never imported by the supervisor.
+- is never imported by the supervisor; and
+- never imports `cli.py` or `search_identity.py`, and has no import or call path to `subprocess`.
 
 Directly importing the module does not execute formal work. Executing the reviewed module directly
 with the exact isolated launch profile is not an authorization bypass: the worker still requires
@@ -396,8 +428,11 @@ The exact worker lifecycle is:
 2. read at most `65,536` request bytes and require EOF;
 3. parse, validate, recanonicalize, and hash the request;
 4. verify `launch_profile_sha256` and `formal_worker_inventory_sha256`;
-5. verify repository root, expected freeze commit, clean source, search receipt, evidence index,
-   source inventory, and repository inventory;
+5. require the request repository root to equal the script-derived root; verify the search receipt
+   and evidence index bind `expected_freeze_head`; independently recompute the exact 47-path source
+   inventory and require `source_inventory_sha256`; validate the supervisor-observed
+   `repository_inventory_sha256` as a nonzero sealed request binding without claiming a worker Git
+   observation;
 6. reread and validate canonical authorization bytes, then require the exact parent-observed
    authorization digest and frozen bindings;
 7. verify the archive path is absolute and identifies an approved-size regular non-link file,
@@ -448,6 +483,8 @@ The supervisor returns live `PASS` only when all of these hold:
 - request, worker-inventory, and launch-profile digests equal the supervisor values;
 - the response field matrix is exact;
 - the returned terminal-seal digest matches the physical public leaf; and
+- the supervisor's post-exit Git HEAD, clean-state, and full repository inventory equal its
+  pre-launch observations; and
 - the sanitized public seal binds the same request, source, authorization, marker, private identity,
   repository inventory, fit count, H2 state, and development result.
 
@@ -464,9 +501,10 @@ ledger count from being recovered. A valid worker response retains the exact kno
 
 ### 12.1 Before process creation
 
-Request, repository, freeze, source, authorization, path, interpreter, or launch-profile failures
-remain deterministic `FAIL` with no process, marker, data access, output, or retry. A `CreateProcess`
-failure that returns no process handle is `FAIL/FORMAL_WORKER_LAUNCH_FAILED`.
+Request, supervisor Git/repository, freeze, source, authorization, path, interpreter, or
+launch-profile failures remain deterministic `FAIL` with no process, marker, data access, output,
+or retry. A `CreateProcess` failure that returns no process handle is
+`FAIL/FORMAL_WORKER_LAUNCH_FAILED`.
 
 ### 12.2 After process creation
 
@@ -479,6 +517,7 @@ Once process creation succeeds, any of the following is terminal
 - missing, malformed, noncanonical, extra, duplicate, or trailing response bytes;
 - nonzero or unobservable exit;
 - response/request/source/profile identity mismatch;
+- supervisor post-exit HEAD, clean-state, or repository-inventory mismatch;
 - a `PASS` response inconsistent with the public terminal leaf; or
 - inability to terminate and wait for the child after a transport failure.
 
@@ -597,8 +636,10 @@ launch-profile digests recorded in the terminal seal.
   model input.
 - Estimator execution remains CPU-only, one estimator thread, with no GPU, Docker, network, paid API,
   or external service.
-- Runtime time, memory, repository, fit-budget, and H2 guards execute inside the worker so their
-  observations apply to the process that owns rows and models.
+- Runtime time, process memory, 47-path source integrity, fit-budget, and H2 guards execute inside
+  the worker so their observations apply to the process that owns rows and models. Full Git
+  HEAD/clean/repository-inventory checks execute only in the supervisor immediately before launch
+  and after child exit.
 
 Corrective implementation tests use deterministic synthetic data and denial hooks only. They do
 not read UCI/H1/H2 rows, create a real authorization, or execute a model. P2 is the first authorized
@@ -621,6 +662,10 @@ The corrected finite policy verifies:
 - direct import and call of `formal_worker.main` fails before authorization or data access;
 - the worker has no subprocess, shell, network, GPU, environment-recovery, H2, legacy full-loader,
   or alternate publication path;
+- the supervisor is the only Git-capable process, the worker imports no `subprocess`, and a worker
+  started without `PATH` still completes all pre-consumption source/freeze checks;
+- authorization/search binding models have one protocol-owned implementation reused by
+  `search_identity.py`, rather than duplicated worker and supervisor interpretations;
 - the pure state machine has no file, process, data-loader, model-builder, or publication import;
 - source inventory contains every worker-bound production and schema path exactly once; and
 - public responses and evidence pass the existing credential/private-path/exception scanner.
@@ -763,6 +808,8 @@ The future plan must include at least these negative proofs:
   extra environment key, inherited handle, second worker, and caller-selected argument rejected;
 - `.pth`, `sitecustomize`, `usercustomize`, caller-selected source root, caller-selected dependency
   root, and script/request repository disagreement rejected;
+- any worker `subprocess`/Git import or call is rejected, while supervisor pre/post Git drift returns
+  terminal `UNKNOWN` and leaves any physical terminal seal externally unanchored;
 - imported `formal_worker.main` fails before authorization or data access;
 - timeout, oversized stdout, partial stdout, extra stdout, nonzero exit, absent EOF, invalid response,
   and response identity mismatch return terminal `UNKNOWN` after process creation;
@@ -779,7 +826,8 @@ The future plan must include at least these negative proofs:
 - loader/model denial hooks prove no access before successful marker consumption;
 - legacy loader, full split, H2, row 13,004, day.csv, network, environment, entropy, subprocess,
   Docker, GPU, and dynamic import paths rejected;
-- worker runtime guards measure the worker process rather than the supervisor.
+- worker runtime guards measure worker time/memory and recompute the 47-path worker source rather
+  than claiming a Git observation; supervisor pre/post guards own full repository integrity.
 
 ### Evidence and recovery
 
@@ -810,6 +858,7 @@ tree must pass:
 - protocol, process, temporal, contract, security, behavioral H2, publication, recovery,
   source-archive, and identity suites;
 - exact supervisor and worker callable/import audit;
+- supervisor-only Git capability plus worker no-`PATH`/no-subprocess verification;
 - exact 47-path inventory and external custody proof;
 - no-`.git` archive proof under all three autocrlf modes;
 - Ruff check and exact changed-Python format check;
@@ -878,6 +927,8 @@ authorize the natural formal run.
 - The selected process boundary is described honestly as object/memory isolation, not a hostile
   same-user sandbox or network sandbox.
 - Supervisor and worker responsibilities are disjoint and independently testable.
+- Supervisor-only Git authority is explicit: the worker recomputes execution-source bytes but does
+  not claim to independently observe Git HEAD, index, or clean state.
 - No executable Python value crosses IPC.
 - Request, response, source, launch, authorization, publication, and recovery identities are
   closed and acyclic.
