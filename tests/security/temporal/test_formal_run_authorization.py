@@ -263,6 +263,32 @@ def test_outcome_matrix_is_closed() -> None:
         replace(pass_outcome(), reason_codes=("FORMAL_RUN_SEAL_UNKNOWN",))
 
 
+def test_worker_process_failure_outcomes_are_unauthenticated() -> None:
+    for verdict, reason in (
+        ("FAIL", "FORMAL_WORKER_LAUNCH_FAILED"),
+        ("UNKNOWN", "FORMAL_WORKER_PROCESS_UNKNOWN"),
+    ):
+        result = FormalDevelopmentOutcome(
+            verdict=verdict,
+            reason_codes=(reason,),
+            private_identity=None,
+            seal_record_sha256=None,
+            repository_inventory_sha256=None,
+            authorization_sha256=ZERO,
+            consumption_marker_sha256=None,
+            fit_count=None,
+            h2_status="SEALED_NOT_LOADED",
+            h2_loaded_rows=0,
+        )
+        assert result.fit_count is None
+
+
+def test_worker_process_public_supervisor_accepts_only_one_closed_request() -> None:
+    assert str(inspect.signature(run_evidence.execute_authorized_formal_development)) == (
+        "(request: 'FormalDevelopmentRequest') -> 'FormalDevelopmentOutcome'"
+    )
+
+
 def test_terminal_schema_is_the_exact_checked_in_top_level() -> None:
     checked = json.loads(
         Path("schemas/v2/development-result-index.schema.json").read_text(encoding="utf-8")
@@ -426,17 +452,19 @@ def test_formal_surface_is_one_operation_and_one_read_only_verifier() -> None:
     }
     actual = {name for name in expected if hasattr(run_evidence, name)}
     assert actual == expected
-    for function in (
-        run_evidence.write_synthetic_bundle_no_clobber,
-        run_evidence.execute_authorized_formal_development,
-    ):
-        closure = inspect.getclosurevars(function)
-        assert not closure.unbound
-        assert all(
-            fragment not in name
-            for name in closure.globals
-            for fragment in ("publish_windows", "windows_write", "natural_container")
-        )
+    synthetic_closure = inspect.getclosurevars(run_evidence.write_synthetic_bundle_no_clobber)
+    assert not synthetic_closure.unbound
+    assert all(
+        fragment not in name
+        for name in synthetic_closure.globals
+        for fragment in ("publish_windows", "windows_write", "natural_container")
+    )
+    assert run_evidence.execute_authorized_formal_development.__qualname__ == (
+        "execute_authorized_formal_development"
+    )
+    assert str(inspect.signature(run_evidence.execute_authorized_formal_development)) == (
+        "(request: 'FormalDevelopmentRequest') -> 'FormalDevelopmentOutcome'"
+    )
 
 
 def test_module_builder_rejects_natural_even_with_forged_override() -> None:

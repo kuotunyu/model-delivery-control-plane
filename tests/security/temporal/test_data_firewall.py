@@ -790,6 +790,190 @@ def test_static_firewall_allows_only_the_closed_run_evidence_capabilities(tmp_pa
     assert result.checked_paths == (logical_path,)
 
 
+def test_static_firewall_allows_exact_formal_worker_bootstrap(tmp_path: Path) -> None:
+    logical_path = "src/mdcp/temporal/formal_worker.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    _write_logical_module(tmp_path, logical_path, source)
+
+    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert result.verdict == "PASS"
+    assert result.checked_paths == (logical_path,)
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    (
+        ("shell=False", "shell=True"),
+        ("close_fds=True", "close_fds=False"),
+        ("cwd=str(repository_root)", "cwd=None"),
+        ("env=environment", "env={**environment, 'PATH': 'forbidden'}"),
+        (
+            '[str(executable), "-I", "-B", "-S", str(worker_script)]',
+            "[str(executable), str(worker_script)]",
+        ),
+        ("process.terminate()", "process.kill()"),
+        ("process.stdout.read(WORKER_STDOUT_PROBE_BYTES - len(response))", "process.stdout.read()"),
+    ),
+)
+def test_static_firewall_rejects_fixed_supervisor_transport_tampering(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) == 1
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, replacement, 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "injected_source",
+    (
+        "factory([str(executable), str(worker_script)])",
+        "retry_factory = factory\n        retry_factory([str(executable), str(worker_script)])",
+    ),
+)
+def test_task_four_corrective_static_firewall_rejects_every_second_factory_launch(
+    tmp_path: Path,
+    injected_source: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    needle = "            env=environment,\n        )\n"
+    assert source.count(needle) == 1
+    mutated = source.replace(
+        needle,
+        f"{needle}        {injected_source}\n",
+        1,
+    )
+    _write_logical_module(tmp_path, logical_path, mutated)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    (
+        (
+            '_git_bytes(root, "show", "-s", "--format=%P", expected_head)',
+            '_git_bytes(root, "show", "-s", "--format=%P", "HEAD")',
+        ),
+        (
+            '            "-r",\n            expected_head,\n',
+            '            "-r",\n            source_commit,\n            expected_head,\n',
+        ),
+        (
+            '_git_bytes(root, "ls-tree", expected_head, "--", *SEARCH_SOURCE_PATHS)',
+            '_git_bytes(root, "ls-tree", expected_head)',
+        ),
+        (
+            "    from mdcp.temporal.formal_worker_protocol import SEARCH_SOURCE_PATHS\n",
+            "    from mdcp.temporal.formal_worker_protocol import SEARCH_SOURCE_PATHS\n"
+            '    _git_bytes(root, "status", "--porcelain=v1", "--untracked-files=all")\n',
+        ),
+    ),
+)
+def test_task_four_round_two_static_firewall_pins_exact_topology_git_calls(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) == 1
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, replacement, 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    (
+        (
+            "sys.path.insert(0, str(source_root))",
+            "sys.path.insert(0, str(repository_root))",
+        ),
+        (
+            "sys.stdin.buffer.read(MAX_WORKER_MESSAGE_BYTES + 1)",
+            "sys.stdin.buffer.read()",
+        ),
+        (
+            "from mdcp.temporal.formal_worker_protocol import (",
+            "from mdcp.temporal import cli\n    from mdcp.temporal.formal_worker_protocol import (",
+        ),
+        (
+            "import stat\n",
+            "import stat\nimport subprocess\n",
+        ),
+    ),
+)
+def test_static_firewall_rejects_formal_worker_bootstrap_tampering(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/formal_worker.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) >= 1
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, replacement, 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    (
+        (
+            'source_root = _canonical_path(repository_root / "src", directory=True)',
+            'source_root = _canonical_path(repository_root / "src", directory=True)\n'
+            "    source_root = repository_root",
+        ),
+        (
+            "site_packages = _canonical_path(executable.parents[1] / "
+            '"Lib/site-packages", directory=True)',
+            "site_packages = _canonical_path(executable.parents[1] / "
+            '"Lib/site-packages", directory=True)\n'
+            "    site_packages = repository_root",
+        ),
+        (
+            "executable = _canonical_path(Path(sys.executable), directory=False)",
+            "executable = _canonical_path(script, directory=False)",
+        ),
+        (
+            'executable.parents[1] / "Lib/site-packages"',
+            'executable.parents[0] / "Lib/site-packages"',
+        ),
+        (
+            "sys.path.insert(0, str(site_packages))\n    sys.path.insert(0, str(source_root))",
+            "sys.path.insert(0, str(source_root))\n    sys.path.insert(0, str(site_packages))",
+        ),
+        (
+            "sys.path.insert(0, str(site_packages))",
+            "sys.path.insert(0, str(site_packages))\n    sys.path.insert(0, str(site_packages))",
+        ),
+    ),
+)
+def test_task_four_corrective_static_firewall_pins_bootstrap_derivations(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/formal_worker.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) == 1
+    _write_logical_module(tmp_path, logical_path, source.replace(needle, replacement, 1))
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 def test_static_firewall_allows_same_qualified_import_in_separate_scopes(
     tmp_path: Path,
 ) -> None:

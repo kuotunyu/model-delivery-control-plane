@@ -43,27 +43,42 @@ _EXPECTED_OWNED_SURFACES = {
         "_PrivateContainer",
         "_PrivateContainerEntry",
         "_PublicationError",
+        "_RepositorySnapshot",
+        "_SupervisorLaunch",
         "_WindowsDispositionInformation",
         "_WindowsFileInformation",
         "_WindowsIoStatusBlock",
         "_WindowsIoStatusValue",
         "_WindowsObjectAttributes",
         "_WindowsUnicodeString",
+        "_WorkerLaunchFailed",
+        "_WorkerProcessUnknown",
+        "_accept_worker_response",
         "_canonical_base64_decoded_size",
+        "_canonical_existing_path",
         "_canonical_private_container",
+        "_canonical_windows_string",
         "_checked_in_schema",
+        "_current_python_executable",
         "_exact_keys",
         "_failed_result",
+        "_formal_worker_inventory",
+        "_git_bytes",
         "_inventory_core",
         "_is_canonical_logical_path",
         "_is_windows_alias_component",
         "_manifest_core",
         "_private_container_failure",
+        "_process_failure_outcome",
         "_read_private_container_once",
         "_read_private_container_posix",
         "_read_private_container_windows",
+        "_read_supervisor_file",
         "_recovery_leaf",
+        "_repository_snapshot",
+        "_run_fixed_worker_transport",
         "_seal_check",
+        "_supervisor_preflight",
         "_valid_fold_digest",
         "_valid_fold_document",
         "_valid_natural_container",
@@ -72,6 +87,8 @@ _EXPECTED_OWNED_SURFACES = {
         "_valid_source_identity",
         "_valid_winner",
         "_validated_private_files",
+        "_verified_search_freeze_topology",
+        "_verified_search_source_inventory",
         "_verify_private_container_raw",
         "_windows_close_read_handle",
         "_windows_private_file_information",
@@ -374,7 +391,7 @@ def _assert_single_factory_and_cli_edge(run_source: str, cli_source: str) -> Non
     assert len(target) == 1 and isinstance(target[0], ast.Tuple)
     assert tuple(element.id for element in target[0].elts if isinstance(element, ast.Name)) == (
         "write_synthetic_bundle_no_clobber",
-        "execute_authorized_formal_development",
+        "_retired_in_process_formal_operation",
     )
     deleted = {
         target.id
@@ -383,7 +400,11 @@ def _assert_single_factory_and_cli_edge(run_source: str, cli_source: str) -> Non
         for target in node.targets
         if isinstance(target, ast.Name)
     }
-    assert {"_make_evidence_mutation_surface", "_MUTATION_BINDINGS"}.issubset(deleted)
+    assert {
+        "_make_evidence_mutation_surface",
+        "_MUTATION_BINDINGS",
+        "_retired_in_process_formal_operation",
+    }.issubset(deleted)
 
     for node in ast.walk(factory):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -933,6 +954,22 @@ def test_factory_state_and_single_cli_dispatch_are_structurally_closed() -> None
     _assert_single_factory_and_cli_edge(run_source, cli_source)
 
 
+def test_launch_profile_keeps_process_and_git_imports_supervisor_private() -> None:
+    source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    top_level_modules: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            modules = (
+                {alias.name for alias in node.names}
+                if isinstance(node, ast.Import)
+                else {node.module or ""}
+            )
+            top_level_modules.update(modules)
+            assert modules.isdisjoint({"subprocess", "time"})
+    assert "mdcp.temporal.formal_worker" not in top_level_modules
+
+
 def test_structural_proof_rejects_a_second_cli_dispatch() -> None:
     run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
     cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
@@ -1073,6 +1110,7 @@ def test_named_public_functions_do_not_combine_raw_natural_content_and_destinati
             if (
                 not inspect.isfunction(value)
                 or getattr(value, "__module__", None) != module.__name__
+                or value.__name__.startswith("_")
             ):
                 continue
             if value is search_identity._publish_no_clobber:
@@ -1095,10 +1133,13 @@ def test_allowed_factory_results_are_only_the_two_closed_wrappers() -> None:
         run_evidence.write_synthetic_bundle_no_clobber,
         run_evidence.execute_authorized_formal_development,
     )
-    assert tuple(function.__name__ for function in wrappers) == ("write_synthetic", "execute")
+    assert tuple(function.__name__ for function in wrappers) == (
+        "write_synthetic",
+        "execute_authorized_formal_development",
+    )
     assert tuple(function.__qualname__ for function in wrappers) == (
         "_make_evidence_mutation_surface.<locals>.write_synthetic",
-        "_make_evidence_mutation_surface.<locals>.execute",
+        "execute_authorized_formal_development",
     )
     assert tuple(str(inspect.signature(function)) for function in wrappers) == (
         "(destination: 'ClosurePath', bundle: 'PrivateRunBundle') -> 'PrivateBundleIdentity'",

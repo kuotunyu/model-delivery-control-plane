@@ -492,6 +492,24 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("typing", "Literal"),
         }
     ),
+    "src/mdcp/temporal/formal_worker.py": frozenset(
+        {
+            ("__future__", "annotations"),
+            ("hashlib", None),
+            ("mdcp.temporal.formal_worker_protocol", "FORMAL_WORKER_SOURCE_PATHS"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerSourceEntry"),
+            ("mdcp.temporal.formal_worker_protocol", "formal_worker_inventory_sha256"),
+            ("mdcp.temporal.formal_worker_protocol", "MAX_WORKER_MESSAGE_BYTES"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerResponse"),
+            ("mdcp.temporal.formal_worker_protocol", "encode_formal_worker_response"),
+            ("mdcp.temporal.formal_worker_protocol", "launch_profile_sha256"),
+            ("mdcp.temporal.formal_worker_protocol", "parse_formal_worker_request"),
+            ("mdcp.temporal.formal_worker_protocol", "worker_request_sha256"),
+            ("pathlib", "Path"),
+            ("stat", None),
+            ("sys", None),
+        }
+    ),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
             ("__future__", "annotations"),
@@ -514,6 +532,30 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.completeness", "PredictionOutcome"),
             ("mdcp.temporal.evaluation", "qualify_trial"),
             ("mdcp.temporal.evidence", "public_evidence_violations"),
+            ("mdcp.temporal.formal_worker_protocol", "FORMAL_WORKER_SOURCE_PATHS"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerSourceEntry"),
+            ("mdcp.temporal.formal_worker_protocol", "formal_worker_inventory_sha256"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalRunAuthorization"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerRequest"),
+            ("mdcp.temporal.formal_worker_protocol", "SearchEvidenceIndex"),
+            ("mdcp.temporal.formal_worker_protocol", "SearchReceipt"),
+            ("mdcp.temporal.formal_worker_protocol", "SEARCH_SOURCE_PATHS"),
+            ("mdcp.temporal.formal_worker_protocol", "SearchSourceEntry"),
+            ("mdcp.temporal.formal_worker_protocol", "encode_formal_worker_request"),
+            ("mdcp.temporal.formal_worker_protocol", "launch_profile_sha256"),
+            (
+                "mdcp.temporal.formal_worker_protocol",
+                "search_source_inventory_sha256",
+            ),
+            ("mdcp.temporal.formal_worker_protocol", "worker_request_sha256"),
+            (
+                "mdcp.temporal.formal_worker_protocol",
+                "FORMAL_WORKER_TERMINATION_WAIT_SECONDS",
+            ),
+            ("mdcp.temporal.formal_worker_protocol", "FORMAL_WORKER_TIMEOUT_SECONDS"),
+            ("mdcp.temporal.formal_worker_protocol", "MAX_WORKER_MESSAGE_BYTES"),
+            ("mdcp.temporal.formal_worker_protocol", "WORKER_STDOUT_PROBE_BYTES"),
+            ("mdcp.temporal.formal_worker_protocol", "parse_formal_worker_response"),
             ("mdcp.temporal.folds", "load_fold_specs"),
             ("mdcp.temporal.folds", "materialize_folds"),
             ("mdcp.temporal.runner", "DevelopmentRunBundle"),
@@ -560,12 +602,127 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("pydantic", "field_validator"),
             ("pydantic", "model_validator"),
             ("stat", None),
+            ("subprocess", None),
+            ("sys", None),
             ("threading", "Lock"),
+            ("threading", "Event"),
+            ("threading", "Thread"),
+            ("time", None),
             ("typing", "Annotated"),
             ("typing", "Literal"),
             ("unicodedata", None),
         }
     ),
+}
+_SCOPED_IMPORT_ALLOWLIST = {
+    "src/mdcp/temporal/run_evidence.py": {
+        ("sys", None): frozenset({"_current_python_executable", "_supervisor_preflight"}),
+        ("subprocess", None): frozenset({"_git_bytes", "_run_fixed_worker_transport"}),
+        ("time", None): frozenset({"_run_fixed_worker_transport"}),
+        ("threading", "Thread"): frozenset({"_run_fixed_worker_transport"}),
+        ("threading", "Event"): frozenset({"_run_fixed_worker_transport"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FORMAL_WORKER_SOURCE_PATHS",
+        ): frozenset({"_formal_worker_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FormalWorkerSourceEntry",
+        ): frozenset({"_formal_worker_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "formal_worker_inventory_sha256",
+        ): frozenset({"_formal_worker_inventory"}),
+        ("mdcp.temporal.formal_worker_protocol", "FormalRunAuthorization"): frozenset(
+            {"_supervisor_preflight"}
+        ),
+        ("mdcp.temporal.formal_worker_protocol", "FormalWorkerRequest"): frozenset(
+            {"_supervisor_preflight"}
+        ),
+        ("mdcp.temporal.formal_worker_protocol", "SearchReceipt"): frozenset(
+            {"_supervisor_preflight"}
+        ),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SEARCH_SOURCE_PATHS",
+        ): frozenset({"_verified_search_freeze_topology", "_verified_search_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SearchEvidenceIndex",
+        ): frozenset({"_supervisor_preflight", "_verified_search_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SearchSourceEntry",
+        ): frozenset({"_verified_search_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "search_source_inventory_sha256",
+        ): frozenset({"_verified_search_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "encode_formal_worker_request",
+        ): frozenset({"_supervisor_preflight"}),
+        ("mdcp.temporal.formal_worker_protocol", "launch_profile_sha256"): frozenset(
+            {"_supervisor_preflight"}
+        ),
+        ("mdcp.temporal.formal_worker_protocol", "worker_request_sha256"): frozenset(
+            {"_supervisor_preflight"}
+        ),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FORMAL_WORKER_TERMINATION_WAIT_SECONDS",
+        ): frozenset({"_run_fixed_worker_transport"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FORMAL_WORKER_TIMEOUT_SECONDS",
+        ): frozenset({"_run_fixed_worker_transport"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "MAX_WORKER_MESSAGE_BYTES",
+        ): frozenset({"_run_fixed_worker_transport"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "WORKER_STDOUT_PROBE_BYTES",
+        ): frozenset({"_run_fixed_worker_transport"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "parse_formal_worker_response",
+        ): frozenset({"_accept_worker_response"}),
+    },
+    "src/mdcp/temporal/formal_worker.py": {
+        ("__future__", "annotations"): frozenset({None}),
+        ("hashlib", None): frozenset({None}),
+        ("pathlib", "Path"): frozenset({None}),
+        ("stat", None): frozenset({None}),
+        ("sys", None): frozenset({None}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FORMAL_WORKER_SOURCE_PATHS",
+        ): frozenset({"_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FormalWorkerSourceEntry",
+        ): frozenset({"_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "formal_worker_inventory_sha256",
+        ): frozenset({"_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "MAX_WORKER_MESSAGE_BYTES",
+        ): frozenset({"main"}),
+        ("mdcp.temporal.formal_worker_protocol", "FormalWorkerResponse"): frozenset({"main"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "encode_formal_worker_response",
+        ): frozenset({"main"}),
+        ("mdcp.temporal.formal_worker_protocol", "launch_profile_sha256"): frozenset({"main"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "parse_formal_worker_request",
+        ): frozenset({"main"}),
+        ("mdcp.temporal.formal_worker_protocol", "worker_request_sha256"): frozenset({"main"}),
+    },
 }
 _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     "src/mdcp/predictor/app_v2.py": frozenset(
@@ -590,11 +747,17 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Constant",
             "ast.Div",
             "ast.ExceptHandler",
+            "ast.Expr",
             "ast.FunctionDef",
             "ast.Global",
+            "ast.IfExp",
             "ast.Import",
             "ast.ImportFrom",
+            "ast.Is",
+            "ast.List",
             "ast.Load",
+            "ast.Add",
+            "ast.Compare",
             "ast.MatchAs",
             "ast.MatchMapping",
             "ast.MatchStar",
@@ -602,6 +765,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Nonlocal",
             "ast.Starred",
             "ast.Store",
+            "ast.Sub",
             "ast.Subscript",
             "ast.Tuple",
             "ast.arg",
@@ -766,6 +930,8 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "json.JSONDecodeError",
             "json.loads",
             "math.isfinite",
+            "os.environ",
+            "os.fsdecode",
             "os.name",
             "os.O_NOFOLLOW",
             "os.O_NONBLOCK",
@@ -776,7 +942,37 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "os.read",
             "stat.S_ISDIR",
             "stat.S_ISREG",
+            "subprocess.DEVNULL",
+            "subprocess.PIPE",
+            "subprocess.Popen",
+            "subprocess.run",
+            "sys.executable",
+            "sys.version_info",
+            "time.monotonic",
             "unicodedata.normalize",
+        }
+    ),
+    "src/mdcp/temporal/formal_worker.py": frozenset(
+        {
+            "hashlib.sha256",
+            "stat.S_ISDIR",
+            "stat.S_ISREG",
+            "sys.argv",
+            "sys.dont_write_bytecode",
+            "sys.executable",
+            "sys.flags",
+            "sys.flags.isolated",
+            "sys.flags.no_site",
+            "sys.path",
+            "sys.path.insert",
+            "sys.stdin",
+            "sys.stdin.buffer",
+            "sys.stdin.buffer.read",
+            "sys.stdout",
+            "sys.stdout.buffer",
+            "sys.stdout.buffer.flush",
+            "sys.stdout.buffer.write",
+            "sys.version_info",
         }
     ),
 }
@@ -849,6 +1045,15 @@ _ALLOWED_FILE_ACCESS_CALLS = {
             ),
             ("verify_development_result", "read_bytes", "name:path"),
             ("_read_private_container_posix", "read", "name:os"),
+            ("read_response", "read", "attr:process.stdout"),
+            ("write_request", "write", "attr:process.stdin"),
+        }
+    ),
+    "src/mdcp/temporal/formal_worker.py": frozenset(
+        {
+            ("_source_inventory", "read_bytes", "name:path"),
+            ("main", "read", "attr:sys.stdin.buffer"),
+            ("main", "write", "attr:sys.stdout.buffer"),
         }
     ),
 }
@@ -876,6 +1081,7 @@ _ALLOWED_ENVIRONMENT_KEYS = {
             "MDCP_V02_PRIVATE_CONTAINER",
         }
     ),
+    "src/mdcp/temporal/run_evidence.py": frozenset({"SYSTEMROOT", "WINDIR"}),
 }
 _CLI_THREAD_ENVIRONMENT_KEYS = frozenset(
     {
@@ -985,6 +1191,34 @@ _ALLOWED_SUBPROCESS_CALLS = {
         "_repository_is_dirty": ("git", "status", "--porcelain=v1", "--untracked-files=all"),
         "_tracked_paths": ("git", "ls-tree", "-r", "-z", "--name-only", "name:expected_head"),
     },
+    "src/mdcp/temporal/run_evidence.py": {
+        "_git_bytes": ("git", "name:arguments"),
+    },
+}
+_ALLOWED_RUN_EVIDENCE_GIT_CALLS = {
+    "_repository_snapshot": frozenset(
+        {
+            ("rev-parse", "--show-toplevel"),
+            ("rev-parse", "HEAD"),
+            ("status", "--porcelain=v1", "--untracked-files=all"),
+            ("remote",),
+            ("tag", "--points-at", "HEAD"),
+            ("ls-tree", "-r", "-z", "--name-only", "name:expected_head"),
+        }
+    ),
+    "_verified_search_freeze_topology": frozenset(
+        {
+            ("show", "-s", "--format=%P", "name:expected_head"),
+            (
+                "diff-tree",
+                "--no-commit-id",
+                "--name-status",
+                "-r",
+                "name:expected_head",
+            ),
+            ("ls-tree", "name:expected_head", "--", "name:SEARCH_SOURCE_PATHS"),
+        }
+    ),
 }
 _ALLOWED_SEARCH_IDENTITY_GIT_CALLS = {
     "verify_search_freeze": frozenset(
@@ -1356,10 +1590,17 @@ def _allowed_file_access_call(
 ) -> bool:
     if not isinstance(node.func, ast.Attribute):
         return False
+    receiver_identity = _file_receiver_identity(node.func.value)
+    if receiver_identity is None and logical_path in {
+        "src/mdcp/temporal/formal_worker.py",
+        "src/mdcp/temporal/run_evidence.py",
+    }:
+        attribute_identity = _simple_attribute_identity(node.func.value)
+        receiver_identity = None if attribute_identity is None else f"attr:{attribute_identity}"
     identity = (
         _enclosing_function(node, parents),
         node.func.attr,
-        _file_receiver_identity(node.func.value),
+        receiver_identity,
     )
     return identity in _ALLOWED_FILE_ACCESS_CALLS.get(logical_path, frozenset())
 
@@ -1370,6 +1611,18 @@ def _allowed_file_source_name(
     parents: dict[ast.AST, ast.AST],
 ) -> bool:
     parent = parents.get(node)
+    if (
+        logical_path == "src/mdcp/temporal/formal_worker.py"
+        and node.id == "__file__"
+        and isinstance(parent, ast.Call)
+        and len(parent.args) == 1
+        and parent.args[0] is node
+        and not parent.keywords
+        and isinstance(parent.func, ast.Name)
+        and parent.func.id == "Path"
+        and _enclosing_function(node, parents) == "_bootstrap_paths"
+    ):
+        return True
     if (
         logical_path != _TRUSTED_FIREWALL_PATH
         or node.id != "__file__"
@@ -1520,6 +1773,11 @@ def _environment_access_allowed(
     logical_path: str,
     parents: dict[ast.AST, ast.AST],
 ) -> bool:
+    if (
+        logical_path == "src/mdcp/temporal/run_evidence.py"
+        and _enclosing_function(node, parents) != "_run_fixed_worker_transport"
+    ):
+        return False
     allowed_keys = _ALLOWED_ENVIRONMENT_KEYS.get(logical_path, frozenset())
     parent = parents.get(node)
     if qualified_name == "os.environ":
@@ -1561,6 +1819,340 @@ def _subprocess_argument_identity(node: ast.expr) -> str | None:
     return None
 
 
+def _simple_attribute_identity(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _simple_attribute_identity(node.value)
+        return None if parent is None else f"{parent}.{node.attr}"
+    return None
+
+
+def _str_call_of(node: ast.expr, name: str) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "str"
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == name
+    )
+
+
+def _fixed_worker_factory_assignment(node: ast.Assign) -> bool:
+    if (
+        len(node.targets) != 1
+        or not isinstance(node.targets[0], ast.Name)
+        or node.targets[0].id != "factory"
+        or not isinstance(node.value, ast.IfExp)
+    ):
+        return False
+    conditional = node.value
+    return (
+        isinstance(conditional.test, ast.Compare)
+        and isinstance(conditional.test.left, ast.Name)
+        and conditional.test.left.id == "_process_factory"
+        and len(conditional.test.ops) == 1
+        and isinstance(conditional.test.ops[0], ast.Is)
+        and len(conditional.test.comparators) == 1
+        and isinstance(conditional.test.comparators[0], ast.Constant)
+        and conditional.test.comparators[0].value is None
+        and isinstance(conditional.body, ast.Attribute)
+        and isinstance(conditional.body.value, ast.Name)
+        and conditional.body.value.id == "subprocess"
+        and conditional.body.attr == "Popen"
+        and isinstance(conditional.orelse, ast.Name)
+        and conditional.orelse.id == "_process_factory"
+    )
+
+
+def _fixed_worker_process_call(node: ast.Call) -> bool:
+    if (
+        not isinstance(node.func, ast.Name)
+        or node.func.id != "factory"
+        or len(node.args) != 1
+        or not isinstance(node.args[0], ast.List)
+    ):
+        return False
+    command = node.args[0].elts
+    if not (
+        len(command) == 5
+        and _str_call_of(command[0], "executable")
+        and all(
+            isinstance(command[index], ast.Constant) and command[index].value == value
+            for index, value in ((1, "-I"), (2, "-B"), (3, "-S"))
+        )
+        and _str_call_of(command[4], "worker_script")
+    ):
+        return False
+    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+    if set(keywords) != {
+        "shell",
+        "cwd",
+        "close_fds",
+        "stdin",
+        "stdout",
+        "stderr",
+        "env",
+    }:
+        return False
+
+    return (
+        isinstance(keywords["shell"], ast.Constant)
+        and keywords["shell"].value is False
+        and _str_call_of(keywords["cwd"], "repository_root")
+        and isinstance(keywords["close_fds"], ast.Constant)
+        and keywords["close_fds"].value is True
+        and isinstance(keywords["stdin"], ast.Attribute)
+        and isinstance(keywords["stdin"].value, ast.Name)
+        and keywords["stdin"].value.id == "subprocess"
+        and keywords["stdin"].attr == "PIPE"
+        and isinstance(keywords["stdout"], ast.Attribute)
+        and isinstance(keywords["stdout"].value, ast.Name)
+        and keywords["stdout"].value.id == "subprocess"
+        and keywords["stdout"].attr == "PIPE"
+        and isinstance(keywords["stderr"], ast.Attribute)
+        and isinstance(keywords["stderr"].value, ast.Name)
+        and keywords["stderr"].value.id == "subprocess"
+        and keywords["stderr"].attr == "DEVNULL"
+        and isinstance(keywords["env"], ast.Name)
+        and keywords["env"].id == "environment"
+    )
+
+
+def _validate_fixed_worker_transport(tree: ast.AST, logical_path: str) -> None:
+    if logical_path != "src/mdcp/temporal/run_evidence.py":
+        return
+    matches = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_fixed_worker_transport"
+    ]
+    if not matches:
+        return
+    if len(matches) != 1:
+        _fail()
+    function = matches[0]
+    parents = {
+        child: parent for parent in ast.walk(function) for child in ast.iter_child_nodes(parent)
+    }
+    assignments = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign) and _fixed_worker_factory_assignment(node)
+    ]
+    launches = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and _fixed_worker_process_call(node)
+    ]
+    factory_calls = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "factory"
+    ]
+    if len(assignments) != 1 or len(launches) != 1 or factory_calls != launches:
+        _fail()
+    for reference in ast.walk(function):
+        if not isinstance(reference, ast.Name) or reference.id != "factory":
+            continue
+        parent = parents.get(reference)
+        if (
+            isinstance(parent, ast.Assign)
+            and reference in parent.targets
+            and _fixed_worker_factory_assignment(parent)
+        ) or (
+            isinstance(parent, ast.Call)
+            and parent.func is reference
+            and _fixed_worker_process_call(parent)
+        ):
+            continue
+        _fail()
+    allowed_receiver_attributes = frozenset(
+        {
+            "process.stdin",
+            "process.stdin.close",
+            "process.stdin.flush",
+            "process.stdin.write",
+            "process.stdout",
+            "process.stdout.read",
+            "process.terminate",
+            "process.wait",
+            "process_errors.append",
+            "process_waiter.is_alive",
+            "process_waiter.join",
+            "process_waiter.start",
+            "reader.is_alive",
+            "reader.join",
+            "reader.start",
+            "reader_errors.append",
+            "response.extend",
+            "return_codes.append",
+            "controller_signal.set",
+            "controller_signal.wait",
+            "thread.is_alive",
+            "thread.join",
+            "writer.is_alive",
+            "writer.join",
+            "writer.start",
+            "writer_errors.append",
+            "overflow.append",
+        }
+    )
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Attribute):
+            continue
+        identity = _simple_attribute_identity(node)
+        if (
+            identity is not None
+            and identity.split(".", 1)[0]
+            in {
+                "process",
+                "process_errors",
+                "process_waiter",
+                "reader",
+                "reader_errors",
+                "response",
+                "return_codes",
+                "controller_signal",
+                "thread",
+                "writer",
+                "writer_errors",
+                "overflow",
+            }
+            and identity not in allowed_receiver_attributes
+        ):
+            _fail()
+        if identity == "process.stdout.read":
+            call = next(
+                (
+                    candidate
+                    for candidate in ast.walk(function)
+                    if isinstance(candidate, ast.Call) and candidate.func is node
+                ),
+                None,
+            )
+            if (
+                not isinstance(call, ast.Call)
+                or len(call.args) != 1
+                or call.keywords
+                or not isinstance(call.args[0], ast.BinOp)
+                or not isinstance(call.args[0].op, ast.Sub)
+                or not isinstance(call.args[0].left, ast.Name)
+                or call.args[0].left.id != "WORKER_STDOUT_PROBE_BYTES"
+                or not isinstance(call.args[0].right, ast.Call)
+                or not isinstance(call.args[0].right.func, ast.Name)
+                or call.args[0].right.func.id != "len"
+                or len(call.args[0].right.args) != 1
+                or not isinstance(call.args[0].right.args[0], ast.Name)
+                or call.args[0].right.args[0].id != "response"
+            ):
+                _fail()
+
+
+def _validate_formal_worker_bootstrap(tree: ast.AST, logical_path: str) -> None:
+    if logical_path != "src/mdcp/temporal/formal_worker.py":
+        return
+    bootstrap = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_bootstrap_paths"
+    ]
+    main = [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "main"
+    ]
+    if len(bootstrap) != 1 or len(main) != 1:
+        _fail()
+    derivation_names = {
+        "script",
+        "repository_root",
+        "source_root",
+        "executable",
+        "site_packages",
+    }
+    observed_derivations: list[ast.AST] = []
+    for node in ast.walk(bootstrap[0]):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in derivation_names
+        ) or (
+            isinstance(node, ast.Call)
+            and _simple_attribute_identity(node.func) == "sys.path.insert"
+        ):
+            observed_derivations.append(node)
+    observed_derivations.sort(key=lambda node: node.lineno)
+    expected_sources = (
+        "script = _canonical_path(Path(__file__), directory=False)",
+        "repository_root = _canonical_path(script.parents[3], directory=True)",
+        'source_root = _canonical_path(repository_root / "src", directory=True)',
+        "executable = _canonical_path(Path(sys.executable), directory=False)",
+        "site_packages = _canonical_path(executable.parents[1] / "
+        '"Lib/site-packages", directory=True)',
+        "sys.path.insert(0, str(site_packages))",
+        "sys.path.insert(0, str(source_root))",
+    )
+    expected_derivations: list[ast.AST] = []
+    for source in expected_sources:
+        statement = ast.parse(source).body[0]
+        expected_derivations.append(
+            statement.value if isinstance(statement, ast.Expr) else statement
+        )
+    if tuple(ast.dump(node, include_attributes=False) for node in observed_derivations) != tuple(
+        ast.dump(node, include_attributes=False) for node in expected_derivations
+    ):
+        _fail()
+    reads = [
+        node
+        for node in ast.walk(main[0])
+        if isinstance(node, ast.Call)
+        and _simple_attribute_identity(node.func) == "sys.stdin.buffer.read"
+    ]
+    if len(reads) != 1:
+        _fail()
+    read = reads[0]
+    if (
+        len(read.args) != 1
+        or read.keywords
+        or not isinstance(read.args[0], ast.BinOp)
+        or not isinstance(read.args[0].op, ast.Add)
+        or not isinstance(read.args[0].left, ast.Name)
+        or read.args[0].left.id != "MAX_WORKER_MESSAGE_BYTES"
+        or not isinstance(read.args[0].right, ast.Constant)
+        or read.args[0].right.value != 1
+    ):
+        _fail()
+
+
+def _allowed_run_evidence_git_call(
+    node: ast.Call,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    if not isinstance(node.func, ast.Name) or node.func.id != "_git_bytes":
+        return True
+    if (
+        _enclosing_function(node, parents) not in _ALLOWED_RUN_EVIDENCE_GIT_CALLS
+        or not node.args
+        or node.keywords
+        or not isinstance(node.args[0], ast.Name)
+        or node.args[0].id != "root"
+    ):
+        return False
+    command = tuple(
+        (
+            f"name:{argument.value.id}"
+            if isinstance(argument, ast.Starred) and isinstance(argument.value, ast.Name)
+            else _subprocess_argument_identity(argument)
+        )
+        for argument in node.args[1:]
+    )
+    return command in _ALLOWED_RUN_EVIDENCE_GIT_CALLS[_enclosing_function(node, parents)]
+
+
 def _allowed_subprocess_call(
     node: ast.Call,
     logical_path: str,
@@ -1593,8 +2185,11 @@ def _allowed_subprocess_call(
         return False
     keywords = {keyword.arg: keyword.value for keyword in node.keywords}
     expected_text = not (
-        logical_path == "src/mdcp/temporal/runtime_guards.py"
-        and _enclosing_function(node, parents) == "_tracked_paths"
+        (
+            logical_path == "src/mdcp/temporal/runtime_guards.py"
+            and _enclosing_function(node, parents) == "_tracked_paths"
+        )
+        or logical_path == "src/mdcp/temporal/run_evidence.py"
     )
     return (
         set(keywords) == {"cwd", "check", "capture_output", "text"}
@@ -1637,6 +2232,29 @@ def _allowed_getattr_reference(
     parents: dict[ast.AST, ast.AST],
 ) -> bool:
     parent = parents.get(node)
+    if logical_path in {
+        "src/mdcp/temporal/formal_worker.py",
+        "src/mdcp/temporal/run_evidence.py",
+    }:
+        expected_scope = (
+            "_canonical_path"
+            if logical_path == "src/mdcp/temporal/formal_worker.py"
+            else "_canonical_existing_path"
+        )
+        return (
+            node.id == "getattr"
+            and isinstance(parent, ast.Call)
+            and parent.func is node
+            and _enclosing_function(node, parents) == expected_scope
+            and len(parent.args) == 3
+            and not parent.keywords
+            and isinstance(parent.args[0], ast.Name)
+            and parent.args[0].id == "information"
+            and isinstance(parent.args[1], ast.Constant)
+            and parent.args[1].value == "st_file_attributes"
+            and isinstance(parent.args[2], ast.Constant)
+            and parent.args[2].value == 0
+        )
     return (
         logical_path == "src/mdcp/temporal/search_identity.py"
         and node.id == "getattr"
@@ -1657,6 +2275,45 @@ def _import_allowed(logical_path: str, module: str, imported_name: str | None) -
     return (module, imported_name) in _FORMAL_IMPORT_ALLOWLIST.get(logical_path, frozenset())
 
 
+def _scoped_import_allowed(
+    node: ast.Import | ast.ImportFrom,
+    logical_path: str,
+    module: str,
+    imported_name: str | None,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    allowed_scopes = _SCOPED_IMPORT_ALLOWLIST.get(logical_path, {}).get((module, imported_name))
+    return allowed_scopes is None or _enclosing_function(node, parents) in allowed_scopes
+
+
+def _allowed_fixed_launch_profile_reference(
+    node: ast.Attribute,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    current: ast.AST | None = node
+    while current is not None and not isinstance(current, ast.Call):
+        current = parents.get(current)
+    return (
+        isinstance(current, ast.Call)
+        and _fixed_worker_process_call(current)
+        and _enclosing_function(node, parents) == "_run_fixed_worker_transport"
+    )
+
+
+def _allowed_fixed_process_factory_reference(
+    node: ast.Attribute,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    parent = parents.get(node)
+    return (
+        isinstance(parent, ast.IfExp)
+        and parent.body is node
+        and isinstance(parents.get(parent), ast.Assign)
+        and _fixed_worker_factory_assignment(parents[parent])
+        and _enclosing_function(node, parents) == "_run_fixed_worker_transport"
+    )
+
+
 def _bind_import(bindings: dict[str, str], local_name: str, qualified_name: str) -> None:
     if local_name in bindings:
         if bindings[local_name] == qualified_name:
@@ -1670,6 +2327,7 @@ def _bind_import(bindings: dict[str, str], local_name: str, qualified_name: str)
 def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], frozenset[str]]:
     bindings: dict[str, str] = {}
     module_roots: set[str] = set()
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -1682,6 +2340,8 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                         not in {
                             _TRUSTED_FIREWALL_PATH,
                             "src/mdcp/temporal/cli.py",
+                            "src/mdcp/temporal/formal_worker.py",
+                            "src/mdcp/temporal/run_evidence.py",
                             "src/mdcp/temporal/runtime_guards.py",
                         }
                     )
@@ -1689,6 +2349,8 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                 ):
                     _fail()
                 if not _import_allowed(logical_path, alias.name, None):
+                    _fail()
+                if not _scoped_import_allowed(node, logical_path, alias.name, None, parents):
                     _fail()
                 local_name = alias.asname or alias.name.split(".", 1)[0]
                 qualified_name = alias.name if alias.asname else local_name
@@ -1704,6 +2366,8 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                 and logical_path
                 not in {
                     _TRUSTED_FIREWALL_PATH,
+                    "src/mdcp/temporal/formal_worker.py",
+                    "src/mdcp/temporal/run_evidence.py",
                     "src/mdcp/temporal/runtime_guards.py",
                 }
             ):
@@ -1721,6 +2385,14 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
                 _fail()
             for alias in node.names:
                 if not _import_allowed(logical_path, module, alias.name):
+                    _fail()
+                if not _scoped_import_allowed(
+                    node,
+                    logical_path,
+                    module,
+                    alias.name,
+                    parents,
+                ):
                     _fail()
                 local_name = alias.asname or alias.name
                 _bind_import(
@@ -1751,6 +2423,8 @@ def _shadows_imported_binding(node: ast.AST, bindings: dict[str, str]) -> bool:
 
 def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     _validate_pinned_file_capability_functions(tree, logical_path)
+    _validate_fixed_worker_transport(tree, logical_path)
+    _validate_formal_worker_bootstrap(tree, logical_path)
     bindings, module_roots = _build_bindings(tree, logical_path)
     allowed_module_attributes = _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST.get(logical_path, frozenset())
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
@@ -1775,6 +2449,12 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 and _allowed_search_identity_git_call(parent, parents)
             ):
                 _fail()
+        if (
+            logical_path == "src/mdcp/temporal/run_evidence.py"
+            and isinstance(node, ast.Call)
+            and not _allowed_run_evidence_git_call(node, parents)
+        ):
+            _fail()
         if (
             isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
             and node.name in protected_function_counts
@@ -1856,6 +2536,20 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
             _fail()
         if isinstance(node, ast.Name | ast.Attribute):
             qualified_name = _attribute_name(node, bindings)
+            if (
+                logical_path == "src/mdcp/temporal/run_evidence.py"
+                and isinstance(node, ast.Attribute)
+                and qualified_name == "subprocess.Popen"
+                and not _allowed_fixed_process_factory_reference(node, parents)
+            ):
+                _fail()
+            if (
+                logical_path == "src/mdcp/temporal/run_evidence.py"
+                and isinstance(node, ast.Attribute)
+                and qualified_name in {"subprocess.PIPE", "subprocess.DEVNULL"}
+                and not _allowed_fixed_launch_profile_reference(node, parents)
+            ):
+                _fail()
             if qualified_name in _SENSITIVE_FILE_CALLABLE_SCOPES.get(
                 logical_path, {}
             ) and not _allowed_sensitive_file_callable_reference(

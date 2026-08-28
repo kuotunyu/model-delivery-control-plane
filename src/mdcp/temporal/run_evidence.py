@@ -393,7 +393,7 @@ class FormalDevelopmentOutcome:
     repository_inventory_sha256: str | None
     authorization_sha256: str
     consumption_marker_sha256: str | None
-    fit_count: int
+    fit_count: int | None
     h2_status: Literal["SEALED_NOT_LOADED"]
     h2_loaded_rows: Literal[0]
 
@@ -426,7 +426,7 @@ class FormalDevelopmentOutcome:
         zero = "0" * 64
         valid_common = (
             type(self.reason_codes) is tuple
-            and type(self.fit_count) is int
+            and (self.fit_count is None or type(self.fit_count) is int)
             and self.h2_status == "SEALED_NOT_LOADED"
             and type(self.h2_loaded_rows) is int
             and self.h2_loaded_rows == 0
@@ -434,6 +434,32 @@ class FormalDevelopmentOutcome:
         )
         if not valid_common:
             raise ValueError("FORMAL_DEVELOPMENT_OUTCOME_INVALID")
+        if self.reason_codes == ("FORMAL_WORKER_LAUNCH_FAILED",):
+            valid = (
+                self.verdict == "FAIL"
+                and self.private_identity is None
+                and self.seal_record_sha256 is None
+                and self.repository_inventory_sha256 is None
+                and self.authorization_sha256 == zero
+                and self.consumption_marker_sha256 is None
+                and self.fit_count is None
+            )
+            if not valid:
+                raise ValueError("FORMAL_DEVELOPMENT_OUTCOME_INVALID")
+            return
+        if self.reason_codes == ("FORMAL_WORKER_PROCESS_UNKNOWN",):
+            valid = (
+                self.verdict == "UNKNOWN"
+                and self.private_identity is None
+                and self.seal_record_sha256 is None
+                and self.repository_inventory_sha256 is None
+                and self.authorization_sha256 == zero
+                and self.consumption_marker_sha256 is None
+                and self.fit_count is None
+            )
+            if not valid:
+                raise ValueError("FORMAL_DEVELOPMENT_OUTCOME_INVALID")
+            return
         if self.verdict == "PASS":
             valid = (
                 self.reason_codes == ()
@@ -3291,11 +3317,604 @@ def _make_evidence_mutation_surface():
     return write_synthetic, execute
 
 
-write_synthetic_bundle_no_clobber, execute_authorized_formal_development = (
+write_synthetic_bundle_no_clobber, _retired_in_process_formal_operation = (
     _make_evidence_mutation_surface()
 )
 del _make_evidence_mutation_surface
 del _MUTATION_BINDINGS
+del _retired_in_process_formal_operation
+
+
+class _WorkerLaunchFailed(RuntimeError):
+    pass
+
+
+class _WorkerProcessUnknown(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _RepositorySnapshot:
+    head: str
+    inventory_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SupervisorLaunch:
+    repository_root: Path
+    executable: Path
+    worker_script: Path
+    request: object
+    request_bytes: bytes
+    request_sha256: str
+    snapshot: _RepositorySnapshot
+    terminal_seal_path: Path
+
+
+def _current_python_executable() -> str:
+    import sys
+
+    return sys.executable
+
+
+def _canonical_existing_path(path: Path, *, directory: bool) -> Path:
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise ValueError("FORMAL_WORKER_PATH_INVALID")
+    try:
+        absolute = path.absolute()
+        resolved = path.resolve(strict=True)
+        information = path.lstat()
+    except OSError:
+        raise ValueError("FORMAL_WORKER_PATH_INVALID") from None
+    attributes = getattr(information, "st_file_attributes", 0)
+    if (
+        absolute != resolved
+        or path.is_symlink()
+        or attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+        or (directory and not stat.S_ISDIR(information.st_mode))
+        or (not directory and not stat.S_ISREG(information.st_mode))
+    ):
+        raise ValueError("FORMAL_WORKER_PATH_INVALID")
+    return resolved
+
+
+def _canonical_windows_string(path: Path) -> str:
+    value = path.as_posix()
+    if len(value) < 4 or value[1:3] != ":/" or not value[0].isupper():
+        raise ValueError("FORMAL_WORKER_PATH_INVALID")
+    return value
+
+
+def _git_bytes(repository_root: Path, *arguments: str) -> bytes:
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ("git", *arguments),
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=False,
+        )
+    except OSError:
+        raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID") from None
+    if completed.returncode != 0 or type(completed.stdout) is not bytes:
+        raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID")
+    return completed.stdout
+
+
+def _repository_snapshot(repository_root: Path, expected_head: str) -> _RepositorySnapshot:
+    root = _canonical_existing_path(repository_root, directory=True)
+    top = _git_bytes(root, "rev-parse", "--show-toplevel").decode("utf-8").strip()
+    if Path(top).resolve(strict=True) != root:
+        raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID")
+    head = _git_bytes(root, "rev-parse", "HEAD").decode("ascii").strip()
+    if head != expected_head:
+        raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID")
+    if _git_bytes(root, "status", "--porcelain=v1", "--untracked-files=all"):
+        raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID")
+    if _git_bytes(root, "remote") or _git_bytes(root, "tag", "--points-at", "HEAD"):
+        raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID")
+    raw_paths = _git_bytes(root, "ls-tree", "-r", "-z", "--name-only", expected_head)
+    if not raw_paths.endswith(b"\0"):
+        raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID")
+    material = bytearray()
+    for raw_path in raw_paths[:-1].split(b"\0"):
+        logical = PurePosixPath(os.fsdecode(raw_path))
+        if not raw_path or logical.is_absolute() or ".." in logical.parts:
+            raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID")
+        try:
+            contents = _read_private_container_once(root / os.fsdecode(raw_path))
+        except Exception:
+            raise ValueError("FORMAL_WORKER_REPOSITORY_INVALID") from None
+        material.extend(raw_path)
+        material.extend(b"\0")
+        material.extend(contents)
+        material.extend(b"\0")
+    return _RepositorySnapshot(head=head, inventory_sha256=sha256_hex(bytes(material)))
+
+
+def _read_supervisor_file(path: Path, maximum: int) -> bytes:
+    try:
+        raw = _read_private_container_once(path)
+    except Exception:
+        raise ValueError("FORMAL_WORKER_TRUSTED_FILE_INVALID") from None
+    if len(raw) > maximum:
+        raise ValueError("FORMAL_WORKER_TRUSTED_FILE_INVALID")
+    return raw
+
+
+def _formal_worker_inventory(repository_root: Path) -> str:
+    from mdcp.temporal.formal_worker_protocol import (
+        FORMAL_WORKER_SOURCE_PATHS,
+        FormalWorkerSourceEntry,
+        formal_worker_inventory_sha256,
+    )
+
+    entries = []
+    for logical_path in FORMAL_WORKER_SOURCE_PATHS:
+        raw = _read_supervisor_file(repository_root / logical_path, 4_194_304)
+        entries.append(FormalWorkerSourceEntry(logical_path=logical_path, sha256=sha256_hex(raw)))
+    return formal_worker_inventory_sha256(tuple(entries))
+
+
+def _verified_search_source_inventory(repository_root: Path, index: object) -> str:
+    from mdcp.temporal.formal_worker_protocol import (
+        SEARCH_SOURCE_PATHS,
+        SearchEvidenceIndex,
+        SearchSourceEntry,
+        search_source_inventory_sha256,
+    )
+
+    if type(index) is not SearchEvidenceIndex:
+        raise ValueError("FORMAL_WORKER_TRUSTED_FILE_INVALID")
+    entries = []
+    for logical_path, expected in zip(SEARCH_SOURCE_PATHS, index.source_entries, strict=True):
+        raw = _read_supervisor_file(repository_root / logical_path, 4_194_304)
+        observed = SearchSourceEntry(
+            logical_path=logical_path,
+            git_mode="100644",
+            byte_size=len(raw),
+            sha256=sha256_hex(raw),
+        )
+        if observed != expected:
+            raise ValueError("FORMAL_WORKER_TRUSTED_FILE_INVALID")
+        entries.append(observed)
+    inventory_sha256 = search_source_inventory_sha256(tuple(entries))
+    if inventory_sha256 != index.source_inventory_sha256:
+        raise ValueError("FORMAL_WORKER_TRUSTED_FILE_INVALID")
+    return inventory_sha256
+
+
+def _verified_search_freeze_topology(
+    root: Path,
+    expected_head: str,
+    source_commit: str,
+) -> None:
+    from mdcp.temporal.formal_worker_protocol import SEARCH_SOURCE_PATHS
+
+    if source_commit == "0" * 40 or source_commit == expected_head:
+        raise ValueError("FORMAL_WORKER_TRUSTED_FILE_INVALID")
+    try:
+        parents = _git_bytes(root, "show", "-s", "--format=%P", expected_head)
+        parent_commits = tuple(parents.decode("ascii").strip().split())
+        if parent_commits != (source_commit,):
+            raise ValueError
+
+        raw_diff = _git_bytes(
+            root,
+            "diff-tree",
+            "--no-commit-id",
+            "--name-status",
+            "-r",
+            expected_head,
+        )
+        diff_entries = tuple(
+            line.split("\t", 1) for line in raw_diff.decode("utf-8").splitlines() if line
+        )
+        expected_additions = {
+            "evidence/public/v02/search/evidence-index.json",
+            "evidence/public/v02/search/search-receipt.json",
+        }
+        if (
+            len(diff_entries) != len(expected_additions)
+            or any(len(entry) != 2 or entry[0] != "A" for entry in diff_entries)
+            or {entry[1] for entry in diff_entries} != expected_additions
+        ):
+            raise ValueError
+
+        raw_sources = _git_bytes(root, "ls-tree", expected_head, "--", *SEARCH_SOURCE_PATHS)
+        source_entries = tuple(
+            line.partition("\t") for line in raw_sources.decode("utf-8").splitlines() if line
+        )
+        if (
+            len(source_entries) != len(SEARCH_SOURCE_PATHS)
+            or tuple(entry[2] for entry in source_entries) != SEARCH_SOURCE_PATHS
+            or any(
+                entry[1] != "\t"
+                or len(entry[0].split()) != 3
+                or entry[0].split()[0] != "100644"
+                or entry[0].split()[1] != "blob"
+                for entry in source_entries
+            )
+        ):
+            raise ValueError
+    except Exception:
+        raise ValueError("FORMAL_WORKER_TRUSTED_FILE_INVALID") from None
+
+
+def _supervisor_preflight(request: FormalDevelopmentRequest) -> _SupervisorLaunch:
+    import sys
+
+    from mdcp.temporal.formal_worker_protocol import (
+        FormalRunAuthorization as ProtocolFormalRunAuthorization,
+    )
+    from mdcp.temporal.formal_worker_protocol import (
+        FormalWorkerRequest,
+        SearchEvidenceIndex,
+        encode_formal_worker_request,
+        launch_profile_sha256,
+        worker_request_sha256,
+    )
+    from mdcp.temporal.formal_worker_protocol import (
+        SearchReceipt as ProtocolSearchReceipt,
+    )
+
+    if type(request) is not FormalDevelopmentRequest:
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+    if (
+        type(request.expected_freeze_head) is not str
+        or len(request.expected_freeze_head) != 40
+        or request.expected_freeze_head == "0" * 40
+        or any(character not in "0123456789abcdef" for character in request.expected_freeze_head)
+    ):
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+    repository_root = _canonical_existing_path(request.repository_root, directory=True)
+    expected_receipt = repository_root / "evidence/public/v02/search/search-receipt.json"
+    expected_index = repository_root / "evidence/public/v02/search/evidence-index.json"
+    if request.search_receipt_path.absolute() != expected_receipt:
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+    if request.evidence_index_path.absolute() != expected_index:
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+    receipt_path = _canonical_existing_path(request.search_receipt_path, directory=False)
+    index_path = _canonical_existing_path(request.evidence_index_path, directory=False)
+    authorization_path = _canonical_existing_path(request.authorization_path, directory=False)
+    archive_path = _canonical_existing_path(request.archive_path, directory=False)
+    consumption_root = _canonical_existing_path(request.consumption_root, directory=True)
+    private_parent = _canonical_existing_path(request.private_container_path.parent, directory=True)
+    private_path = private_parent / request.private_container_path.name
+    terminal_path = Path(f"{private_path}.public.json")
+    if private_path.exists() or terminal_path.exists():
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+    if any(
+        path == repository_root or repository_root in path.parents
+        for path in (authorization_path, archive_path, consumption_root, private_parent)
+    ):
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+
+    receipt_raw = _read_supervisor_file(receipt_path, 1_048_576)
+    index_raw = _read_supervisor_file(index_path, 4_194_304)
+    authorization_raw = _read_supervisor_file(authorization_path, 65_536)
+    try:
+        receipt = ProtocolSearchReceipt.model_validate(parse_json_bytes(receipt_raw))
+        index = SearchEvidenceIndex.model_validate(parse_json_bytes(index_raw))
+        authorization = ProtocolFormalRunAuthorization.model_validate(
+            parse_json_bytes(authorization_raw)
+        )
+        if canonicalize_json(receipt.model_dump(mode="json")) != receipt_raw:
+            raise ValueError
+        if canonicalize_json(index.model_dump(mode="json")) != index_raw:
+            raise ValueError
+        if canonicalize_json(authorization.model_dump(mode="json")) != authorization_raw:
+            raise ValueError
+    except Exception:
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID") from None
+    receipt_sha256 = sha256_hex(receipt_raw)
+    index_sha256 = sha256_hex(index_raw)
+    authorization_sha256 = sha256_hex(authorization_raw)
+    if (
+        index.search_receipt_sha256 != receipt_sha256
+        or authorization.search_freeze_commit != request.expected_freeze_head
+        or authorization.search_receipt_sha256 != receipt_sha256
+        or authorization.protocol_sha256 != receipt.dataset_contract_sha256
+        or authorization.dataset_archive_sha256 != receipt.dataset_archive_sha256
+    ):
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+    snapshot = _repository_snapshot(repository_root, request.expected_freeze_head)
+    _verified_search_freeze_topology(
+        repository_root,
+        request.expected_freeze_head,
+        receipt.search_source_commit,
+    )
+    source_inventory_sha256 = _verified_search_source_inventory(repository_root, index)
+
+    executable = _canonical_existing_path(Path(sys.executable), directory=False)
+    if sys.version_info[:2] != (3, 12):
+        raise ValueError("FORMAL_RUN_REQUEST_INVALID")
+    worker_script = _canonical_existing_path(
+        repository_root / "src/mdcp/temporal/formal_worker.py", directory=False
+    )
+    worker_inventory = _formal_worker_inventory(repository_root)
+    worker_request = FormalWorkerRequest(
+        schema_version="mdcp.formal-worker-request.v1",
+        canonicalization_version="RFC8785",
+        expected_freeze_head=request.expected_freeze_head,
+        repository_root=_canonical_windows_string(repository_root),
+        search_receipt_path=_canonical_windows_string(receipt_path),
+        evidence_index_path=_canonical_windows_string(index_path),
+        authorization_path=_canonical_windows_string(authorization_path),
+        consumption_root=_canonical_windows_string(consumption_root),
+        archive_path=_canonical_windows_string(archive_path),
+        private_container_path=_canonical_windows_string(private_path),
+        search_receipt_sha256=receipt_sha256,
+        evidence_index_sha256=index_sha256,
+        authorization_sha256=authorization_sha256,
+        source_inventory_sha256=source_inventory_sha256,
+        repository_inventory_sha256=snapshot.inventory_sha256,
+        formal_worker_inventory_sha256=worker_inventory,
+        launch_profile_sha256=launch_profile_sha256(),
+    )
+    raw = encode_formal_worker_request(worker_request)
+    return _SupervisorLaunch(
+        repository_root=repository_root,
+        executable=executable,
+        worker_script=worker_script,
+        request=worker_request,
+        request_bytes=raw,
+        request_sha256=worker_request_sha256(worker_request),
+        snapshot=snapshot,
+        terminal_seal_path=terminal_path,
+    )
+
+
+def _run_fixed_worker_transport(
+    repository_root: Path,
+    executable: Path,
+    worker_script: Path,
+    request_bytes: bytes,
+    *,
+    _process_factory: object | None = None,
+    _monotonic: object | None = None,
+    _environment: dict[str, str] | None = None,
+) -> bytes:
+    import subprocess
+    import time
+    from contextlib import suppress
+    from threading import Event, Thread
+
+    from mdcp.temporal.formal_worker_protocol import (
+        FORMAL_WORKER_TERMINATION_WAIT_SECONDS,
+        FORMAL_WORKER_TIMEOUT_SECONDS,
+        MAX_WORKER_MESSAGE_BYTES,
+        WORKER_STDOUT_PROBE_BYTES,
+    )
+
+    try:
+        if type(request_bytes) is not bytes or len(request_bytes) > MAX_WORKER_MESSAGE_BYTES:
+            raise _WorkerLaunchFailed
+        factory = subprocess.Popen if _process_factory is None else _process_factory
+        monotonic = time.monotonic if _monotonic is None else _monotonic
+        if _environment is None:
+            environment = {
+                "SYSTEMROOT": os.environ["SYSTEMROOT"],
+                "WINDIR": os.environ["WINDIR"],
+            }
+        else:
+            environment = dict(_environment)
+        if set(environment) != {"SYSTEMROOT", "WINDIR"}:
+            raise _WorkerLaunchFailed
+        deadline = monotonic() + FORMAL_WORKER_TIMEOUT_SECONDS
+    except BaseException:
+        raise _WorkerLaunchFailed from None
+    try:
+        process = factory(
+            [str(executable), "-I", "-B", "-S", str(worker_script)],
+            shell=False,
+            cwd=str(repository_root),
+            close_fds=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+        )
+    except BaseException:
+        raise _WorkerLaunchFailed from None
+    try:
+        writer_errors: list[BaseException] = []
+        reader_errors: list[BaseException] = []
+        process_errors: list[BaseException] = []
+        return_codes: list[int] = []
+        overflow: list[bool] = []
+        response = bytearray()
+        controller_signal = Event()
+
+        def write_request() -> None:
+            try:
+                if process.stdin is None:
+                    raise OSError
+                offset = 0
+                while offset < len(request_bytes):
+                    count = process.stdin.write(request_bytes[offset:])
+                    if type(count) is not int or count <= 0:
+                        raise OSError
+                    offset += count
+                process.stdin.flush()
+            except BaseException as error:
+                writer_errors.append(error)
+                controller_signal.set()
+            finally:
+                try:
+                    if process.stdin is not None:
+                        process.stdin.close()
+                except BaseException as error:
+                    writer_errors.append(error)
+                    controller_signal.set()
+
+        def read_response() -> None:
+            try:
+                if process.stdout is None:
+                    raise OSError
+                while len(response) < WORKER_STDOUT_PROBE_BYTES:
+                    raw = process.stdout.read(WORKER_STDOUT_PROBE_BYTES - len(response))
+                    if type(raw) is not bytes:
+                        raise OSError
+                    if not raw:
+                        return
+                    response.extend(raw)
+                overflow.append(True)
+                controller_signal.set()
+            except BaseException as error:
+                reader_errors.append(error)
+                controller_signal.set()
+
+        def wait_for_process() -> None:
+            try:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                return_codes.append(process.wait(timeout=remaining))
+            except BaseException as error:
+                process_errors.append(error)
+            finally:
+                controller_signal.set()
+
+        writer = Thread(target=write_request, daemon=True)
+        reader = Thread(target=read_response, daemon=True)
+        process_waiter = Thread(target=wait_for_process, daemon=True)
+        writer.start()
+        reader.start()
+        process_waiter.start()
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        if not controller_signal.wait(timeout=remaining):
+            raise TimeoutError
+        if writer_errors or reader_errors or process_errors or overflow:
+            raise OSError
+        for thread in (writer, reader, process_waiter):
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            thread.join(timeout=remaining)
+            if thread.is_alive():
+                raise TimeoutError
+        if return_codes != [0] or writer_errors or reader_errors or process_errors or overflow:
+            raise OSError
+        return bytes(response)
+    except BaseException:
+        with suppress(BaseException):
+            process.terminate()
+        with suppress(BaseException):
+            process.wait(timeout=FORMAL_WORKER_TERMINATION_WAIT_SECONDS)
+        raise _WorkerProcessUnknown from None
+
+
+def _process_failure_outcome(*, created: bool) -> FormalDevelopmentOutcome:
+    return FormalDevelopmentOutcome(
+        verdict="UNKNOWN" if created else "FAIL",
+        reason_codes=(
+            "FORMAL_WORKER_PROCESS_UNKNOWN" if created else "FORMAL_WORKER_LAUNCH_FAILED",
+        ),
+        private_identity=None,
+        seal_record_sha256=None,
+        repository_inventory_sha256=None,
+        authorization_sha256="0" * 64,
+        consumption_marker_sha256=None,
+        fit_count=None,
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+    )
+
+
+def _accept_worker_response(launch: _SupervisorLaunch, raw: bytes) -> FormalDevelopmentOutcome:
+    from mdcp.temporal.formal_worker_protocol import parse_formal_worker_response
+
+    response = parse_formal_worker_response(raw)
+    request = launch.request
+    if (
+        response.worker_request_sha256 != launch.request_sha256
+        or response.formal_worker_inventory_sha256 != request.formal_worker_inventory_sha256
+        or response.launch_profile_sha256 != request.launch_profile_sha256
+        or response.authorization_sha256 not in ("0" * 64, request.authorization_sha256)
+    ):
+        raise _WorkerProcessUnknown
+    private_identity = (
+        None
+        if response.private_identity is None
+        else PrivateBundleIdentity(**response.private_identity.model_dump(mode="python"))
+    )
+    if response.verdict == "PASS":
+        if response.repository_inventory_sha256 != launch.snapshot.inventory_sha256:
+            raise _WorkerProcessUnknown
+        terminal_raw = _read_supervisor_file(launch.terminal_seal_path, 4_194_304)
+        if sha256_hex(terminal_raw) != response.seal_record_sha256:
+            raise _WorkerProcessUnknown
+        try:
+            seal = FormalDevelopmentSeal.model_validate(parse_json_bytes(terminal_raw))
+            if canonicalize_json(seal.model_dump(mode="json")) != terminal_raw:
+                raise ValueError
+        except Exception:
+            raise _WorkerProcessUnknown from None
+        if (
+            seal.authorization_sha256 != request.authorization_sha256
+            or seal.search_receipt_sha256 != request.search_receipt_sha256
+            or seal.source_inventory_sha256 != request.source_inventory_sha256
+            or seal.repository_inventory_sha256 != launch.snapshot.inventory_sha256
+            or seal.consumption_marker_sha256 != response.consumption_marker_sha256
+            or seal.fit_count != response.fit_count
+            or seal.private_identity != private_identity
+        ):
+            raise _WorkerProcessUnknown
+    return FormalDevelopmentOutcome(
+        verdict=response.verdict,
+        reason_codes=response.reason_codes,
+        private_identity=private_identity,
+        seal_record_sha256=response.seal_record_sha256,
+        repository_inventory_sha256=response.repository_inventory_sha256,
+        authorization_sha256=response.authorization_sha256,
+        consumption_marker_sha256=response.consumption_marker_sha256,
+        fit_count=response.fit_count,
+        h2_status=response.h2_status,
+        h2_loaded_rows=response.h2_loaded_rows,
+    )
+
+
+def execute_authorized_formal_development(
+    request: FormalDevelopmentRequest,
+) -> FormalDevelopmentOutcome:
+    try:
+        launch = _supervisor_preflight(request)
+    except Exception:
+        return FormalDevelopmentOutcome(
+            verdict="FAIL",
+            reason_codes=("FORMAL_RUN_REQUEST_INVALID",),
+            private_identity=None,
+            seal_record_sha256=None,
+            repository_inventory_sha256=None,
+            authorization_sha256="0" * 64,
+            consumption_marker_sha256=None,
+            fit_count=0,
+            h2_status="SEALED_NOT_LOADED",
+            h2_loaded_rows=0,
+        )
+    try:
+        raw = _run_fixed_worker_transport(
+            launch.repository_root,
+            launch.executable,
+            launch.worker_script,
+            launch.request_bytes,
+        )
+    except _WorkerLaunchFailed:
+        return _process_failure_outcome(created=False)
+    except _WorkerProcessUnknown:
+        return _process_failure_outcome(created=True)
+    try:
+        after = _repository_snapshot(launch.repository_root, request.expected_freeze_head)
+        if after != launch.snapshot:
+            raise _WorkerProcessUnknown
+        return _accept_worker_response(launch, raw)
+    except Exception:
+        return _process_failure_outcome(created=True)
 
 
 def _seal_check(
