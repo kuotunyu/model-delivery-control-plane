@@ -84,13 +84,15 @@ _EXPECTED_OWNED_SURFACES = {
         "write_synthetic_bundle_no_clobber",
     ),
     "mdcp.temporal.runner": (
+        "DevelopmentFitRequest",
+        "DevelopmentFoldResult",
         "DevelopmentRunBundle",
         "DevelopmentRunError",
+        "DevelopmentStateMachine",
         "FitBudgetError",
         "FitLedger",
         "FitPhase",
         "FitRecord",
-        "_DevelopmentFoldResult",
         "_ProcessedFold",
         "_closed_metrics",
         "_evaluate_trial",
@@ -499,6 +501,54 @@ def test_reachability_proof_detects_actual_fit_capability_through_named_sinks(
 def test_runner_has_no_module_level_callback_invocation() -> None:
     source = (REPOSITORY_ROOT / "src/mdcp/temporal/runner.py").read_text(encoding="utf-8")
     assert _module_level_invoked_parameters(source) == ()
+
+
+def test_pure_runner_has_no_open_execution_or_io_capability_surface() -> None:
+    forbidden_fragments = {
+        "callback",
+        "path",
+        "file",
+        "loader",
+        "estimator",
+        "model",
+        "builder",
+        "module",
+        "registry",
+        "subprocess",
+        "publish",
+        "executor",
+        "factory",
+    }
+    owned = (
+        runner.DevelopmentFitRequest,
+        runner.DevelopmentFoldResult,
+        runner.DevelopmentStateMachine,
+    )
+    for value in owned:
+        for name, member in vars(value).items():
+            if name.startswith("__") and name.endswith("__"):
+                continue
+            lowered = name.lower()
+            assert not any(fragment in lowered for fragment in forbidden_fragments)
+            if inspect.isfunction(member):
+                signature = inspect.signature(member)
+                for parameter in signature.parameters.values():
+                    assert not any(
+                        fragment in parameter.name.lower() for fragment in forbidden_fragments
+                    )
+                    assert parameter.default is inspect.Parameter.empty
+
+    constructor = inspect.signature(runner.DevelopmentStateMachine)
+    assert tuple(constructor.parameters) == ()
+    assert not hasattr(runner, "_DevelopmentExecutionPlan")
+    assert not hasattr(runner, "run_development")
+
+
+def test_pure_runner_proof_rejects_callback_shaped_mutation() -> None:
+    source = (REPOSITORY_ROOT / "src/mdcp/temporal/runner.py").read_text(encoding="utf-8")
+    mutated = source + "\ndef pure_runner(callback):\n    return callback()\n"
+
+    assert _module_level_invoked_parameters(mutated) == (("pure_runner", "callback"),)
 
 
 def test_callback_invocation_proof_rejects_spelling_independent_mutation() -> None:

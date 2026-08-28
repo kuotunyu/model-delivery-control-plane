@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
@@ -23,6 +24,7 @@ from mdcp.temporal.evaluation import (
     QualificationFoldDigests,
     QualificationResult,
     evaluate_pooled,
+    qualify_trial,
 )
 from mdcp.temporal.folds import SourceRowIdentity
 from mdcp.temporal.run_evidence import (
@@ -39,6 +41,7 @@ from mdcp.temporal.selection import (
     ReplayResult,
     ReplaySelectionSession,
     SelectionDecision,
+    finalize_selection,
 )
 from mdcp.temporal.trials import canonical_trial_identity
 
@@ -163,8 +166,18 @@ class FitLedger:
 
 
 @dataclass(frozen=True, slots=True)
-class _DevelopmentFoldResult:
-    """Exact private typed output of one synthetic fold execution."""
+class DevelopmentFitRequest:
+    """One exact immutable fit operation issued by the state machine."""
+
+    sequence: int
+    phase: FitPhase
+    trial_id: str
+    fold_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentFoldResult:
+    """Exact typed output of one worker-owned fold execution."""
 
     trial_id: str
     fold_id: str
@@ -192,7 +205,7 @@ class DevelopmentRunBundle:
 
 @dataclass(frozen=True, slots=True)
 class _ProcessedFold:
-    result: _DevelopmentFoldResult
+    result: DevelopmentFoldResult
     completeness: CompletenessReceipt
     context: FoldQualificationContext
     digest: QualificationFoldDigests
@@ -204,7 +217,7 @@ def _valid_sha256(value: object) -> bool:
 
 def _valid_fold_result(result: object, trial_id: str, fold_id: str) -> bool:
     return (
-        type(result) is _DevelopmentFoldResult
+        type(result) is DevelopmentFoldResult
         and result.trial_id == trial_id
         and result.fold_id == fold_id
         and type(result.inventory) is tuple
@@ -213,8 +226,16 @@ def _valid_fold_result(result: object, trial_id: str, fold_id: str) -> bool:
         and all(type(item) is AdapterOutcome for item in result.adapters)
         and type(result.predictions) is tuple
         and all(type(item) is PredictionOutcome for item in result.predictions)
+        and all(
+            item.value is None or (type(item.value) is float and math.isfinite(item.value))
+            for item in result.predictions
+        )
         and type(result.labels) is tuple
         and all(type(item) is LabelOutcome for item in result.labels)
+        and all(
+            item.value is None or (type(item.value) is float and math.isfinite(item.value))
+            for item in result.labels
+        )
         and type(result.contract_verdict) is GateVerdict
         and all(
             _valid_sha256(value)
@@ -244,7 +265,7 @@ def _prediction_material(
 
 
 def _fold_evidence_sha256(
-    result: _DevelopmentFoldResult,
+    result: DevelopmentFoldResult,
     stable: tuple[PredictionOutcome, ...],
 ) -> str:
     return sha256_hex(
@@ -292,7 +313,7 @@ def _fold_evidence_sha256(
 
 
 def _qualification_digest(
-    result: _DevelopmentFoldResult,
+    result: DevelopmentFoldResult,
     stable: tuple[PredictionOutcome, ...],
 ) -> QualificationFoldDigests:
     identity = canonical_trial_identity(result.trial_id)
@@ -308,7 +329,7 @@ def _qualification_digest(
 
 
 def _process_fold(
-    result: _DevelopmentFoldResult,
+    result: DevelopmentFoldResult,
     stable: tuple[PredictionOutcome, ...],
 ) -> _ProcessedFold:
     completeness, pairs = assemble_development_pairs(
@@ -363,7 +384,7 @@ def _evaluate_trial(
 
 
 def _replay_digest(
-    result: _DevelopmentFoldResult,
+    result: DevelopmentFoldResult,
     stable: tuple[PredictionOutcome, ...],
 ) -> ReplayFoldDigests:
     qualification = _qualification_digest(result, stable)
@@ -382,7 +403,7 @@ def _replay_digest(
 def _private_fold_evidence(
     sequence: int,
     phase: FitPhase,
-    result: _DevelopmentFoldResult,
+    result: DevelopmentFoldResult,
 ) -> PrivateFoldEvidence:
     document = {
         "phase": phase.value,
@@ -528,6 +549,233 @@ def _public_result(
         result_sha256=result_sha256,
         trials=trials,
     )
+
+
+class DevelopmentStateMachine:
+    """Pure one-shot sequencing, qualification, ranking, and replay state."""
+
+    __slots__ = (
+        "_baseline",
+        "_finalized",
+        "_ledger",
+        "_outstanding",
+        "_private_folds",
+        "_processed_selection",
+        "_provisional",
+        "_qualifications",
+        "_replay",
+        "_replay_digests",
+        "_reports",
+        "_selection",
+        "_session",
+    )
+
+    def __init__(self) -> None:
+        self._ledger = FitLedger()
+        self._outstanding: DevelopmentFitRequest | None = None
+        self._baseline: dict[str, tuple[PredictionOutcome, ...]] = {}
+        self._processed_selection: list[_ProcessedFold] = []
+        self._reports: list[DevelopmentQualityReport] = []
+        self._qualifications: list[QualificationResult] = []
+        self._private_folds: list[PrivateFoldEvidence] = []
+        self._session: ReplaySelectionSession | None = None
+        self._provisional: ProvisionalWinner | None = None
+        self._replay_digests: list[ReplayFoldDigests] = []
+        self._replay: ReplayResult | None = None
+        self._selection: SelectionDecision | None = None
+        self._finalized = False
+
+    def next_fit_request(self) -> DevelopmentFitRequest | None:
+        """Reserve and issue the next exact selection or sole-winner replay fit."""
+        self._require_active()
+        if self._outstanding is not None:
+            raise FitBudgetError("FIT_REQUEST_OUTSTANDING")
+
+        if self._ledger.selection_count < _SELECTION_LIMIT:
+            index = self._ledger.selection_count
+            trial_index, fold_index = divmod(index, len(EXACT_FOLD_IDS))
+            trial_id = EXACT_TRIAL_IDS[trial_index]
+            fold_id = EXACT_FOLD_IDS[fold_index]
+            self._ledger.record_selection(trial_id, fold_id)
+            request = DevelopmentFitRequest(
+                sequence=self._ledger.total_count,
+                phase=FitPhase.SELECTION,
+                trial_id=trial_id,
+                fold_id=fold_id,
+            )
+            self._outstanding = request
+            return request
+
+        if self._session is None or self._selection is not None:
+            return None
+        if self._provisional is None:
+            return None
+        if self._ledger.replay_count >= _REPLAY_LIMIT:
+            return None
+
+        fold_id = EXACT_FOLD_IDS[self._ledger.replay_count]
+        self._ledger.record_replay(self._provisional.trial_id, fold_id)
+        request = DevelopmentFitRequest(
+            sequence=self._ledger.total_count,
+            phase=FitPhase.REPLAY,
+            trial_id=self._provisional.trial_id,
+            fold_id=fold_id,
+        )
+        self._outstanding = request
+        return request
+
+    def record_fit_result(
+        self,
+        request: DevelopmentFitRequest,
+        result: DevelopmentFoldResult,
+    ) -> None:
+        """Accept only the exact result for the one outstanding immutable request."""
+        self._require_active()
+        if self._outstanding is None:
+            raise DevelopmentRunError("FIT_REQUEST_NOT_ISSUED")
+        if type(request) is not DevelopmentFitRequest or request != self._outstanding:
+            raise DevelopmentRunError("FIT_REQUEST_MISMATCH")
+        if not _valid_fold_result(result, request.trial_id, request.fold_id):
+            raise DevelopmentRunError("FOLD_RESULT_INVALID")
+
+        if request.phase is FitPhase.SELECTION:
+            self._record_selection_result(request, result)
+        elif request.phase is FitPhase.REPLAY:
+            self._record_replay_result(request, result)
+        else:  # pragma: no cover - exact request equality makes this unreachable
+            raise DevelopmentRunError("FIT_REQUEST_MISMATCH")
+        self._outstanding = None
+
+    def finalize(self) -> DevelopmentRunBundle:
+        """Seal and return the completed deterministic run exactly once."""
+        self._require_active()
+        if self._outstanding is not None:
+            raise DevelopmentRunError("FIT_REQUEST_OUTSTANDING")
+        if (
+            self._ledger.selection_count != _SELECTION_LIMIT
+            or self._selection is None
+            or len(self._reports) != len(EXACT_TRIAL_IDS)
+            or len(self._qualifications) != len(EXACT_TRIAL_IDS) - 1
+        ):
+            raise DevelopmentRunError("DEVELOPMENT_RUN_INCOMPLETE")
+        if self._provisional is None:
+            if self._ledger.replay_count != 0 or self._replay is not None:
+                raise DevelopmentRunError("DEVELOPMENT_RUN_INVALID")
+        elif self._ledger.replay_count != _REPLAY_LIMIT or self._replay is None:
+            raise DevelopmentRunError("DEVELOPMENT_RUN_INCOMPLETE")
+
+        private_bundle = PrivateRunBundle(
+            evidence_class="synthetic_test",
+            files=tuple(
+                sorted(self._private_folds, key=lambda item: item.logical_path.encode("ascii"))
+            ),
+        )
+        qualifications = tuple(self._qualifications)
+        bundle = DevelopmentRunBundle(
+            public_result=_public_result(
+                tuple(self._reports),
+                qualifications,
+                self._selection,
+                self._ledger,
+            ),
+            private_bundle=private_bundle,
+            fit_ledger=self._ledger,
+            qualifications=qualifications,
+            replay=self._replay,
+            selection=self._selection,
+        )
+        self._finalized = True
+        return bundle
+
+    def _record_selection_result(
+        self,
+        request: DevelopmentFitRequest,
+        result: DevelopmentFoldResult,
+    ) -> None:
+        if request.trial_id == EXACT_TRIAL_IDS[0]:
+            self._baseline[request.fold_id] = result.predictions
+        stable = self._baseline.get(request.fold_id)
+        if stable is None:
+            raise DevelopmentRunError("STABLE_BASELINE_MISSING")
+        try:
+            processed = _process_fold(result, stable)
+        except Exception as error:
+            raise DevelopmentRunError("FOLD_RESULT_INVALID") from error
+        self._private_folds.append(
+            _private_fold_evidence(request.sequence - 1, request.phase, result)
+        )
+        self._processed_selection.append(processed)
+        if request.fold_id != EXACT_FOLD_IDS[-1]:
+            return
+
+        folds = tuple(self._processed_selection)
+        if len(folds) != len(EXACT_FOLD_IDS):
+            raise DevelopmentRunError("SELECTION_ORDER_INVALID")
+        self._processed_selection.clear()
+        try:
+            report, context = _evaluate_trial(request.trial_id, folds)
+        except Exception as error:
+            raise DevelopmentRunError("FOLD_RESULT_INVALID") from error
+        self._reports.append(report)
+        if request.trial_id != EXACT_TRIAL_IDS[0]:
+            self._qualifications.append(qualify_trial(report, context))
+
+        if request.trial_id == EXACT_TRIAL_IDS[-1]:
+            qualifications = tuple(self._qualifications)
+            try:
+                session = ReplaySelectionSession(qualifications)
+                provisional = self._ledger.bind_session(session)
+            except (FitBudgetError, ValueError) as error:
+                raise DevelopmentRunError("SELECTION_SESSION_INVALID") from error
+            self._session = session
+            self._provisional = provisional
+            if provisional is None:
+                selection = finalize_selection(session, None, None)
+                if any(item.verdict is GateVerdict.UNKNOWN for item in qualifications):
+                    selection = SelectionDecision(
+                        status="UNKNOWN/NO_ELIGIBLE_CANDIDATE",
+                        provisional_winner=None,
+                        final_winner=None,
+                        retry_allowed=False,
+                        reason_codes=("QUALIFICATION_UNKNOWN",),
+                    )
+                self._selection = selection
+
+    def _record_replay_result(
+        self,
+        request: DevelopmentFitRequest,
+        result: DevelopmentFoldResult,
+    ) -> None:
+        if self._session is None or self._provisional is None:
+            raise DevelopmentRunError("PROVISIONAL_WINNER_REQUIRED")
+        stable = self._baseline.get(request.fold_id)
+        if stable is None:
+            raise DevelopmentRunError("STABLE_BASELINE_MISSING")
+        self._private_folds.append(
+            _private_fold_evidence(request.sequence - 1, request.phase, result)
+        )
+        self._replay_digests.append(_replay_digest(result, stable))
+        if request.fold_id != EXACT_FOLD_IDS[-1]:
+            return
+        replay = ReplayResult(
+            trial_id=self._provisional.trial_id,
+            family_id=self._provisional.family_id,
+            ranking_key=self._provisional.ranking_key,
+            qualification_inventory_sha256=self._provisional.qualification_inventory_sha256,
+            session_sha256=self._session.session_sha256,
+            verdict=(
+                GateVerdict.PASS
+                if all(item.verdict is GateVerdict.PASS for item in self._replay_digests)
+                else GateVerdict.UNKNOWN
+            ),
+            digests=tuple(self._replay_digests),
+        )
+        self._replay = replay
+        self._selection = finalize_selection(self._session, self._provisional, replay)
+
+    def _require_active(self) -> None:
+        if self._finalized:
+            raise DevelopmentRunError("RUN_ALREADY_FINALIZED")
 
 
 def _formal_groups(row: object) -> tuple[str, str, str]:

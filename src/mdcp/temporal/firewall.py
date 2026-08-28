@@ -394,6 +394,7 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("dataclasses", "dataclass"),
             ("dataclasses", "field"),
             ("enum", "StrEnum"),
+            ("math", None),
             ("mdcp.common.canonical", "canonicalize_json"),
             ("mdcp.common.digests", "sha256_hex"),
             ("mdcp.common.enums", "GateVerdict"),
@@ -681,7 +682,13 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         }
     ),
     "src/mdcp/temporal/runner.py": frozenset(
-        {"datetime.fromisoformat", "os.name", "pathlib.Path.cwd", "stat.S_ISDIR"}
+        {
+            "datetime.fromisoformat",
+            "math.isfinite",
+            "os.name",
+            "pathlib.Path.cwd",
+            "stat.S_ISDIR",
+        }
     ),
     "src/mdcp/temporal/search_identity.py": frozenset(
         {
@@ -930,7 +937,7 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
     "src/mdcp/temporal/runner.py": (
-        "39b58f847526c88f0f11d87435514da6b7d1d8317f70696e647081cd415afe59"
+        "81334542d1aceb0bb00edfcc1b4d31dac68824223866fa4d38954bb33c8483e9"
     ),
 }
 _ALLOWED_PRIVATE_ATTRIBUTES = {
@@ -948,7 +955,28 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
             "_core",
         }
     ),
-    "src/mdcp/temporal/runner.py": frozenset({"_provisional", "_records", "_selection_bound"}),
+    "src/mdcp/temporal/runner.py": frozenset(
+        {
+            "_baseline",
+            "_finalized",
+            "_ledger",
+            "_outstanding",
+            "_private_folds",
+            "_processed_selection",
+            "_provisional",
+            "_qualifications",
+            "_record_replay_result",
+            "_record_selection_result",
+            "_records",
+            "_replay",
+            "_replay_digests",
+            "_reports",
+            "_require_active",
+            "_selection",
+            "_selection_bound",
+            "_session",
+        }
+    ),
     "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths", "_state"}),
 }
 _ALLOWED_SUBPROCESS_CALLS = {

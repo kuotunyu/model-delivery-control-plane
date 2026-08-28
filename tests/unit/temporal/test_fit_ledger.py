@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import inspect
+from dataclasses import FrozenInstanceError, fields
+from typing import get_type_hints
+
 import pytest
 
 from mdcp.common.digests import sha256_hex
 from mdcp.common.enums import GateVerdict
+from mdcp.temporal.completeness import AdapterOutcome, LabelOutcome, PredictionOutcome
 from mdcp.temporal.evaluation import QualificationFoldDigests, QualificationResult
+from mdcp.temporal.folds import SourceRowIdentity
 from mdcp.temporal.runner import (
     EXACT_FOLD_IDS,
     EXACT_TRIAL_IDS,
+    DevelopmentFitRequest,
+    DevelopmentFoldResult,
+    DevelopmentRunBundle,
+    DevelopmentStateMachine,
     FitBudgetError,
     FitLedger,
     FitPhase,
+    FitRecord,
 )
 from mdcp.temporal.selection import (
     ProvisionalWinner,
@@ -195,3 +206,106 @@ def test_wave_three_fit_ledger_has_no_final_fit_authority() -> None:
     assert not hasattr(FitLedger, "record_final")
     assert not hasattr(FitLedger, "record")
     assert not hasattr(FitLedger, "bind_provisional")
+
+
+def test_typed_fit_request_and_result_are_exact_frozen_slotted_values() -> None:
+    request = DevelopmentFitRequest(
+        sequence=1,
+        phase=FitPhase.SELECTION,
+        trial_id="CTRL-01",
+        fold_id="F1",
+    )
+    result = DevelopmentFoldResult(
+        trial_id="CTRL-01",
+        fold_id="F1",
+        inventory=(),
+        adapters=(),
+        predictions=(),
+        labels=(),
+        contract_verdict=GateVerdict.PASS,
+        preprocessing_state_sha256="1" * 64,
+        feature_vector_sha256="2" * 64,
+        prediction_vector_sha256="3" * 64,
+        metric_sha256="4" * 64,
+        receipt_sha256="5" * 64,
+    )
+
+    assert tuple(field.name for field in fields(request)) == (
+        "sequence",
+        "phase",
+        "trial_id",
+        "fold_id",
+    )
+    assert tuple(field.name for field in fields(result)) == (
+        "trial_id",
+        "fold_id",
+        "inventory",
+        "adapters",
+        "predictions",
+        "labels",
+        "contract_verdict",
+        "preprocessing_state_sha256",
+        "feature_vector_sha256",
+        "prediction_vector_sha256",
+        "metric_sha256",
+        "receipt_sha256",
+    )
+    assert get_type_hints(DevelopmentFitRequest) == {
+        "sequence": int,
+        "phase": FitPhase,
+        "trial_id": str,
+        "fold_id": str,
+    }
+    assert get_type_hints(DevelopmentFoldResult) == {
+        "trial_id": str,
+        "fold_id": str,
+        "inventory": tuple[SourceRowIdentity, ...],
+        "adapters": tuple[AdapterOutcome, ...],
+        "predictions": tuple[PredictionOutcome, ...],
+        "labels": tuple[LabelOutcome, ...],
+        "contract_verdict": GateVerdict,
+        "preprocessing_state_sha256": str,
+        "feature_vector_sha256": str,
+        "prediction_vector_sha256": str,
+        "metric_sha256": str,
+        "receipt_sha256": str,
+    }
+    assert not hasattr(request, "__dict__")
+    assert not hasattr(result, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        request.sequence = 2  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        result.fold_id = "F2"  # type: ignore[misc]
+
+
+def test_state_machine_has_only_the_closed_typed_transition_surface() -> None:
+    assert tuple(inspect.signature(DevelopmentStateMachine).parameters) == ()
+    assert tuple(inspect.signature(DevelopmentStateMachine.next_fit_request).parameters) == (
+        "self",
+    )
+    assert tuple(inspect.signature(DevelopmentStateMachine.record_fit_result).parameters) == (
+        "self",
+        "request",
+        "result",
+    )
+    assert tuple(inspect.signature(DevelopmentStateMachine.finalize).parameters) == ("self",)
+    assert get_type_hints(DevelopmentStateMachine.next_fit_request) == {
+        "return": DevelopmentFitRequest | None
+    }
+    assert get_type_hints(DevelopmentStateMachine.record_fit_result) == {
+        "request": DevelopmentFitRequest,
+        "result": DevelopmentFoldResult,
+        "return": type(None),
+    }
+    assert get_type_hints(DevelopmentStateMachine.finalize) == {"return": DevelopmentRunBundle}
+
+
+def test_state_machine_reserves_the_ledger_before_issuing_one_request() -> None:
+    machine = DevelopmentStateMachine()
+
+    request = machine.next_fit_request()
+
+    assert request == DevelopmentFitRequest(1, FitPhase.SELECTION, "CTRL-01", "F1")
+    assert machine._ledger.records == (FitRecord(FitPhase.SELECTION, "CTRL-01", "F1"),)
+    with pytest.raises(FitBudgetError, match="^FIT_REQUEST_OUTSTANDING$"):
+        machine.next_fit_request()

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import ast
-import copy
 import inspect
 import os
 import sys
 import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -54,67 +52,6 @@ class _StageGuard:
             peak_process_bytes=1024,
             repository_inventory_sha256="f" * 64,
         )
-
-
-def _isolated_factory_engine() -> tuple[Callable[..., object], type]:
-    assert not hasattr(runner, "_run_development_core")
-    assert not hasattr(runner, "_DevelopmentExecutionPlan")
-    source = Path(run_evidence.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    binding = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "_MUTATION_BINDINGS"
-            for target in node.targets
-        )
-    )
-    factory = copy.deepcopy(
-        next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "_make_evidence_mutation_surface"
-        )
-    )
-    returned = next(node for node in factory.body if isinstance(node, ast.Return))
-    returned.value = ast.Tuple(
-        elts=[
-            ast.Name(id="write_synthetic", ctx=ast.Load()),
-            ast.Name(id="execute", ctx=ast.Load()),
-            ast.Name(id="_run_development_core", ctx=ast.Load()),
-            ast.Name(id="_DevelopmentExecutionPlan", ctx=ast.Load()),
-        ],
-        ctx=ast.Load(),
-    )
-    module = ast.fix_missing_locations(
-        ast.Module(
-            body=[
-                ast.ImportFrom(
-                    module="__future__",
-                    names=[ast.alias(name="annotations")],
-                    level=0,
-                ),
-                factory,
-            ],
-            type_ignores=[],
-        )
-    )
-    namespace = dict(vars(run_evidence))
-    namespace["_MUTATION_BINDINGS"] = eval(
-        compile(ast.Expression(binding.value), "<isolated-bindings>", "eval"),
-        namespace,
-    )
-    exec(compile(module, "<isolated-evidence-factory>", "exec"), namespace)
-    isolated_factory = namespace["_make_evidence_mutation_surface"]
-    assert callable(isolated_factory)
-    values = isolated_factory()
-    assert isinstance(values, tuple) and len(values) == 4
-    core, plan_type = values[2:]
-    assert callable(core) and isinstance(plan_type, type)
-    assert not hasattr(runner, "_run_development_core")
-    assert not hasattr(runner, "_DevelopmentExecutionPlan")
-    return core, plan_type
 
 
 def _fast_bootstrap(
@@ -247,7 +184,7 @@ def _fold_result(
             else GateVerdict.PASS
         )
     )
-    return runner._DevelopmentFoldResult(
+    return runner.DevelopmentFoldResult(
         trial_id=trial_id,
         fold_id=fold_id,
         inventory=inventory,
@@ -265,82 +202,112 @@ def _fold_result(
     )
 
 
-def test_isolated_factory_executes_exact_synthetic_80_plus_4() -> None:
-    core, plan_type = _isolated_factory_engine()
-    calls: list[tuple[runner.FitPhase, str, str]] = []
-
-    def fit_fold(phase: runner.FitPhase, trial_id: str, fold_id: str) -> object:
-        calls.append((phase, trial_id, fold_id))
-        return _fold_result(
-            phase,
-            trial_id,
-            fold_id,
-            one_qualified_trial="STAT-A1",
-            contract_invalid_trial=None,
-            changed_replay_digest=False,
-            changed_replay_evidence=None,
-            changed_replay_predictions=False,
-            invalid_typed_verdict=False,
-        )
-
-    result = core(plan_type(fit_fold=fit_fold), _StageGuard())
-
-    assert result.fit_ledger.selection_count == 80
-    assert result.fit_ledger.replay_count == 4
-    assert result.fit_ledger.total_count == 84
-    assert len(calls) == 84
+def _checkpoint(guard: _StageGuard | None, stage: RuntimeStage) -> None:
+    if guard is None:
+        return
+    observation = guard.checkpoint(stage)
+    if observation.verdict != "PASS":
+        raise runner.DevelopmentRunError(*observation.reason_codes)
 
 
-def test_fail_only_replay_is_terminal_unknown_without_losing_84_fit_result() -> None:
-    core, plan_type = _isolated_factory_engine()
-    calls: list[tuple[runner.FitPhase, str, str]] = []
+def _drive_state_machine(
+    *,
+    one_qualified_trial: str | None = "STAT-A1",
+    contract_invalid_trial: str | None = None,
+    changed_replay_digest: bool = False,
+    changed_replay_evidence: str | None = None,
+    changed_replay_predictions: bool = False,
+    invalid_typed_verdict: bool = False,
+    replay_contract_verdict: GateVerdict | None = None,
+    guard: _StageGuard | None = None,
+    calls: list[tuple[runner.FitPhase, str, str]] | None = None,
+    defer_final_checkpoints: bool = False,
+) -> tuple[
+    runner.DevelopmentStateMachine,
+    tuple[runner.DevelopmentFitRequest, ...],
+    runner.DevelopmentRunBundle,
+]:
+    machine = runner.DevelopmentStateMachine()
+    requests: list[runner.DevelopmentFitRequest] = []
+    pre_seal_started = False
+    exit_started = False
+    try:
+        _checkpoint(guard, RuntimeStage.PRE_LOAD)
+        while (request := machine.next_fit_request()) is not None:
+            _checkpoint(guard, RuntimeStage.PRE_FIT)
+            requests.append(request)
+            if calls is not None:
+                calls.append((request.phase, request.trial_id, request.fold_id))
+            result = _fold_result(
+                request.phase,
+                request.trial_id,
+                request.fold_id,
+                one_qualified_trial=one_qualified_trial,
+                contract_invalid_trial=contract_invalid_trial,
+                changed_replay_digest=changed_replay_digest,
+                changed_replay_evidence=changed_replay_evidence,
+                changed_replay_predictions=changed_replay_predictions,
+                invalid_typed_verdict=invalid_typed_verdict,
+            )
+            assert type(result) is runner.DevelopmentFoldResult
+            if request.phase is runner.FitPhase.REPLAY and replay_contract_verdict is not None:
+                result = replace(result, contract_verdict=replay_contract_verdict)
+            machine.record_fit_result(request, result)
+            _checkpoint(guard, RuntimeStage.POST_FIT)
+        bundle = machine.finalize()
+        if not defer_final_checkpoints:
+            pre_seal_started = True
+            _checkpoint(guard, RuntimeStage.PRE_SEAL)
+            exit_started = True
+            _checkpoint(guard, RuntimeStage.EXIT)
+        return machine, tuple(requests), bundle
+    except Exception:
+        if not defer_final_checkpoints and not pre_seal_started:
+            pre_seal_started = True
+            with suppress(runner.DevelopmentRunError):
+                _checkpoint(guard, RuntimeStage.PRE_SEAL)
+        if not defer_final_checkpoints and not exit_started:
+            exit_started = True
+            with suppress(runner.DevelopmentRunError):
+                _checkpoint(guard, RuntimeStage.EXIT)
+        raise
 
-    def fit_fold(phase: runner.FitPhase, trial_id: str, fold_id: str) -> object:
-        calls.append((phase, trial_id, fold_id))
-        result = _fold_result(
-            phase,
-            trial_id,
-            fold_id,
-            one_qualified_trial="STAT-A1",
-            contract_invalid_trial=None,
-            changed_replay_digest=False,
-            changed_replay_evidence=None,
-            changed_replay_predictions=False,
-            invalid_typed_verdict=False,
-        )
-        return (
-            replace(result, contract_verdict=GateVerdict.FAIL)
-            if phase is runner.FitPhase.REPLAY
-            else result
-        )
 
-    result = core(plan_type(fit_fold=fit_fold), _StageGuard())
-
-    assert result.fit_ledger.total_count == 84
-    assert result.replay is not None
-    assert result.replay.verdict is GateVerdict.UNKNOWN
-    assert result.selection.status == "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
-    assert result.selection.reason_codes == ("REPLAY_UNKNOWN",)
-    assert len(calls) == 84
-
-
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _SyntheticOperation:
-    core: Callable[..., runner.DevelopmentRunBundle]
-    plan: object
-    calls: list[tuple[runner.FitPhase, str, str]]
+    one_qualified_trial: str | None = "STAT-A1"
+    contract_invalid_trial: str | None = None
+    changed_replay_digest: bool = False
+    changed_replay_evidence: str | None = None
+    changed_replay_predictions: bool = False
+    invalid_typed_verdict: bool = False
+    replay_contract_verdict: GateVerdict | None = None
+    calls: list[tuple[runner.FitPhase, str, str]] = field(default_factory=list, init=False)
+    _consumed: bool = field(default=False, init=False, repr=False)
+    _lock: object = field(default_factory=threading.Lock, init=False, repr=False)
 
     def run(
         self,
-        guard: object,
+        guard: _StageGuard,
         *,
         defer_final_checkpoints: bool = False,
     ) -> runner.DevelopmentRunBundle:
-        return self.core(
-            self.plan,
-            guard,
+        with self._lock:
+            if self._consumed:
+                raise runner.DevelopmentRunError("RUN_ALREADY_CONSUMED")
+            self._consumed = True
+        return _drive_state_machine(
+            one_qualified_trial=self.one_qualified_trial,
+            contract_invalid_trial=self.contract_invalid_trial,
+            changed_replay_digest=self.changed_replay_digest,
+            changed_replay_evidence=self.changed_replay_evidence,
+            changed_replay_predictions=self.changed_replay_predictions,
+            invalid_typed_verdict=self.invalid_typed_verdict,
+            replay_contract_verdict=self.replay_contract_verdict,
+            guard=guard,
+            calls=self.calls,
             defer_final_checkpoints=defer_final_checkpoints,
-        )
+        )[2]
 
 
 def _synthetic_plan(
@@ -352,28 +319,42 @@ def _synthetic_plan(
     changed_replay_predictions: bool = False,
     invalid_typed_verdict: bool = False,
 ) -> _SyntheticOperation:
-    core, plan_type = _isolated_factory_engine()
-    calls: list[tuple[runner.FitPhase, str, str]] = []
-
-    def fit_fold(phase: runner.FitPhase, trial_id: str, fold_id: str) -> object:
-        calls.append((phase, trial_id, fold_id))
-        return _fold_result(
-            phase,
-            trial_id,
-            fold_id,
-            one_qualified_trial=one_qualified_trial,
-            contract_invalid_trial=contract_invalid_trial,
-            changed_replay_digest=changed_replay_digest,
-            changed_replay_evidence=changed_replay_evidence,
-            changed_replay_predictions=changed_replay_predictions,
-            invalid_typed_verdict=invalid_typed_verdict,
-        )
-
-    return _SyntheticOperation(core=core, plan=plan_type(fit_fold=fit_fold), calls=calls)
+    return _SyntheticOperation(
+        one_qualified_trial=one_qualified_trial,
+        contract_invalid_trial=contract_invalid_trial,
+        changed_replay_digest=changed_replay_digest,
+        changed_replay_evidence=changed_replay_evidence,
+        changed_replay_predictions=changed_replay_predictions,
+        invalid_typed_verdict=invalid_typed_verdict,
+    )
 
 
 def synthetic_run(*, one_qualified_trial: str | None = "STAT-A1") -> runner.DevelopmentRunBundle:
     return _synthetic_plan(one_qualified_trial=one_qualified_trial).run(_StageGuard())
+
+
+def test_direct_state_machine_executes_exact_synthetic_80_plus_4() -> None:
+    operation = _synthetic_plan()
+
+    result = operation.run(_StageGuard())
+
+    assert result.fit_ledger.selection_count == 80
+    assert result.fit_ledger.replay_count == 4
+    assert result.fit_ledger.total_count == 84
+    assert len(operation.calls) == 84
+
+
+def test_fail_only_replay_is_terminal_unknown_without_losing_84_fit_result() -> None:
+    operation = _SyntheticOperation(replay_contract_verdict=GateVerdict.FAIL)
+
+    result = operation.run(_StageGuard())
+
+    assert result.fit_ledger.total_count == 84
+    assert result.replay is not None
+    assert result.replay.verdict is GateVerdict.UNKNOWN
+    assert result.selection.status == "UNKNOWN/NO_ELIGIBLE_CANDIDATE"
+    assert result.selection.reason_codes == ("REPLAY_UNKNOWN",)
+    assert len(operation.calls) == 84
 
 
 @contextmanager
@@ -604,7 +585,7 @@ def test_invalid_cli_calls_are_concurrently_denied_before_formal_behavior(
     assert forbidden_calls == dict.fromkeys(_FORBIDDEN_BEHAVIORAL_CALLS, 0)
 
 
-def test_core_uses_existing_rank_one_and_same_session_for_replay() -> None:
+def test_state_machine_uses_existing_rank_one_and_same_session_for_replay() -> None:
     result = synthetic_run(one_qualified_trial="STAT-A1")
 
     assert result.fit_ledger.selection_count == 80
@@ -616,7 +597,7 @@ def test_core_uses_existing_rank_one_and_same_session_for_replay() -> None:
     assert result.private_bundle.evidence_class == "synthetic_test"
 
 
-def test_core_changed_replay_digest_fails_closed_without_another_target() -> None:
+def test_state_machine_changed_replay_digest_fails_closed_without_another_target() -> None:
     operation = _synthetic_plan(changed_replay_digest=True)
 
     result = operation.run(_StageGuard())
@@ -629,7 +610,7 @@ def test_core_changed_replay_digest_fails_closed_without_another_target() -> Non
     ]
 
 
-def test_core_changed_replay_predictions_cannot_reuse_selection_digest() -> None:
+def test_state_machine_changed_replay_predictions_cannot_reuse_selection_digest() -> None:
     operation = _synthetic_plan(changed_replay_predictions=True)
 
     result = operation.run(_StageGuard())
@@ -639,7 +620,7 @@ def test_core_changed_replay_predictions_cannot_reuse_selection_digest() -> None
 
 
 @pytest.mark.parametrize("mutation", ("labels", "adapters", "inventory"))
-def test_core_changed_typed_replay_evidence_cannot_reuse_declared_digests(
+def test_state_machine_changed_typed_replay_evidence_cannot_reuse_declared_digests(
     mutation: str,
 ) -> None:
     operation = _synthetic_plan(changed_replay_evidence=mutation)
@@ -650,7 +631,7 @@ def test_core_changed_typed_replay_evidence_cannot_reuse_declared_digests(
     assert result.selection.reason_codes == ("REPLAY_DIGEST_MISMATCH",)
 
 
-def test_core_poor_quality_trial_still_completes_all_four_folds() -> None:
+def test_state_machine_poor_quality_trial_still_completes_all_four_folds() -> None:
     operation = _synthetic_plan(one_qualified_trial=None)
 
     result = operation.run(_StageGuard())
@@ -664,7 +645,7 @@ def test_core_poor_quality_trial_still_completes_all_four_folds() -> None:
         )
 
 
-def test_core_contract_invalid_trial_gets_no_replacement_fit() -> None:
+def test_state_machine_contract_invalid_trial_gets_no_replacement_fit() -> None:
     operation = _synthetic_plan(
         one_qualified_trial=None,
         contract_invalid_trial="STAT-A1",
@@ -678,7 +659,7 @@ def test_core_contract_invalid_trial_gets_no_replacement_fit() -> None:
     assert result.selection.final_winner is None
 
 
-def test_core_rejects_non_enum_fold_verdict_without_replacement() -> None:
+def test_state_machine_rejects_non_enum_fold_verdict_without_replacement() -> None:
     operation = _synthetic_plan(invalid_typed_verdict=True)
 
     with pytest.raises(runner.DevelopmentRunError, match="^FOLD_RESULT_INVALID$"):
@@ -748,12 +729,11 @@ def test_second_invocation_with_same_plan_is_terminal_without_another_fit() -> N
 
 
 def test_runner_has_no_public_replay_target_or_reconstructed_session_surface() -> None:
-    operation = _synthetic_plan()
-
-    assert tuple(operation.plan.__dataclass_fields__) == ("fit_fold", "_state")
     assert not hasattr(runner, "replay_provisional")
     assert not hasattr(runner, "run_selection")
     assert not hasattr(runner, "FormalRunContext")
+    assert not hasattr(runner, "_run_development_core")
+    assert not hasattr(runner, "_DevelopmentExecutionPlan")
 
 
 def test_private_rows_and_predictions_never_enter_closed_public_result() -> None:
@@ -770,3 +750,203 @@ def test_private_rows_and_predictions_never_enter_closed_public_result() -> None
 def test_internal_formal_inputs_have_no_module_reachable_dependency_injection_surface() -> None:
     assert not hasattr(runner, "_FormalDevelopmentInputs")
     assert not hasattr(runner, "run_formal_development")
+
+
+def test_state_machine_issues_exact_synthetic_80_plus_four_in_order() -> None:
+    _machine, requests, bundle = _drive_state_machine()
+
+    expected_selection = tuple(
+        (runner.FitPhase.SELECTION, trial_id, fold_id)
+        for trial_id in runner.EXACT_TRIAL_IDS
+        for fold_id in runner.EXACT_FOLD_IDS
+    )
+    assert tuple((item.phase, item.trial_id, item.fold_id) for item in requests[:80]) == (
+        expected_selection
+    )
+    assert tuple(item.sequence for item in requests) == tuple(range(1, 85))
+    assert tuple((item.phase, item.trial_id, item.fold_id) for item in requests[80:]) == tuple(
+        (runner.FitPhase.REPLAY, "STAT-A1", fold_id) for fold_id in runner.EXACT_FOLD_IDS
+    )
+    assert bundle.fit_ledger.selection_count == 80
+    assert bundle.fit_ledger.replay_count == 4
+    assert bundle.selection.status == "PASS"
+
+
+def test_state_machine_has_zero_replay_without_a_qualified_candidate() -> None:
+    _machine, requests, bundle = _drive_state_machine(one_qualified_trial=None)
+
+    assert len(requests) == 80
+    assert bundle.fit_ledger.selection_count == 80
+    assert bundle.fit_ledger.replay_count == 0
+    assert bundle.selection.status == "NO_ELIGIBLE_CANDIDATE"
+
+
+def test_state_machine_rejects_result_before_issue_and_duplicate_result() -> None:
+    machine = runner.DevelopmentStateMachine()
+    result = _fold_result(
+        runner.FitPhase.SELECTION,
+        "CTRL-01",
+        "F1",
+        one_qualified_trial="STAT-A1",
+        contract_invalid_trial=None,
+        changed_replay_digest=False,
+        changed_replay_evidence=None,
+        changed_replay_predictions=False,
+        invalid_typed_verdict=False,
+    )
+    request = runner.DevelopmentFitRequest(1, runner.FitPhase.SELECTION, "CTRL-01", "F1")
+
+    with pytest.raises(runner.DevelopmentRunError, match="^FIT_REQUEST_NOT_ISSUED$"):
+        machine.record_fit_result(request, result)
+    issued = machine.next_fit_request()
+    assert issued == request
+    machine.record_fit_result(issued, result)
+    with pytest.raises(runner.DevelopmentRunError, match="^FIT_REQUEST_NOT_ISSUED$"):
+        machine.record_fit_result(issued, result)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        {"sequence": 2},
+        {"phase": runner.FitPhase.REPLAY},
+        {"trial_id": "REC-180-L4"},
+        {"fold_id": "F2"},
+    ),
+)
+def test_state_machine_rejects_stale_reordered_or_wrong_request(
+    mutation: dict[str, object],
+) -> None:
+    machine = runner.DevelopmentStateMachine()
+    issued = machine.next_fit_request()
+    assert issued is not None
+    forged = replace(issued, **mutation)
+    result = _fold_result(
+        issued.phase,
+        issued.trial_id,
+        issued.fold_id,
+        one_qualified_trial="STAT-A1",
+        contract_invalid_trial=None,
+        changed_replay_digest=False,
+        changed_replay_evidence=None,
+        changed_replay_predictions=False,
+        invalid_typed_verdict=False,
+    )
+
+    with pytest.raises(runner.DevelopmentRunError, match="^FIT_REQUEST_MISMATCH$"):
+        machine.record_fit_result(forged, result)
+
+
+@pytest.mark.parametrize("field", ("trial_id", "fold_id"))
+def test_state_machine_rejects_result_for_the_wrong_trial_or_fold(field: str) -> None:
+    machine = runner.DevelopmentStateMachine()
+    request = machine.next_fit_request()
+    assert request is not None
+    result = _fold_result(
+        request.phase,
+        request.trial_id,
+        request.fold_id,
+        one_qualified_trial="STAT-A1",
+        contract_invalid_trial=None,
+        changed_replay_digest=False,
+        changed_replay_evidence=None,
+        changed_replay_predictions=False,
+        invalid_typed_verdict=False,
+    )
+    assert type(result) is runner.DevelopmentFoldResult
+    forged = replace(result, **{field: "F2" if field == "fold_id" else "REC-180-L4"})
+
+    with pytest.raises(runner.DevelopmentRunError, match="^FOLD_RESULT_INVALID$"):
+        machine.record_fit_result(request, forged)
+
+
+@pytest.mark.parametrize("field", ("predictions", "labels"))
+@pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf"), 10**400))
+def test_state_machine_normalizes_invalid_numeric_values(
+    field: str,
+    value: float | int,
+) -> None:
+    machine = runner.DevelopmentStateMachine()
+    request = machine.next_fit_request()
+    assert request is not None
+    result = _fold_result(
+        request.phase,
+        request.trial_id,
+        request.fold_id,
+        one_qualified_trial="STAT-A1",
+        contract_invalid_trial=None,
+        changed_replay_digest=False,
+        changed_replay_evidence=None,
+        changed_replay_predictions=False,
+        invalid_typed_verdict=False,
+    )
+    assert type(result) is runner.DevelopmentFoldResult
+    outcomes = getattr(result, field)
+    invalid_outcomes = (replace(outcomes[0], value=value), *outcomes[1:])
+
+    with pytest.raises(runner.DevelopmentRunError, match="^FOLD_RESULT_INVALID$"):
+        machine.record_fit_result(request, replace(result, **{field: invalid_outcomes}))
+
+
+def test_state_machine_rejects_rank_two_fallback_and_a_fifth_replay() -> None:
+    machine = runner.DevelopmentStateMachine()
+    requests: list[runner.DevelopmentFitRequest] = []
+    while (request := machine.next_fit_request()) is not None:
+        requests.append(request)
+        if request.phase is runner.FitPhase.REPLAY and request.fold_id == "F1":
+            forged = replace(request, trial_id="REC-180-L4")
+            result = _fold_result(
+                request.phase,
+                request.trial_id,
+                request.fold_id,
+                one_qualified_trial="STAT-A1",
+                contract_invalid_trial=None,
+                changed_replay_digest=False,
+                changed_replay_evidence=None,
+                changed_replay_predictions=False,
+                invalid_typed_verdict=False,
+            )
+            with pytest.raises(runner.DevelopmentRunError, match="^FIT_REQUEST_MISMATCH$"):
+                machine.record_fit_result(forged, result)
+        result = _fold_result(
+            request.phase,
+            request.trial_id,
+            request.fold_id,
+            one_qualified_trial="STAT-A1",
+            contract_invalid_trial=None,
+            changed_replay_digest=False,
+            changed_replay_evidence=None,
+            changed_replay_predictions=False,
+            invalid_typed_verdict=False,
+        )
+        machine.record_fit_result(request, result)
+
+    assert len(requests) == 84
+    assert machine.next_fit_request() is None
+    bundle = machine.finalize()
+    assert bundle.fit_ledger.replay_count == 4
+    assert bundle.selection.final_winner is not None
+    assert bundle.selection.final_winner.trial_id == "STAT-A1"
+
+
+def test_state_machine_finalize_is_one_shot_and_rejects_late_results() -> None:
+    machine, requests, _bundle = _drive_state_machine(one_qualified_trial=None)
+
+    with pytest.raises(runner.DevelopmentRunError, match="^RUN_ALREADY_FINALIZED$"):
+        machine.finalize()
+    with pytest.raises(runner.DevelopmentRunError, match="^RUN_ALREADY_FINALIZED$"):
+        machine.next_fit_request()
+    last = requests[-1]
+    late = _fold_result(
+        last.phase,
+        last.trial_id,
+        last.fold_id,
+        one_qualified_trial=None,
+        contract_invalid_trial=None,
+        changed_replay_digest=False,
+        changed_replay_evidence=None,
+        changed_replay_predictions=False,
+        invalid_typed_verdict=False,
+    )
+    with pytest.raises(runner.DevelopmentRunError, match="^RUN_ALREADY_FINALIZED$"):
+        machine.record_fit_result(last, late)

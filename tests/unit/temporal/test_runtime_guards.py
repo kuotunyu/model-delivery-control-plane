@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import mdcp.temporal.runtime_guards as runtime_guards
+from mdcp.temporal.runner import DevelopmentStateMachine
 from mdcp.temporal.runtime_guards import (
     RuntimeGuard,
     RuntimeStage,
@@ -90,6 +91,15 @@ def guarded_fixture(tmp_path: Path, mutation: str):
 def test_production_guard_has_no_public_probe_injection() -> None:
     signature = inspect.signature(build_production_runtime_guard)
     assert tuple(signature.parameters) == ("repository_root", "expected_head")
+
+
+def test_pure_state_machine_accepts_no_runtime_guard_or_probe() -> None:
+    assert tuple(inspect.signature(DevelopmentStateMachine).parameters) == ()
+    for method_name in ("next_fit_request", "record_fit_result", "finalize"):
+        parameters = set(
+            inspect.signature(getattr(DevelopmentStateMachine, method_name)).parameters
+        )
+        assert parameters.isdisjoint({"guard", "probe", "clock", "memory"})
 
 
 def test_synthetic_guard_is_not_a_production_runtime_guard(tmp_path: Path) -> None:
