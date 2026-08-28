@@ -24,7 +24,7 @@ from mdcp.workload.splits import split_development_rows
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _TRUSTED_MODULES = (cli, run_evidence, runner, search_identity)
 _EXPECTED_OWNED_SURFACES = {
-    "mdcp.temporal.cli": ("_emit_check", "build_parser", "main"),
+    "mdcp.temporal.cli": ("build_parser", "main"),
     "mdcp.temporal.run_evidence": (
         "ClosedMetrics",
         "DevelopmentResultCheck",
@@ -108,13 +108,9 @@ _EXPECTED_OWNED_SURFACES = {
         "_valid_sha256",
     ),
     "mdcp.temporal.search_identity": (
-        "FormalRunAuthorization",
-        "SearchEvidenceIndex",
         "SearchFreezeCheck",
         "SearchIdentityInputs",
-        "SearchReceipt",
         "SearchSourceCheck",
-        "SearchSourceEntry",
         "_bound_digests_recompute",
         "_fail",
         "_git",
@@ -122,7 +118,6 @@ _EXPECTED_OWNED_SURFACES = {
         "_has_exact_search_source_head_modes",
         "_has_exact_search_source_modes",
         "_has_regular_public_evidence",
-        "_inventory_sha256",
         "_is_clean_checkout",
         "_is_placeholder_commit",
         "_parse_index",

@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nonzero_sha256": {
+      "allOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"not": {"const": "0000000000000000000000000000000000000000000000000000000000000000"}}
+      ]
+    },
+    "private_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_count": {"type": "integer", "minimum": 0},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "inventory_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "manifest_sha256": {"$ref": "#/$defs/nonzero_sha256"}
+      },
+      "required": ["file_count", "total_bytes", "inventory_sha256", "manifest_sha256"]
+    }
+  },
+  "title": "FormalWorkerResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "mdcp.formal-worker-response.v1", "type": "string"},
+    "canonicalization_version": {"const": "RFC8785", "type": "string"},
+    "verdict": {"type": "string", "enum": ["PASS", "FAIL", "UNKNOWN"]},
+    "reason_codes": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 1,
+      "items": {
+        "type": "string",
+        "enum": [
+          "FORMAL_RUN_REQUEST_INVALID", "SEARCH_FREEZE_INVALID",
+          "FORMAL_RUN_AUTHORIZATION_INVALID", "FORMAL_RUN_AUTHORIZATION_MISMATCH",
+          "FORMAL_RUN_REPOSITORY_INVALID", "FORMAL_RUN_CONSUMPTION_ROOT_INVALID",
+          "FORMAL_RUN_DESTINATION_INVALID", "FORMAL_RUN_AUTHORIZATION_CONSUMED",
+          "FORMAL_RUN_CONSUMPTION_FAILED", "PUBLICATION_UNSUPPORTED",
+          "FORMAL_RUN_CONSUMPTION_UNKNOWN", "FORMAL_RUN_EXECUTION_UNKNOWN",
+          "FORMAL_RUN_SEAL_UNKNOWN"
+        ]
+      }
+    },
+    "private_identity": {"anyOf": [{"$ref": "#/$defs/private_identity"}, {"type": "null"}]},
+    "seal_record_sha256": {"anyOf": [{"$ref": "#/$defs/nonzero_sha256"}, {"type": "null"}]},
+    "repository_inventory_sha256": {"anyOf": [{"$ref": "#/$defs/nonzero_sha256"}, {"type": "null"}]},
+    "authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "consumption_marker_sha256": {"anyOf": [{"$ref": "#/$defs/nonzero_sha256"}, {"type": "null"}]},
+    "fit_count": {"type": "integer", "minimum": 0, "maximum": 84},
+    "h2_status": {"const": "SEALED_NOT_LOADED", "type": "string"},
+    "h2_loaded_rows": {"const": 0, "type": "integer"},
+    "worker_request_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+    "formal_worker_inventory_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+    "launch_profile_sha256": {"$ref": "#/$defs/nonzero_sha256"}
+  },
+  "required": [
+    "schema_version", "canonicalization_version", "verdict", "reason_codes", "private_identity",
+    "seal_record_sha256", "repository_inventory_sha256", "authorization_sha256",
+    "consumption_marker_sha256", "fit_count", "h2_status", "h2_loaded_rows",
+    "worker_request_sha256", "formal_worker_inventory_sha256", "launch_profile_sha256"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "verdict": {"const": "PASS"}, "reason_codes": {"const": []},
+        "private_identity": {"$ref": "#/$defs/private_identity"},
+        "seal_record_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "repository_inventory_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "authorization_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "consumption_marker_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "fit_count": {"enum": [80, 84]}
+      }
+    },
+    {
+      "properties": {
+        "verdict": {"const": "FAIL"},
+        "reason_codes": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"enum": ["FORMAL_RUN_REQUEST_INVALID", "SEARCH_FREEZE_INVALID", "FORMAL_RUN_AUTHORIZATION_INVALID", "FORMAL_RUN_REPOSITORY_INVALID", "PUBLICATION_UNSUPPORTED"]}},
+        "private_identity": {"type": "null"}, "seal_record_sha256": {"type": "null"},
+        "repository_inventory_sha256": {"type": "null"},
+        "authorization_sha256": {"const": "0000000000000000000000000000000000000000000000000000000000000000"},
+        "consumption_marker_sha256": {"type": "null"}, "fit_count": {"const": 0}
+      }
+    },
+    {
+      "properties": {
+        "verdict": {"const": "FAIL"},
+        "reason_codes": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"enum": ["FORMAL_RUN_AUTHORIZATION_MISMATCH", "FORMAL_RUN_CONSUMPTION_ROOT_INVALID", "FORMAL_RUN_DESTINATION_INVALID", "FORMAL_RUN_AUTHORIZATION_CONSUMED", "FORMAL_RUN_CONSUMPTION_FAILED"]}},
+        "private_identity": {"type": "null"}, "seal_record_sha256": {"type": "null"},
+        "repository_inventory_sha256": {"type": "null"},
+        "authorization_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "consumption_marker_sha256": {"type": "null"}, "fit_count": {"const": 0}
+      }
+    },
+    {
+      "properties": {
+        "verdict": {"const": "UNKNOWN"},
+        "reason_codes": {"const": ["FORMAL_RUN_CONSUMPTION_UNKNOWN"]},
+        "private_identity": {"type": "null"}, "seal_record_sha256": {"type": "null"},
+        "repository_inventory_sha256": {"type": "null"},
+        "authorization_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "consumption_marker_sha256": {"type": "null"}, "fit_count": {"const": 0}
+      }
+    },
+    {
+      "properties": {
+        "verdict": {"const": "UNKNOWN"},
+        "reason_codes": {"const": ["FORMAL_RUN_EXECUTION_UNKNOWN"]},
+        "private_identity": {"type": "null"}, "seal_record_sha256": {"type": "null"},
+        "repository_inventory_sha256": {"type": "null"},
+        "authorization_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "consumption_marker_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "fit_count": {"type": "integer", "minimum": 0, "maximum": 84}
+      }
+    },
+    {
+      "properties": {
+        "verdict": {"const": "UNKNOWN"},
+        "reason_codes": {"const": ["FORMAL_RUN_SEAL_UNKNOWN"]},
+        "private_identity": {"type": "null"}, "seal_record_sha256": {"type": "null"},
+        "repository_inventory_sha256": {"type": "null"},
+        "authorization_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "consumption_marker_sha256": {"$ref": "#/$defs/nonzero_sha256"},
+        "fit_count": {"enum": [80, 84]}
+      }
+    }
+  ]
+}

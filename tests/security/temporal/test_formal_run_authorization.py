@@ -16,6 +16,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 import mdcp.temporal.cli as cli
+import mdcp.temporal.formal_worker_protocol as formal_worker_protocol
 import mdcp.temporal.run_evidence as run_evidence
 import mdcp.temporal.runner as runner
 import mdcp.temporal.search_identity as search_identity
@@ -202,6 +203,14 @@ def test_authorization_model_matches_checked_in_closed_schema() -> None:
         consumed=False,
     )
     assert value.consumed is False
+
+
+def test_protocol_owned_authorization_is_the_search_identity_reexport() -> None:
+    assert search_identity.FormalRunAuthorization is formal_worker_protocol.FormalRunAuthorization
+    assert search_identity.SearchReceipt is formal_worker_protocol.SearchReceipt
+    assert search_identity.SearchSourceEntry is formal_worker_protocol.SearchSourceEntry
+    assert search_identity.SearchEvidenceIndex is formal_worker_protocol.SearchEvidenceIndex
+    assert search_identity.SEARCH_SOURCE_PATHS is formal_worker_protocol.SEARCH_SOURCE_PATHS
 
 
 @pytest.mark.parametrize(

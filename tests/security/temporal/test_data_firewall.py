@@ -15,7 +15,6 @@ from mdcp.workload.splits import DevelopmentPartitions
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 FIXED_REASON_CODE = "H2_IMPORT_CAPABILITY_FORBIDDEN"
-
 FORBIDDEN_MODULES = {
     "direct": "from mdcp.workload.dataset import load_uci_archive",
     "from_alias": "from mdcp.workload.splits import split_rows as narrow",
@@ -930,16 +929,15 @@ def test_static_firewall_allows_exact_fold_timestamp_normalization(tmp_path: Pat
 
 def test_real_formal_source_set_passes_with_deterministic_discovery() -> None:
     result = audit_static_h2_firewall(REPOSITORY_ROOT)
-    expected_temporal_paths = tuple(
+
+    assert result.verdict == "PASS"
+    assert result.checked_paths == FORMAL_V2_FIXED_PATHS + tuple(
         path.relative_to(REPOSITORY_ROOT).as_posix()
         for path in sorted(
             (REPOSITORY_ROOT / FORMAL_TEMPORAL_PACKAGE_ROOT).glob("*.py"),
             key=lambda path: path.as_posix(),
         )
     )
-
-    assert result.verdict == "PASS"
-    assert result.checked_paths == tuple(sorted((*FORMAL_V2_FIXED_PATHS, *expected_temporal_paths)))
     assert len(result.implementation_sha256) == 64
 
 
@@ -980,8 +978,9 @@ def test_runtime_guard_and_command_surfaces_are_discovered() -> None:
         "src/mdcp/temporal/runtime_guards.py",
         "src/mdcp/temporal/runner.py",
         "src/mdcp/temporal/cli.py",
-        "src/mdcp/temporal/search_identity.py",
         "src/mdcp/temporal/run_evidence.py",
+        "src/mdcp/temporal/search_identity.py",
+        "src/mdcp/temporal/formal_worker_protocol.py",
     }.issubset(result.checked_paths)
 
 

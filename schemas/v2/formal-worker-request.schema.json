@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "absolute_windows_path": {
+      "type": "string",
+      "pattern": "^[A-Z]:/(?!\\.{1,2}(?:/|$))(?!.*//)(?!.*/\\.{1,2}(?:/|$))[^\\\\]+$"
+    },
+    "git_commit": {
+      "allOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        {"not": {"const": "0000000000000000000000000000000000000000"}}
+      ]
+    },
+    "sha256": {
+      "allOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        {"not": {"const": "0000000000000000000000000000000000000000000000000000000000000000"}}
+      ]
+    }
+  },
+  "title": "FormalWorkerRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "mdcp.formal-worker-request.v1", "type": "string"},
+    "canonicalization_version": {"const": "RFC8785", "type": "string"},
+    "expected_freeze_head": {"$ref": "#/$defs/git_commit"},
+    "repository_root": {"$ref": "#/$defs/absolute_windows_path"},
+    "search_receipt_path": {"$ref": "#/$defs/absolute_windows_path"},
+    "evidence_index_path": {"$ref": "#/$defs/absolute_windows_path"},
+    "authorization_path": {"$ref": "#/$defs/absolute_windows_path"},
+    "consumption_root": {"$ref": "#/$defs/absolute_windows_path"},
+    "archive_path": {"$ref": "#/$defs/absolute_windows_path"},
+    "private_container_path": {"$ref": "#/$defs/absolute_windows_path"},
+    "search_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "evidence_index_sha256": {"$ref": "#/$defs/sha256"},
+    "authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "source_inventory_sha256": {"$ref": "#/$defs/sha256"},
+    "repository_inventory_sha256": {"$ref": "#/$defs/sha256"},
+    "formal_worker_inventory_sha256": {"$ref": "#/$defs/sha256"},
+    "launch_profile_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "required": [
+    "schema_version", "canonicalization_version", "expected_freeze_head", "repository_root",
+    "search_receipt_path", "evidence_index_path", "authorization_path", "consumption_root",
+    "archive_path", "private_container_path", "search_receipt_sha256", "evidence_index_sha256",
+    "authorization_sha256", "source_inventory_sha256", "repository_inventory_sha256",
+    "formal_worker_inventory_sha256", "launch_profile_sha256"
+  ]
+}
