@@ -227,17 +227,14 @@ def test_static_firewall_rejects_legacy_capability_forms_without_echo(
 
 
 @pytest.mark.parametrize("source", ALLOWED_NARROW_IMPORTS)
-def test_static_firewall_allows_only_narrow_development_imports(
+def test_static_firewall_rejects_narrow_development_imports_outside_exact_owner(
     tmp_path: Path,
     source: str,
 ) -> None:
     logical_path = _write_formal_module(tmp_path, source)
 
-    result = audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
-
-    assert result.verdict == "PASS"
-    assert result.checked_paths == (logical_path,)
-    assert len(result.implementation_sha256) == 64
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
 @pytest.mark.parametrize(
@@ -790,6 +787,144 @@ def test_static_firewall_allows_only_the_closed_run_evidence_capabilities(tmp_pa
     assert result.checked_paths == (logical_path,)
 
 
+@pytest.mark.parametrize(
+    ("retired_name", "body"),
+    (
+        ("_build_formal_execution_plan", "    return protocol_path.read_bytes()\n"),
+        (
+            "_preflight_windows_destination",
+            "    checked_destination = destination\n    return checked_destination.lstat()\n",
+        ),
+    ),
+)
+def test_fix_round_one_i5_retired_file_grants_cannot_be_resurrected(
+    tmp_path: Path,
+    retired_name: str,
+    body: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    approved_root = tmp_path / "approved"
+    _write_logical_module(approved_root, logical_path, source)
+    assert audit_static_h2_firewall(approved_root, formal_paths=(logical_path,)).verdict == "PASS"
+
+    argument = "protocol_path" if retired_name == "_build_formal_execution_plan" else "destination"
+    mutation = f"\ndef {retired_name}({argument}):\n{body}"
+    mutated_root = tmp_path / "mutated"
+    _write_logical_module(mutated_root, logical_path, source + mutation)
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("module", "symbol"),
+    (
+        ("datetime", "datetime"),
+        ("mdcp.common.enums", "GateVerdict"),
+        ("mdcp.temporal.completeness", "AdapterOutcome"),
+        ("mdcp.temporal.completeness", "LabelOutcome"),
+        ("mdcp.temporal.completeness", "PredictionOutcome"),
+        ("mdcp.temporal.evaluation", "qualify_trial"),
+        ("mdcp.temporal.folds", "load_fold_specs"),
+        ("mdcp.temporal.folds", "materialize_folds"),
+        ("mdcp.temporal.runner", "DevelopmentRunBundle"),
+        ("mdcp.temporal.runner", "DevelopmentRunError"),
+        ("mdcp.temporal.runner", "EXACT_FOLD_IDS"),
+        ("mdcp.temporal.runner", "FitLedger"),
+        ("mdcp.temporal.runner", "FitPhase"),
+        ("mdcp.temporal.runner", "_DevelopmentFoldResult"),
+        ("mdcp.temporal.runner", "_evaluate_trial"),
+        ("mdcp.temporal.runner", "_formal_groups"),
+        ("mdcp.temporal.runner", "_private_fold_evidence"),
+        ("mdcp.temporal.runner", "_process_fold"),
+        ("mdcp.temporal.runner", "_public_result"),
+        ("mdcp.temporal.runner", "_replay_digest"),
+        ("mdcp.temporal.runner", "_valid_fold_result"),
+        ("mdcp.temporal.runtime_guards", "RuntimeObservation"),
+        ("mdcp.temporal.runtime_guards", "RuntimeStage"),
+        ("mdcp.temporal.runtime_guards", "build_production_runtime_guard"),
+        ("mdcp.temporal.search_identity", "FormalRunAuthorization"),
+        ("mdcp.temporal.search_identity", "SearchReceipt"),
+        ("mdcp.temporal.search_identity", "verify_search_freeze"),
+        ("mdcp.temporal.selection", "ReplayFoldDigests"),
+        ("mdcp.temporal.selection", "ReplayResult"),
+        ("mdcp.temporal.selection", "ReplaySelectionSession"),
+        ("mdcp.temporal.selection", "SelectionDecision"),
+        ("mdcp.temporal.selection", "finalize_selection"),
+        ("mdcp.temporal.trials", "_feature_names"),
+        ("mdcp.temporal.trials", "_materialize_features"),
+        ("mdcp.temporal.trials", "build_estimator"),
+        ("mdcp.temporal.trials", "load_trial_specs"),
+        ("mdcp.temporal.trials", "training_rows_for_trial"),
+        ("mdcp.workload.dataset", "load_uci_development_archive"),
+        ("mdcp.workload.splits", "split_development_rows"),
+        ("threading", "Lock"),
+    ),
+)
+def test_fix_round_one_i5_retired_import_grants_cannot_be_resurrected(
+    tmp_path: Path,
+    module: str,
+    symbol: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    approved_root = tmp_path / "approved"
+    _write_logical_module(approved_root, logical_path, source)
+    assert audit_static_h2_firewall(approved_root, formal_paths=(logical_path,)).verdict == "PASS"
+
+    mutated_root = tmp_path / "mutated"
+    mutation = f"\nfrom {module} import {symbol} as task_five_retired_grant\n"
+    _write_logical_module(mutated_root, logical_path, source + mutation)
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    (
+        "ctypes.windll.kernel32.CompareStringOrdinal",
+        "ctypes.windll.kernel32.FlushFileBuffers",
+        "ctypes.windll.kernel32.GetFinalPathNameByHandleW",
+        "ctypes.windll.kernel32.GetLastError",
+        "ctypes.windll.kernel32.SetFileInformationByHandle",
+        "ctypes.windll.kernel32.WriteFile",
+        "ctypes.windll.ntdll",
+        "ctypes.windll.ntdll.NtCreateFile",
+    ),
+)
+def test_fix_round_one_i5_retired_module_attribute_grants_cannot_be_resurrected(
+    tmp_path: Path,
+    attribute: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    approved_root = tmp_path / "approved"
+    _write_logical_module(approved_root, logical_path, source)
+    assert audit_static_h2_firewall(approved_root, formal_paths=(logical_path,)).verdict == "PASS"
+
+    mutated_root = tmp_path / "mutated"
+    mutation = f"\ndef task_five_retired_call():\n    return {attribute}\n"
+    _write_logical_module(mutated_root, logical_path, source + mutation)
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+def test_fix_round_one_i5_retired_private_attribute_grant_cannot_be_resurrected(
+    tmp_path: Path,
+) -> None:
+    logical_path = "src/mdcp/temporal/run_evidence.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    approved_root = tmp_path / "approved"
+    _write_logical_module(approved_root, logical_path, source)
+    assert audit_static_h2_firewall(approved_root, formal_paths=(logical_path,)).verdict == "PASS"
+
+    mutated_root = tmp_path / "mutated"
+    mutation = "\ndef task_five_retired_private(value):\n    return value._state\n"
+    _write_logical_module(mutated_root, logical_path, source + mutation)
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
 def test_static_firewall_allows_exact_formal_worker_bootstrap(tmp_path: Path) -> None:
     logical_path = "src/mdcp/temporal/formal_worker.py"
     source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
@@ -799,6 +934,138 @@ def test_static_firewall_allows_exact_formal_worker_bootstrap(tmp_path: Path) ->
 
     assert result.verdict == "PASS"
     assert result.checked_paths == (logical_path,)
+
+
+@pytest.mark.parametrize(
+    ("case_id", "needle", "replacement"),
+    (
+        (
+            "wrong-symbol",
+            "    from mdcp.workload.dataset import load_uci_development_archive\n",
+            "    from mdcp.workload.dataset import load_uci_archive\n",
+        ),
+        (
+            "aliased-symbol",
+            "    from mdcp.workload.dataset import load_uci_development_archive\n",
+            (
+                "    from mdcp.workload.dataset import "
+                "load_uci_development_archive as hidden_loader\n"
+            ),
+        ),
+        (
+            "wrong-enclosing-function",
+            (
+                ") -> _WorkerContext:\n"
+                "    from mdcp.common.canonical import canonicalize_json, parse_json_bytes\n"
+            ),
+            (
+                ") -> _WorkerContext:\n"
+                "    from mdcp.common.canonical import canonicalize_json, parse_json_bytes\n"
+                "    from mdcp.workload.dataset import load_uci_development_archive\n"
+            ),
+        ),
+        (
+            "archive-read-before-marker",
+            "    try:\n        marker_sha256 = _create_durable_marker(context)\n",
+            (
+                "    _hash_archive(context.archive_path)\n"
+                "    try:\n        marker_sha256 = _create_durable_marker(context)\n"
+            ),
+        ),
+        (
+            "natural-run-before-marker",
+            "    try:\n        marker_sha256 = _create_durable_marker(context)\n",
+            (
+                '    _execute_natural_run(context, "0" * 64)\n'
+                "    try:\n        marker_sha256 = _create_durable_marker(context)\n"
+            ),
+        ),
+        (
+            "publication-before-marker",
+            "    try:\n        marker_sha256 = _create_durable_marker(context)\n",
+            (
+                '    _publish_private(context.publications, b"")\n'
+                "    try:\n        marker_sha256 = _create_durable_marker(context)\n"
+            ),
+        ),
+        (
+            "encoding-before-pre-seal",
+            (
+                "        files, public_result, selection_status = _formalize_natural(result)\n"
+                "        _checkpoint(guard, RuntimeStage.PRE_SEAL)\n"
+                "        private_bytes, private_identity = _encode_natural(files)\n"
+            ),
+            (
+                "        files, public_result, selection_status = _formalize_natural(result)\n"
+                "        private_bytes, private_identity = _encode_natural(files)\n"
+                "        _checkpoint(guard, RuntimeStage.PRE_SEAL)\n"
+            ),
+        ),
+        (
+            "exit-before-private-publication",
+            (
+                "        _publish_private(context.publications, private_bytes)\n"
+                "        exit_observation = _checkpoint(guard, RuntimeStage.EXIT)\n"
+            ),
+            (
+                "        exit_observation = _checkpoint(guard, RuntimeStage.EXIT)\n"
+                "        _publish_private(context.publications, private_bytes)\n"
+            ),
+        ),
+        (
+            "terminal-before-exit",
+            "        exit_observation = _checkpoint(guard, RuntimeStage.EXIT)\n",
+            (
+                '        _publish_terminal(context.publications, b"")\n'
+                "        exit_observation = _checkpoint(guard, RuntimeStage.EXIT)\n"
+            ),
+        ),
+        (
+            "response-flush-before-write",
+            (
+                "    if sys.stdout.buffer.write(raw) != len(raw):\n"
+                "        raise OSError\n"
+                "    sys.stdout.buffer.flush()\n"
+            ),
+            (
+                "    sys.stdout.buffer.flush()\n"
+                "    if sys.stdout.buffer.write(raw) != len(raw):\n"
+                "        raise OSError\n"
+            ),
+        ),
+    ),
+)
+def test_formal_worker_capability_allowlist_is_symbol_scope_and_order_exact(
+    tmp_path: Path,
+    case_id: str,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/formal_worker.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) == 1, case_id
+    approved_root = tmp_path / "approved"
+    _write_logical_module(approved_root, logical_path, source)
+    assert audit_static_h2_firewall(approved_root, formal_paths=(logical_path,)).verdict == "PASS"
+
+    mutated_root = tmp_path / "mutated"
+    _write_logical_module(mutated_root, logical_path, source.replace(needle, replacement, 1))
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+def test_formal_worker_capability_allowlist_is_path_exact(tmp_path: Path) -> None:
+    approved_path = "src/mdcp/temporal/formal_worker.py"
+    unapproved_path = "src/mdcp/temporal/formal_worker_clone.py"
+    source = (REPOSITORY_ROOT / approved_path).read_text(encoding="utf-8")
+    approved_root = tmp_path / "approved"
+    _write_logical_module(approved_root, approved_path, source)
+    assert audit_static_h2_firewall(approved_root, formal_paths=(approved_path,)).verdict == "PASS"
+
+    unapproved_root = tmp_path / "unapproved"
+    _write_logical_module(unapproved_root, unapproved_path, source)
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(unapproved_root, formal_paths=(unapproved_path,))
 
 
 @pytest.mark.parametrize(
@@ -1251,7 +1518,606 @@ def test_runtime_guard_capabilities_remain_exact(
         audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
 
 
+@pytest.mark.parametrize(
+    ("case_id", "replacement"),
+    (
+        ("slice", "        for logical_path in SEARCH_SOURCE_PATHS[:1]:\n"),
+        ("filter", "        for logical_path in filter(None, SEARCH_SOURCE_PATHS):\n"),
+        ("reorder", "        for logical_path in reversed(SEARCH_SOURCE_PATHS):\n"),
+        ("alias", "        for logical_path in source_paths:\n"),
+        ("deduplicate", "        for logical_path in dict.fromkeys(SEARCH_SOURCE_PATHS):\n"),
+        ("partial", "        for logical_path in SEARCH_SOURCE_PATHS[:-1]:\n"),
+    ),
+)
+def test_fix_round_one_i2_firewall_pins_complete_ordered_inventory_loops(
+    tmp_path: Path,
+    case_id: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    needle = "        for logical_path in SEARCH_SOURCE_PATHS:\n"
+    assert source.count(needle) == 1, case_id
+    approved_root = tmp_path / "approved"
+    _write_logical_module(approved_root, logical_path, source)
+    assert audit_static_h2_firewall(approved_root, formal_paths=(logical_path,)).verdict == "PASS"
+
+    mutated = source.replace(needle, replacement, 1)
+    if case_id == "alias":
+        import_needle = "    entries = []\n"
+        assert mutated.count(import_needle) == 2
+        mutated = mutated.replace(
+            import_needle,
+            "    source_paths = SEARCH_SOURCE_PATHS\n    entries = []\n",
+            1,
+        )
+    mutated_root = tmp_path / "mutated"
+    _write_logical_module(mutated_root, logical_path, mutated)
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("path_name", "digest_name"),
+    (
+        ("SEARCH_SOURCE_PATHS", "search_source_inventory_sha256"),
+        ("FORMAL_WORKER_SOURCE_PATHS", "formal_worker_inventory_sha256"),
+    ),
+)
+@pytest.mark.parametrize(
+    "case_id",
+    (
+        "break-before-body",
+        "continue-one-path",
+        "return-from-loop",
+        "partial-digest",
+        "aliased-partial-digest",
+    ),
+)
+def test_fix_round_two_i1_firewall_rejects_partial_inventory_loops_and_digests(
+    tmp_path: Path,
+    path_name: str,
+    digest_name: str,
+    case_id: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    loop_needle = f"        for logical_path in {path_name}:\n"
+    return_needle = f"    return {digest_name}(tuple(entries))\n"
+    assert source.count(loop_needle) == 1, (path_name, case_id)
+    assert source.count(return_needle) == 1, (path_name, case_id)
+
+    if case_id == "break-before-body":
+        mutated = source.replace(loop_needle, f"{loop_needle}            break\n", 1)
+    elif case_id == "continue-one-path":
+        mutated = source.replace(
+            loop_needle,
+            f'{loop_needle}            if logical_path == "src/mdcp/temporal/firewall.py":\n'
+            "                continue\n",
+            1,
+        )
+    elif case_id == "return-from-loop":
+        mutated = source.replace(loop_needle, f"{loop_needle}            return None\n", 1)
+    elif case_id == "partial-digest":
+        mutated = source.replace(
+            return_needle,
+            f"    return {digest_name}(tuple(entries[:1]))\n",
+            1,
+        )
+    else:
+        mutated = source.replace(
+            return_needle,
+            "    selected_entries = entries[:1]\n"
+            f"    return {digest_name}(tuple(selected_entries))\n",
+            1,
+        )
+
+    mutated_root = tmp_path / f"{path_name}-{case_id}"
+    _write_logical_module(mutated_root, logical_path, mutated)
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("protected_name", "other_name"),
+    (
+        ("_worker_source_inventory", "_formal_worker_source_inventory"),
+        ("_formal_worker_source_inventory", "_worker_source_inventory"),
+        ("_WorkerRuntimeGuard", "build_worker_runtime_guard"),
+        ("build_worker_runtime_guard", "_WorkerRuntimeGuard"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("case_id", "binding_template"),
+    (
+        (
+            "conditional-definition",
+            "if True:\n    def {name}(repository_root):\n        return None\n",
+        ),
+        (
+            "cached-wrapper",
+            "_round3_original = {name}\n"
+            "_round3_cached = None\n"
+            "if True:\n"
+            "    def {name}(repository_root):\n"
+            "        global _round3_cached\n"
+            "        if _round3_cached is None:\n"
+            "            _round3_cached = _round3_original(repository_root)\n"
+            "        return _round3_cached\n",
+        ),
+        ("direct-assignment", "{name} = None\n"),
+        ("alias-assignment", "{name} = {other}\n"),
+        ("tuple-unpack", "({name}, _round3_other) = (None, None)\n"),
+        ("annotated-assignment", "{name}: object = None\n"),
+        ("conditional-assignment", "if True:\n    {name} = None\n"),
+        ("for-target", "for {name} in ():\n    pass\n"),
+        ("named-expression", "_round3_value = ({name} := None)\n"),
+        (
+            "default-expression-binding",
+            "def _round3_default(value=({name} := None)):\n    return value\n",
+        ),
+        (
+            "decorator-expression-binding",
+            "def _round3_decorator(function):\n"
+            "    return function\n"
+            "@({name} := _round3_decorator)\n"
+            "def _round3_decorated():\n"
+            "    return None\n",
+        ),
+        ("delete", "del {name}\n"),
+        (
+            "exception-target",
+            "try:\n    pass\nexcept Exception as {name}:\n    pass\n",
+        ),
+        ("match-capture", "match None:\n    case {name}:\n        pass\n"),
+    ),
+)
+def test_fix_round_three_i1_protected_runtime_inventory_names_have_one_live_binding(
+    tmp_path: Path,
+    protected_name: str,
+    other_name: str,
+    case_id: str,
+    binding_template: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    mutation = binding_template.format(name=protected_name, other=other_name)
+    mutated_root = tmp_path / f"{protected_name}-{case_id}"
+    _write_logical_module(mutated_root, logical_path, f"{source.rstrip()}\n\n{mutation}")
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize(
+    ("case_id", "needle", "replacement"),
+    (
+        (
+            "checkpoint-search-stored-expected",
+            "        current_source = _worker_source_inventory(self.repository_root)\n",
+            "        current_source = self.source_inventory_sha256\n",
+        ),
+        (
+            "checkpoint-search-alternate-helper",
+            "        current_source = _worker_source_inventory(self.repository_root)\n",
+            "        current_source = _round3_search_wrapper(self.repository_root)\n",
+        ),
+        (
+            "checkpoint-search-omit-call",
+            "        current_source = _worker_source_inventory(self.repository_root)\n",
+            "        current_source = None\n",
+        ),
+        (
+            "checkpoint-search-swap-helper",
+            "        current_source = _worker_source_inventory(self.repository_root)\n",
+            "        current_source = _formal_worker_source_inventory(self.repository_root)\n",
+        ),
+        (
+            "checkpoint-search-wrong-root",
+            "        current_source = _worker_source_inventory(self.repository_root)\n",
+            "        current_source = _worker_source_inventory(None)\n",
+        ),
+        (
+            "checkpoint-search-wrong-result-target",
+            "        current_source = _worker_source_inventory(self.repository_root)\n",
+            "        ignored_source = _worker_source_inventory(self.repository_root)\n",
+        ),
+        (
+            "checkpoint-search-wrong-comparison-target",
+            "        if current_source != self.source_inventory_sha256:\n",
+            "        if current_source != self.expected_formal_worker_inventory_sha256:\n",
+        ),
+        (
+            "checkpoint-search-comparison-order",
+            "        if current_source != self.source_inventory_sha256:\n",
+            "        if self.source_inventory_sha256 != current_source:\n",
+        ),
+        (
+            "checkpoint-search-wrong-reason",
+            "            return self._unknown("
+            '"SOURCE_INVENTORY_CHANGED", elapsed_ns, peak_process_bytes)\n',
+            "            return self._unknown("
+            '"FORMAL_WORKER_INVENTORY_CHANGED", elapsed_ns, peak_process_bytes)\n',
+        ),
+        (
+            "checkpoint-worker-stored-expected",
+            "        current_worker = _formal_worker_source_inventory(self.repository_root)\n",
+            "        current_worker = self.expected_formal_worker_inventory_sha256\n",
+        ),
+        (
+            "checkpoint-worker-alternate-helper",
+            "        current_worker = _formal_worker_source_inventory(self.repository_root)\n",
+            "        current_worker = _round3_worker_wrapper(self.repository_root)\n",
+        ),
+        (
+            "checkpoint-worker-omit-call",
+            "        current_worker = _formal_worker_source_inventory(self.repository_root)\n",
+            "        current_worker = None\n",
+        ),
+        (
+            "checkpoint-worker-swap-helper",
+            "        current_worker = _formal_worker_source_inventory(self.repository_root)\n",
+            "        current_worker = _worker_source_inventory(self.repository_root)\n",
+        ),
+        (
+            "checkpoint-worker-wrong-root",
+            "        current_worker = _formal_worker_source_inventory(self.repository_root)\n",
+            "        current_worker = _formal_worker_source_inventory(None)\n",
+        ),
+        (
+            "checkpoint-worker-wrong-result-target",
+            "        current_worker = _formal_worker_source_inventory(self.repository_root)\n",
+            "        ignored_worker = _formal_worker_source_inventory(self.repository_root)\n",
+        ),
+        (
+            "checkpoint-worker-wrong-comparison-target",
+            "        if current_worker != self.expected_formal_worker_inventory_sha256:\n",
+            "        if current_worker != self.source_inventory_sha256:\n",
+        ),
+        (
+            "checkpoint-worker-comparison-order",
+            "        if current_worker != self.expected_formal_worker_inventory_sha256:\n",
+            "        if self.expected_formal_worker_inventory_sha256 != current_worker:\n",
+        ),
+        (
+            "checkpoint-worker-wrong-reason",
+            "            return self._unknown("
+            '"FORMAL_WORKER_INVENTORY_CHANGED", elapsed_ns, peak_process_bytes)\n',
+            "            return self._unknown("
+            '"SOURCE_INVENTORY_CHANGED", elapsed_ns, peak_process_bytes)\n',
+        ),
+        (
+            "builder-search-stored-expected",
+            "    current_source = _worker_source_inventory(repository_root)\n",
+            "    current_source = source_inventory_sha256\n",
+        ),
+        (
+            "builder-search-alternate-helper",
+            "    current_source = _worker_source_inventory(repository_root)\n",
+            "    current_source = _round3_search_wrapper(repository_root)\n",
+        ),
+        (
+            "builder-search-omit-call",
+            "    current_source = _worker_source_inventory(repository_root)\n",
+            "    current_source = None\n",
+        ),
+        (
+            "builder-search-swap-helper",
+            "    current_source = _worker_source_inventory(repository_root)\n",
+            "    current_source = _formal_worker_source_inventory(repository_root)\n",
+        ),
+        (
+            "builder-search-wrong-root",
+            "    current_source = _worker_source_inventory(repository_root)\n",
+            "    current_source = _worker_source_inventory(None)\n",
+        ),
+        (
+            "builder-search-wrong-result-target",
+            "    current_source = _worker_source_inventory(repository_root)\n",
+            "    ignored_source = _worker_source_inventory(repository_root)\n",
+        ),
+        (
+            "builder-search-wrong-comparison-target",
+            "        current_source != source_inventory_sha256\n",
+            "        current_source != expected_formal_worker_inventory_sha256\n",
+        ),
+        (
+            "builder-search-comparison-order",
+            "        current_source != source_inventory_sha256\n",
+            "        source_inventory_sha256 != current_source\n",
+        ),
+        (
+            "builder-worker-stored-expected",
+            "    current_worker = _formal_worker_source_inventory(repository_root)\n",
+            "    current_worker = expected_formal_worker_inventory_sha256\n",
+        ),
+        (
+            "builder-worker-alternate-helper",
+            "    current_worker = _formal_worker_source_inventory(repository_root)\n",
+            "    current_worker = _round3_worker_wrapper(repository_root)\n",
+        ),
+        (
+            "builder-worker-omit-call",
+            "    current_worker = _formal_worker_source_inventory(repository_root)\n",
+            "    current_worker = None\n",
+        ),
+        (
+            "builder-worker-swap-helper",
+            "    current_worker = _formal_worker_source_inventory(repository_root)\n",
+            "    current_worker = _worker_source_inventory(repository_root)\n",
+        ),
+        (
+            "builder-worker-wrong-root",
+            "    current_worker = _formal_worker_source_inventory(repository_root)\n",
+            "    current_worker = _formal_worker_source_inventory(None)\n",
+        ),
+        (
+            "builder-worker-wrong-result-target",
+            "    current_worker = _formal_worker_source_inventory(repository_root)\n",
+            "    ignored_worker = _formal_worker_source_inventory(repository_root)\n",
+        ),
+        (
+            "builder-worker-wrong-comparison-target",
+            "        or current_worker != expected_formal_worker_inventory_sha256\n",
+            "        or current_worker != source_inventory_sha256\n",
+        ),
+        (
+            "builder-worker-comparison-order",
+            "        or current_worker != expected_formal_worker_inventory_sha256\n",
+            "        or expected_formal_worker_inventory_sha256 != current_worker\n",
+        ),
+    ),
+)
+def test_fix_round_three_i2_runtime_inventory_consumers_are_exact(
+    tmp_path: Path,
+    case_id: str,
+    needle: str,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    assert source.count(needle) == 1, case_id
+    mutated = source.replace(needle, replacement, 1)
+    if "alternate-helper" in case_id:
+        meaning = "search" if "search" in case_id else "worker"
+        helper = (
+            "_worker_source_inventory" if meaning == "search" else "_formal_worker_source_inventory"
+        )
+        mutated = (
+            f"{mutated.rstrip()}\n\n"
+            f"def _round3_{meaning}_wrapper(repository_root):\n"
+            f"    return {helper}(repository_root)\n"
+        )
+    mutated_root = tmp_path / case_id
+    _write_logical_module(mutated_root, logical_path, mutated)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+@pytest.mark.parametrize("meaning", ("search", "worker"))
+def test_fix_round_three_i2_construction_cache_cannot_replace_checkpoint_reread(
+    tmp_path: Path,
+    meaning: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    if meaning == "search":
+        field_needle = "    source_inventory_sha256: str\n"
+        field_replacement = (
+            "    source_inventory_sha256: str\n    cached_source_inventory_sha256: str\n"
+        )
+        checkpoint_needle = (
+            "        current_source = _worker_source_inventory(self.repository_root)\n"
+        )
+        checkpoint_replacement = "        current_source = self.cached_source_inventory_sha256\n"
+        build_needle = "        source_inventory_sha256=source_inventory_sha256,\n"
+        build_replacement = (
+            "        source_inventory_sha256=source_inventory_sha256,\n"
+            "        cached_source_inventory_sha256=current_source,\n"
+        )
+    else:
+        field_needle = "    expected_formal_worker_inventory_sha256: str\n"
+        field_replacement = (
+            "    expected_formal_worker_inventory_sha256: str\n"
+            "    cached_formal_worker_inventory_sha256: str\n"
+        )
+        checkpoint_needle = (
+            "        current_worker = _formal_worker_source_inventory(self.repository_root)\n"
+        )
+        checkpoint_replacement = (
+            "        current_worker = self.cached_formal_worker_inventory_sha256\n"
+        )
+        build_needle = (
+            "        expected_formal_worker_inventory_sha256="
+            "expected_formal_worker_inventory_sha256,\n"
+        )
+        build_replacement = (
+            f"{build_needle}        cached_formal_worker_inventory_sha256=current_worker,\n"
+        )
+    for needle in (field_needle, checkpoint_needle, build_needle):
+        assert source.count(needle) == 1, (meaning, needle)
+    mutated = source.replace(field_needle, field_replacement, 1)
+    mutated = mutated.replace(checkpoint_needle, checkpoint_replacement, 1)
+    mutated = mutated.replace(build_needle, build_replacement, 1)
+    mutated_root = tmp_path / f"cached-{meaning}"
+    _write_logical_module(mutated_root, logical_path, mutated)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
+def test_fix_round_four_runtime_guard_normalized_module_ast_hash_is_exact() -> None:
+    import ast
+    import hashlib
+
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    tree = ast.parse((REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8"))
+    normalized = ast.dump(tree, include_attributes=False).encode("utf-8")
+
+    assert hashlib.sha256(normalized).hexdigest() == (
+        "f27d267ac1418c4feacdd8522c4f68a9517583a442adc78a8e3124b8bad7d7cd"
+    )
+
+
+@pytest.mark.parametrize(
+    ("case_id", "needle", "replacement"),
+    (
+        (
+            "checkpoint-wrapper",
+            None,
+            "def _round4_checkpoint(self, stage):\n"
+            "    return RuntimeObservation(\n"
+            '        verdict="PASS", reason_codes=(), elapsed_ns=0, peak_process_bytes=0,\n'
+            "        repository_inventory_sha256=self.source_inventory_sha256,\n"
+            "    )\n"
+            "_WorkerRuntimeGuard.checkpoint = _round4_checkpoint\n",
+        ),
+        (
+            "unknown-wrapper",
+            None,
+            "def _round4_unknown(self, reason_code, elapsed_ns, peak_process_bytes):\n"
+            "    return RuntimeObservation(\n"
+            '        verdict="PASS", reason_codes=(), elapsed_ns=elapsed_ns,\n'
+            "        peak_process_bytes=peak_process_bytes,\n"
+            "        repository_inventory_sha256=self.source_inventory_sha256,\n"
+            "    )\n"
+            "_WorkerRuntimeGuard._unknown = _round4_unknown\n",
+        ),
+        (
+            "checkpoint-alias",
+            None,
+            "_WorkerRuntimeGuard.checkpoint = _CheckpointGuard.checkpoint\n",
+        ),
+        (
+            "checkpoint-lambda",
+            None,
+            "_WorkerRuntimeGuard.checkpoint = lambda self, stage: None\n",
+        ),
+        ("checkpoint-delete", None, "del _WorkerRuntimeGuard.checkpoint\n"),
+        ("unknown-delete", None, "del _WorkerRuntimeGuard._unknown\n"),
+        (
+            "observation-conditional-definition",
+            None,
+            "if True:\n"
+            "    def RuntimeObservation(**values):\n"
+            "        values['verdict'] = 'PASS'\n"
+            "        values['reason_codes'] = ()\n"
+            "        return values\n",
+        ),
+        ("observation-rebind", None, "RuntimeObservation = _WorkerRuntimeGuard\n"),
+        (
+            "observation-wrapper",
+            None,
+            "_round4_observation = RuntimeObservation\n"
+            "def RuntimeObservation(**values):\n"
+            "    values['verdict'] = 'PASS'\n"
+            "    values['reason_codes'] = ()\n"
+            "    return _round4_observation(**values)\n",
+        ),
+        ("elapsed-limit", None, "_MAX_ELAPSED_NS = 10**100\n"),
+        ("memory-limit", None, "_MAX_PEAK_PROCESS_BYTES = 10**100\n"),
+        (
+            "memory-probe",
+            None,
+            "_authoritative_peak_process_bytes = lambda: 5 * 1024**3\n",
+        ),
+        ("time-attribute", None, "time.monotonic_ns = lambda: 0\n"),
+        ("hashlib-attribute", None, "hashlib.sha256 = lambda value=b'': None\n"),
+        ("stat-attribute", None, "stat.S_ISREG = lambda mode: True\n"),
+        ("dependency-direct-assignment", None, "time = None\n"),
+        (
+            "dependency-conditional-assignment",
+            None,
+            "if True:\n    _authoritative_peak_process_bytes = lambda: 0\n",
+        ),
+        ("dependency-delete", None, "del time\n"),
+        (
+            "unprotected-class-base",
+            "class _CheckpointGuard:\n",
+            "class _CheckpointGuard(object):\n",
+        ),
+        ("module-lambda", None, "_round4_module_lambda = lambda: None\n"),
+        ("harmless-semantic-node", None, "_ROUND4_HARMLESS = 1\n"),
+    ),
+)
+def test_fix_round_four_whole_runtime_guard_module_ast_pin_rejects_live_mutations(
+    tmp_path: Path,
+    case_id: str,
+    needle: str | None,
+    replacement: str,
+) -> None:
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    if needle is None:
+        mutated = f"{source.rstrip()}\n\n{replacement}"
+    else:
+        assert source.count(needle) == 1, case_id
+        mutated = source.replace(needle, replacement, 1)
+    mutated_root = tmp_path / case_id
+    _write_logical_module(mutated_root, logical_path, mutated)
+
+    with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+        audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
+
+
 def test_development_partition_type_has_no_h2_capability() -> None:
     assert tuple(DevelopmentPartitions.__dataclass_fields__) == ("train", "h1")
     assert "h2" not in vars(DevelopmentPartitions)
     assert "open_h2" not in vars(DevelopmentPartitions)
+
+
+def test_forbidden_worker_capability_keeps_dangerous_modules_out_of_worker() -> None:
+    import ast
+
+    tree = ast.parse(
+        (REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py").read_text(encoding="utf-8")
+    )
+    imported = {
+        alias.name.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert imported.isdisjoint(
+        {"asyncio", "concurrent", "importlib", "multiprocessing", "socket", "subprocess"}
+    )
+
+
+def test_marker_before_access_keeps_loader_and_model_imports_post_marker() -> None:
+    import ast
+
+    tree = ast.parse(
+        (REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py").read_text(encoding="utf-8")
+    )
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    execute = functions["_execute_worker_request"]
+    calls = [
+        node.func.id
+        for node in ast.walk(execute)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert calls.index("_create_durable_marker") < calls.index("_hash_archive")
+    assert calls.index("_hash_archive") < calls.index("_execute_natural_run")
+
+    natural = functions["_execute_natural_run"]
+    imported_modules = {
+        node.module
+        for node in ast.walk(natural)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert {
+        "mdcp.temporal.folds",
+        "mdcp.temporal.runner",
+        "mdcp.temporal.trials",
+        "mdcp.workload.dataset",
+        "mdcp.workload.splits",
+    }.issubset(imported_modules)

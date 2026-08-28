@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -103,6 +104,160 @@ class _CheckpointGuard:
             peak_process_bytes=peak_process_bytes,
             repository_inventory_sha256=self._core.repository_inventory_sha256 or "",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerRuntimeGuard:
+    """Worker-local source, wall, memory, and sealed-H2 checkpoint guard."""
+
+    repository_root: Path
+    source_inventory_sha256: str
+    expected_formal_worker_inventory_sha256: str
+    start_ns: int
+
+    def checkpoint(self, stage: RuntimeStage) -> RuntimeObservation:
+        if type(stage) is not RuntimeStage:
+            return self._unknown("RUNTIME_GUARD_INVALID", 0, None)
+        elapsed_ns = time.monotonic_ns() - self.start_ns
+        peak_process_bytes = _authoritative_peak_process_bytes()
+        if type(peak_process_bytes) is not int or peak_process_bytes < 0:
+            return self._unknown("AUTHORITATIVE_MEMORY_UNAVAILABLE", elapsed_ns, peak_process_bytes)
+        if peak_process_bytes > _MAX_PEAK_PROCESS_BYTES:
+            return self._unknown("COMPUTE_MEMORY_EXCEEDED", elapsed_ns, peak_process_bytes)
+        if type(elapsed_ns) is not int or elapsed_ns < 0 or elapsed_ns > _MAX_ELAPSED_NS:
+            return self._unknown("COMPUTE_DEADLINE_EXCEEDED", elapsed_ns, peak_process_bytes)
+        current_source = _worker_source_inventory(self.repository_root)
+        current_worker = _formal_worker_source_inventory(self.repository_root)
+        if current_source is None:
+            return self._unknown("SOURCE_INVENTORY_UNAVAILABLE", elapsed_ns, peak_process_bytes)
+        if current_worker is None:
+            return self._unknown(
+                "FORMAL_WORKER_INVENTORY_UNAVAILABLE", elapsed_ns, peak_process_bytes
+            )
+        if current_source != self.source_inventory_sha256:
+            return self._unknown("SOURCE_INVENTORY_CHANGED", elapsed_ns, peak_process_bytes)
+        if current_worker != self.expected_formal_worker_inventory_sha256:
+            return self._unknown("FORMAL_WORKER_INVENTORY_CHANGED", elapsed_ns, peak_process_bytes)
+        return RuntimeObservation(
+            verdict="PASS",
+            reason_codes=(),
+            elapsed_ns=elapsed_ns,
+            peak_process_bytes=peak_process_bytes,
+            repository_inventory_sha256=current_source,
+        )
+
+    def _unknown(
+        self,
+        reason_code: str,
+        elapsed_ns: int,
+        peak_process_bytes: int | None,
+    ) -> RuntimeObservation:
+        return RuntimeObservation(
+            verdict="UNKNOWN",
+            reason_codes=(reason_code,),
+            elapsed_ns=elapsed_ns,
+            peak_process_bytes=peak_process_bytes,
+            repository_inventory_sha256=self.source_inventory_sha256,
+        )
+
+
+def _worker_source_inventory(repository_root: Path) -> str | None:
+    from mdcp.temporal.formal_worker_protocol import (
+        SEARCH_SOURCE_PATHS,
+        SearchSourceEntry,
+        search_source_inventory_sha256,
+    )
+
+    entries = []
+    try:
+        for logical_path in SEARCH_SOURCE_PATHS:
+            path = repository_root / logical_path
+            information = path.lstat()
+            attributes = getattr(information, "st_file_attributes", 0)
+            if (
+                path.is_symlink()
+                or attributes & 0x00000400
+                or not stat.S_ISREG(information.st_mode)
+            ):
+                return None
+            raw = path.read_bytes()
+            if len(raw) != information.st_size:
+                return None
+            entries.append(
+                SearchSourceEntry(
+                    logical_path=logical_path,
+                    git_mode="100644",
+                    byte_size=len(raw),
+                    sha256=hashlib.sha256(raw).hexdigest(),
+                )
+            )
+    except Exception:
+        return None
+    return search_source_inventory_sha256(tuple(entries))
+
+
+def _formal_worker_source_inventory(repository_root: Path) -> str | None:
+    from mdcp.temporal.formal_worker_protocol import (
+        FORMAL_WORKER_SOURCE_PATHS,
+        FormalWorkerSourceEntry,
+        formal_worker_inventory_sha256,
+    )
+
+    entries = []
+    try:
+        for logical_path in FORMAL_WORKER_SOURCE_PATHS:
+            path = repository_root / logical_path
+            information = path.lstat()
+            attributes = getattr(information, "st_file_attributes", 0)
+            if (
+                path.is_symlink()
+                or attributes & 0x00000400
+                or not stat.S_ISREG(information.st_mode)
+            ):
+                return None
+            raw = path.read_bytes()
+            if len(raw) != information.st_size:
+                return None
+            entries.append(
+                FormalWorkerSourceEntry(
+                    logical_path=logical_path,
+                    sha256=hashlib.sha256(raw).hexdigest(),
+                )
+            )
+    except Exception:
+        return None
+    return formal_worker_inventory_sha256(tuple(entries))
+
+
+def build_worker_runtime_guard(
+    repository_root: Path,
+    source_inventory_sha256: str,
+    expected_formal_worker_inventory_sha256: str,
+) -> _WorkerRuntimeGuard:
+    """Create the fixed worker guard without Git, callbacks, or probe injection."""
+    if (
+        not isinstance(repository_root, Path)
+        or type(source_inventory_sha256) is not str
+        or len(source_inventory_sha256) != 64
+        or source_inventory_sha256 == "0" * 64
+        or type(expected_formal_worker_inventory_sha256) is not str
+        or len(expected_formal_worker_inventory_sha256) != 64
+        or expected_formal_worker_inventory_sha256 == "0" * 64
+    ):
+        raise ValueError("WORKER_RUNTIME_GUARD_INVALID")
+    current_source = _worker_source_inventory(repository_root)
+    current_worker = _formal_worker_source_inventory(repository_root)
+    if (
+        current_source != source_inventory_sha256
+        or current_worker != expected_formal_worker_inventory_sha256
+    ):
+        raise ValueError("WORKER_RUNTIME_GUARD_INVALID")
+    return _WorkerRuntimeGuard(
+        repository_root=repository_root,
+        source_inventory_sha256=source_inventory_sha256,
+        expected_formal_worker_inventory_sha256=expected_formal_worker_inventory_sha256,
+        start_ns=time.monotonic_ns(),
+    )
 
 
 def _make_runtime_guard_type() -> tuple[
@@ -292,10 +447,18 @@ def _windows_peak_process_bytes() -> int | None:
     try:
         counters = ProcessMemoryCounters()
         counters.cb = ctypes.sizeof(counters)
-        process = ctypes.windll.kernel32.GetCurrentProcess()
-        success = ctypes.windll.psapi.GetProcessMemoryInfo(
-            process, ctypes.byref(counters), counters.cb
+        get_current_process = ctypes.windll.kernel32.GetCurrentProcess
+        get_current_process.argtypes = ()
+        get_current_process.restype = ctypes.c_void_p
+        get_process_memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+        get_process_memory_info.argtypes = (
+            ctypes.c_void_p,
+            ctypes.POINTER(ProcessMemoryCounters),
+            ctypes.c_ulong,
         )
+        get_process_memory_info.restype = ctypes.c_int
+        process = get_current_process()
+        success = get_process_memory_info(process, ctypes.byref(counters), counters.cb)
     except (AttributeError, OSError):
         return None
     return int(counters.PeakWorkingSetSize) if success else None

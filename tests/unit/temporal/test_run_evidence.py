@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import ast
 import base64
-import copy
-import ctypes
 import json
 import os
 import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
+import mdcp.temporal.formal_worker as formal_worker
 import mdcp.temporal.formal_worker_protocol as worker_protocol
 import mdcp.temporal.run_evidence as run_evidence
 from mdcp.common.canonical import canonicalize_json, parse_json_bytes
@@ -175,327 +175,186 @@ def write_untrusted_container(tmp_path: Path, raw: bytes) -> Path:
     return path
 
 
-def _isolated_mutation_factory_adapter(
-    fake_ctypes: object,
-    *,
-    retained_error: str | None = None,
-    binding_overrides: dict[str, object] | None = None,
-    function_overrides: dict[str, str] | None = None,
-    exports: tuple[str, ...] = (),
-) -> dict[str, object]:
-    """Extract the deleted factory and append an in-memory-only test adapter."""
+def _module_functions(tree: ast.Module) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    return {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
 
-    source_path = Path(run_evidence.__file__)
-    tree = ast.parse(source_path.read_bytes(), filename=str(source_path))
-    factories = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_make_evidence_mutation_surface"
-    ]
-    assert len(factories) == 1
-    binding_assignments = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id == "_MUTATION_BINDINGS"
-    ]
-    assert len(binding_assignments) == 1
-    factory = copy.deepcopy(factories[0])
-    if retained_error is not None:
-        retained = [
+
+def _ordered_direct_calls(function: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...]:
+    calls = sorted(
+        (
             node
-            for node in ast.walk(factory)
-            if isinstance(node, ast.FunctionDef) and node.name == "_retained_destination"
-        ]
-        assert len(retained) == 1
-        retained[0].body = [
-            ast.Raise(
-                exc=ast.Call(
-                    func=ast.Name("_PublicationError", ast.Load()),
-                    args=[ast.Constant(retained_error)],
-                    keywords=[],
-                )
-            )
-        ]
-    for function_name, body_source in (function_overrides or {}).items():
-        matches = [
-            node
-            for node in ast.walk(factory)
-            if isinstance(node, ast.FunctionDef) and node.name == function_name
-        ]
-        assert len(matches) == 1
-        matches[0].body = ast.parse(body_source).body
-    returns = [
-        node
-        for node in ast.walk(factory)
-        if isinstance(node, ast.Return)
-        and isinstance(node.value, ast.Tuple)
-        and [item.id for item in node.value.elts if isinstance(item, ast.Name)]
-        == ["write_synthetic", "execute"]
-    ]
-    assert len(returns) == 1
-    returns[0].value.elts.append(
-        ast.Dict(
-            keys=[
-                ast.Constant("nt_relative_file"),
-                ast.Constant("classify_marker_observation"),
-                ast.Constant("consume_marker"),
-                ast.Constant("attempt_states"),
-                *(ast.Constant(name) for name in exports),
-            ],
-            values=[
-                ast.Name("_windows_nt_relative_file", ast.Load()),
-                ast.Name("_classify_marker_observation", ast.Load()),
-                ast.Name("consume_marker", ast.Load()),
-                ast.Name("attempt_states", ast.Load()),
-                *(ast.Name(name, ast.Load()) for name in exports),
-            ],
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        ),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
+    return tuple(node.func.id for node in calls)
+
+
+def test_supervisor_has_only_transport_synthetic_and_verifier_authority() -> None:
+    supervisor_source = Path(run_evidence.__file__).read_text(encoding="utf-8")
+    supervisor = ast.parse(supervisor_source)
+    functions = _module_functions(supervisor)
+
+    assert {
+        "execute_authorized_formal_development",
+        "_run_fixed_worker_transport",
+        "verify_formal_development_seal",
+    }.issubset(functions)
+    assert {
+        "_create_durable_marker",
+        "_execute_natural_run",
+        "_fit_natural_request",
+        "_formalize_natural",
+        "_encode_natural",
+    }.isdisjoint(functions)
+    synthetic_factory = functions["_make_evidence_mutation_surface"]
+    nested_definitions = {
+        node.name
+        for node in ast.walk(synthetic_factory)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    assert {
+        "consume_marker",
+        "execute",
+        "formal_operation",
+        "encode_natural",
+    }.isdisjoint(nested_definitions)
+    returns = [node for node in ast.walk(synthetic_factory) if isinstance(node, ast.Return)]
+    assert any(
+        isinstance(node.value, ast.Name) and node.value.id == "write_synthetic" for node in returns
+    )
+    assert "write_synthetic_bundle_no_clobber = _make_evidence_mutation_surface()" in (
+        supervisor_source
+    )
+    assert "del _make_evidence_mutation_surface" in supervisor_source
+    assert all(
+        not (
+            isinstance(node, ast.ImportFrom)
+            and node.module in {"mdcp.workload.dataset", "mdcp.workload.splits"}
         )
+        for node in ast.walk(supervisor)
     )
-    isolated_module = ast.fix_missing_locations(
-        ast.Module(body=[copy.deepcopy(binding_assignments[0]), factory], type_ignores=[])
-    )
-    module_name = f"_mdcp_isolated_run_evidence_{id(fake_ctypes)}"
-    isolated = ModuleType(module_name)
-    namespace = isolated.__dict__
-    namespace.update(vars(run_evidence))
-    namespace.update(
-        {
-            "__name__": module_name,
-            "ctypes": fake_ctypes,
+    assert not any(
+        isinstance(node, ast.Name)
+        and node.id
+        in {
+            "load_uci_development_archive",
+            "split_development_rows",
+            "build_estimator",
+            "consume_marker",
         }
+        for node in ast.walk(supervisor)
     )
-    namespace.update(binding_overrides or {})
-    sys.modules[module_name] = isolated
+
+
+def test_dedicated_worker_owns_exact_marker_hash_and_natural_run_order() -> None:
+    worker_path = REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py"
+    worker = ast.parse(worker_path.read_text(encoding="utf-8"))
+    functions = _module_functions(worker)
+
+    assert {
+        "_create_durable_marker",
+        "_hash_archive",
+        "_execute_natural_run",
+        "_retained_destination",
+        "_publish_retained",
+        "_publish_private",
+        "_publish_terminal",
+        "_execute_worker_request",
+    }.issubset(functions)
+    calls = _ordered_direct_calls(functions["_execute_worker_request"])
+    assert calls.count("_create_durable_marker") == 1
+    assert calls.count("_hash_archive") == 1
+    assert calls.count("_execute_natural_run") == 1
+    assert calls.index("_create_durable_marker") < calls.index("_hash_archive")
+    assert calls.index("_hash_archive") < calls.index("_execute_natural_run")
+
+
+def test_dedicated_worker_marker_is_exclusive_durable_and_nonretrying() -> None:
+    worker_path = REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py"
+    worker = ast.parse(worker_path.read_text(encoding="utf-8"))
+    functions = _module_functions(worker)
+    publisher_calls = _ordered_direct_calls(functions["_publish_retained"])
+    assert publisher_calls.count("_windows_nt_relative_file") == 1
+    assert publisher_calls.count("_windows_write_all") == 1
+    assert publisher_calls.count("_windows_flush") == 1
+    assert publisher_calls.count("_revalidate_retained_ancestors") == 1
+    assert publisher_calls.count("_revalidate_final_handle") == 1
+    assert publisher_calls.count("_windows_close") == 1
+    assert publisher_calls.index("_windows_nt_relative_file") < publisher_calls.index(
+        "_windows_write_all"
+    )
+    assert publisher_calls.index("_windows_write_all") < publisher_calls.index("_windows_flush")
+    assert publisher_calls.index("_windows_flush") < publisher_calls.index(
+        "_revalidate_retained_ancestors"
+    )
+    assert publisher_calls.index("_revalidate_retained_ancestors") < publisher_calls.index(
+        "_revalidate_final_handle"
+    )
+
+    execute_calls = _ordered_direct_calls(functions["_execute_worker_request"])
+    assert execute_calls.count("_create_durable_marker") == 1
+    assert execute_calls.count("_execute_natural_run") == 1
+
+
+def test_dedicated_worker_keeps_loader_and_model_imports_post_marker() -> None:
+    worker_path = REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py"
+    worker = ast.parse(worker_path.read_text(encoding="utf-8"))
+    functions = _module_functions(worker)
+    natural = functions["_execute_natural_run"]
+    imported_modules = {
+        node.module
+        for node in ast.walk(natural)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert {
+        "mdcp.temporal.folds",
+        "mdcp.temporal.runner",
+        "mdcp.temporal.runtime_guards",
+        "mdcp.temporal.trials",
+        "mdcp.workload.dataset",
+        "mdcp.workload.splits",
+    }.issubset(imported_modules)
+
+    execute_calls = _ordered_direct_calls(functions["_execute_worker_request"])
+    assert execute_calls.index("_create_durable_marker") < execute_calls.index(
+        "_execute_natural_run"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="authoritative retained publication is Windows-only")
+def test_fix_round_one_i1_retained_boundary_blocks_ancestor_substitution(
+    tmp_path: Path,
+) -> None:
+    publication = (tmp_path / "publication").absolute()
+    publication.mkdir()
+    candidate = publication / "private.json"
+    retained = formal_worker._retained_destination(candidate)
+    moved = publication.with_name("publication-original")
+    substituted = False
+    replacement_written = False
     try:
-        exec(compile(isolated_module, str(source_path), "exec"), namespace)
-        result = namespace["_make_evidence_mutation_surface"]()
+        try:
+            publication.rename(moved)
+        except OSError:
+            pass
+        else:
+            substituted = True
+            publication.mkdir()
+        with suppress(formal_worker._PublicationError):
+            formal_worker._publish_retained(retained, b"private")
+        replacement_written = substituted and candidate.exists()
     finally:
-        sys.modules.pop(module_name, None)
-    assert len(result) == 3
-    return result[2]
+        assert formal_worker._close_destination(retained)
 
-
-class _FakeNtCreateFile:
-    def __init__(
-        self,
-        *,
-        ntstatus: int,
-        iosb_status: int,
-        information: int,
-        handle: int | None,
-    ) -> None:
-        self.ntstatus = ntstatus
-        self.iosb_status = iosb_status
-        self.information = information
-        self.handle = handle
-        self.calls = 0
-        self.argtypes: object = None
-        self.restype: object = None
-
-    def __call__(self, output: object, *_arguments: object) -> int:
-        self.calls += 1
-        io_status = _arguments[2]
-        if self.handle is not None:
-            output._obj.value = self.handle
-        io_status._obj.StatusOrPointer.Status = self.iosb_status
-        io_status._obj.Information = self.information
-        return self.ntstatus
-
-
-class _CtypesProxy:
-    def __init__(self, nt_create_file: object) -> None:
-        self.windll = SimpleNamespace(
-            kernel32=SimpleNamespace(),
-            ntdll=SimpleNamespace(NtCreateFile=nt_create_file),
-        )
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(ctypes, name)
-
-
-@pytest.mark.parametrize(
-    ("ntstatus", "iosb_status", "information", "handle"),
-    (
-        (0, 0, 2, 101),
-        (-1073741771, 0, 0, None),
-        (-1073741771, 0, 0, 202),
-        (0, 0, 2, None),
-        (0, 0, 1, 303),
-        (0, -1, 2, 404),
-        (259, 0, 2, 505),
-    ),
-)
-def test_isolated_factory_preserves_exact_nt_create_observation(
-    ntstatus: int,
-    iosb_status: int,
-    information: int,
-    handle: int | None,
-) -> None:
-    fake = _FakeNtCreateFile(
-        ntstatus=ntstatus,
-        iosb_status=iosb_status,
-        information=information,
-        handle=handle,
-    )
-    adapter = _isolated_mutation_factory_adapter(_CtypesProxy(fake))
-
-    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
-
-    assert observed == (True, ntstatus, iosb_status, information, handle)
-    assert fake.calls == 1
-
-
-def test_isolated_factory_records_pre_call_resolution_failure_without_a_create() -> None:
-    class MissingNtDll:
-        @property
-        def NtCreateFile(self) -> object:
-            raise OSError("unavailable")
-
-    proxy = _CtypesProxy(None)
-    proxy.windll.ntdll = MissingNtDll()
-    adapter = _isolated_mutation_factory_adapter(proxy)
-
-    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
-
-    assert observed == (False, None, None, None, None)
-
-
-def test_nt_wrapper_closes_preparation_exception() -> None:
-    class PreparationFailureProxy(_CtypesProxy):
-        def create_unicode_buffer(self, *_arguments: object) -> object:
-            raise OSError("synthetic preparation failure")
-
-    adapter = _isolated_mutation_factory_adapter(PreparationFailureProxy(None))
-
-    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
-
-    assert observed == (False, None, None, None, None)
-
-
-def test_nt_wrapper_closes_post_call_iosb_observation_exception() -> None:
-    class ExplodingIoStatus:
-        Information = 2
-
-        @property
-        def StatusOrPointer(self) -> object:
-            raise OSError("synthetic IOSB observation failure")
-
-    class SuccessfulNtCreate:
-        argtypes: object = None
-        restype: object = None
-
-        def __call__(self, output: object, *_arguments: object) -> int:
-            output._obj.value = 606
-            return 0
-
-    class ByrefProxy(_CtypesProxy):
-        @staticmethod
-        def POINTER(_value: object) -> object:
-            return object
-
-        @staticmethod
-        def byref(value: object) -> object:
-            return SimpleNamespace(_obj=value)
-
-    adapter = _isolated_mutation_factory_adapter(
-        ByrefProxy(SuccessfulNtCreate()),
-        binding_overrides={"_WindowsIoStatusBlock": ExplodingIoStatus},
-    )
-
-    observed = adapter["nt_relative_file"](1, "marker", False, 2, 0, 2, 0x62)
-
-    assert observed == (True, 0, None, None, 606)
-
-
-@pytest.mark.parametrize(
-    ("entered", "status", "iosb", "information", "owned", "leaf", "expected"),
-    (
-        (False, None, None, None, None, "ABSENT", "PRECALL_FAILED"),
-        (False, None, None, None, None, "PRESENT", "COLLISION"),
-        (False, None, None, None, None, "INDETERMINATE", "INDETERMINATE"),
-        (True, -1073741771, 0, 0, None, "ABSENT", "COLLISION"),
-        (True, -1073741771, 0, 0, 202, "PRESENT", "INDETERMINATE"),
-        (True, 0, 0, 2, 101, "INDETERMINATE", "CREATED"),
-        (True, 0, 0, 2, None, "PRESENT", "INDETERMINATE"),
-        (True, 0, 0, 1, 303, "PRESENT", "INDETERMINATE"),
-        (True, 259, 0, 2, None, "ABSENT", "INDETERMINATE"),
-    ),
-)
-def test_marker_observation_matrix_is_closed(
-    entered: bool,
-    status: int | None,
-    iosb: int | None,
-    information: int | None,
-    owned: int | None,
-    leaf: str,
-    expected: str,
-) -> None:
-    adapter = _isolated_mutation_factory_adapter(ctypes)
-
-    result = adapter["classify_marker_observation"](entered, status, iosb, information, owned, leaf)
-
-    assert result == expected
-
-
-def test_marker_preflight_uncertainty_is_never_reported_as_retryable(tmp_path: Path) -> None:
-    adapter = _isolated_mutation_factory_adapter(ctypes, retained_error="TRUSTED_PARENT_REQUIRED")
-    authorization_sha256 = "9" * 64
-
-    result = adapter["consume_marker"](tmp_path, authorization_sha256, b"canonical-marker")
-
-    assert (result.create_entered, result.leaf_state, result.result) == (
-        False,
-        "INDETERMINATE",
-        "INDETERMINATE",
-    )
-    assert adapter["attempt_states"][authorization_sha256] == "UNKNOWN"
-
-
-def test_retained_publication_revalidates_ancestors_and_leaf_before_close() -> None:
-    source_path = Path(run_evidence.__file__)
-    tree = ast.parse(source_path.read_bytes(), filename=str(source_path))
-    factory = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_make_evidence_mutation_surface"
-    )
-    retained_ancestor = next(
-        node
-        for node in factory.body
-        if isinstance(node, ast.ClassDef) and node.name == "RetainedAncestor"
-    )
-    assert [
-        node.target.id
-        for node in retained_ancestor.body
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
-    ] == ["handle", "volume_serial_number", "file_index"]
-
-    for function_name in ("_publish_retained", "consume_marker"):
-        function = next(
-            node
-            for node in ast.walk(factory)
-            if isinstance(node, ast.FunctionDef) and node.name == function_name
-        )
-        ordered_calls = [
-            node.func.id
-            for node in sorted(
-                (item for item in ast.walk(function) if isinstance(item, ast.Call)),
-                key=lambda item: (item.lineno, item.col_offset),
-            )
-            if isinstance(node.func, ast.Name)
-        ]
-        assert "_windows_flush" in ordered_calls
-        assert "_revalidate_retained_ancestors" in ordered_calls
-        assert "_revalidate_final_handle" in ordered_calls
-        assert ordered_calls.index("_windows_flush") < ordered_calls.index(
-            "_revalidate_retained_ancestors"
-        )
-        assert ordered_calls.index("_revalidate_retained_ancestors") < ordered_calls.index(
-            "_revalidate_final_handle"
-        )
+    assert not replacement_written
+    if moved.exists() and (moved / "private.json").exists():
+        assert (moved / "private.json").read_bytes() == b"private"
 
 
 @pytest.mark.parametrize(
@@ -507,7 +366,8 @@ def test_retained_publication_revalidates_ancestors_and_leaf_before_close() -> N
         ((True, 259, 0, 0, 202), 101, "PUBLICATION_FAILED", (202, 101)),
     ),
 )
-def test_retained_destination_closes_every_observed_handle(
+def test_fix_round_one_i1_retained_destination_closes_anomalous_handles(
+    monkeypatch: pytest.MonkeyPatch,
     nt_result: tuple[bool, int, int, int, int],
     failing_handle: int | None,
     expected_error: str,
@@ -515,220 +375,133 @@ def test_retained_destination_closes_every_observed_handle(
 ) -> None:
     closes: list[int] = []
 
-    def test_close(handle: int) -> bool:
+    def close(handle: int) -> bool:
         closes.append(handle)
         return handle != failing_handle
 
-    adapter = _isolated_mutation_factory_adapter(
-        ctypes,
-        binding_overrides={
-            "test_ancestors": [(101, (1, 2, 3), "C:\\")],
-            "test_close": test_close,
-            "test_nt_result": nt_result,
-        },
-        function_overrides={
-            "_absolute_destination": "return destination",
-            "_windows_open_trusted_ancestors": "return test_ancestors",
-            "_windows_nt_relative_file": "return test_nt_result",
-            "_windows_close": "return test_close(handle)",
-        },
-        exports=("_retained_destination",),
+    monkeypatch.setattr(
+        formal_worker,
+        "_windows_open_trusted_ancestors",
+        lambda _path: [(101, (1, 2, 3), "C:\\")],
     )
+    monkeypatch.setattr(formal_worker, "_windows_nt_relative_file", lambda *_args: nt_result)
+    monkeypatch.setattr(formal_worker, "_windows_close", close)
 
-    with pytest.raises(ValueError, match=f"^{expected_error}$"):
-        adapter["_retained_destination"](Path("C:/outside/result.json"))
+    with pytest.raises(formal_worker._PublicationError, match=f"^{expected_error}$"):
+        formal_worker._retained_destination(Path(r"C:\outside\result.json"))
 
     assert tuple(closes) == expected_closes
 
 
-@pytest.mark.parametrize(
-    ("close_behavior", "expected_error"),
-    (
-        ("pass", "TRUSTED_PARENT_REQUIRED"),
-        ("false", "PUBLICATION_FAILED"),
-        ("raise", "PUBLICATION_FAILED"),
-    ),
-)
-def test_trusted_ancestor_cleanup_owns_anomalous_nonnull_handle_before_validation(
-    close_behavior: str,
-    expected_error: str,
-) -> None:
-    closes: list[int] = []
-
-    def test_close(handle: int) -> bool:
-        closes.append(handle)
-        if close_behavior == "raise":
-            raise OSError("synthetic close failure")
-        return close_behavior != "false"
-
-    adapter = _isolated_mutation_factory_adapter(
-        ctypes,
-        binding_overrides={"test_close": test_close},
-        function_overrides={
-            "_windows_create_file": "return (101, 0)",
-            "_windows_file_information": (
-                "return (_WINDOWS_FILE_ATTRIBUTE_DIRECTORY, (1, 0, handle))"
-            ),
-            "_windows_normalized_handle_name": "return 'trusted'",
-            "_windows_names_equal": "return True",
-            "_windows_nt_relative_file": "return (True, 259, 0, 0, 202)",
-            "_windows_close": "return test_close(handle)",
-        },
-        exports=("_windows_open_trusted_ancestors",),
-    )
-
-    with pytest.raises(ValueError, match=f"^{expected_error}$"):
-        adapter["_windows_open_trusted_ancestors"](Path("C:/root/parent/result.json"))
-
-    assert closes == [202, 101]
-
-
-@pytest.mark.parametrize("close_behavior", ("pass", "false", "raise"))
-def test_marker_probe_anomalous_handle_is_closed_and_never_proves_absence(
-    close_behavior: str,
-) -> None:
-    closes: list[int] = []
-
-    def test_close(handle: int) -> bool:
-        closes.append(handle)
-        if close_behavior == "raise":
-            raise OSError("synthetic close failure")
-        return close_behavior != "false"
-
-    adapter = _isolated_mutation_factory_adapter(
-        ctypes,
-        binding_overrides={"test_close": test_close},
-        function_overrides={
-            "_windows_nt_relative_file": "return (False, -1073741772, 0, 0, 202)",
-            "_windows_close": "return test_close(handle)",
-        },
-        exports=("_marker_leaf_state",),
-    )
-    destination = SimpleNamespace(parent_handle=101, leaf_name="marker.json")
-
-    assert adapter["_marker_leaf_state"](destination) == "INDETERMINATE"
-    assert closes == [202]
-
-
-def test_clean_precall_keeps_in_progress_until_outer_pair_close_resolves(
-    tmp_path: Path,
-) -> None:
-    destination = SimpleNamespace(
-        parent_handle=101,
-        leaf_name="marker.json",
-        absolute_path=tmp_path / "marker.json",
-        ancestors=(SimpleNamespace(handle=101, volume_serial_number=1),),
+def _fix_round_one_destination(path: Path, handle: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        absolute_path=path,
+        leaf_name=path.name,
+        ancestors=(SimpleNamespace(handle=handle, volume_serial_number=1, file_index=2),),
+        parent_handle=handle,
+        created=False,
         closed=False,
     )
-    adapter = _isolated_mutation_factory_adapter(
-        ctypes,
-        binding_overrides={"test_destination": destination},
-        function_overrides={
-            "_retained_destination": "return test_destination",
-            "_windows_nt_relative_file": "return (False, None, None, None, None)",
-            "_marker_leaf_state": "return 'ABSENT'",
-            "close_destination": "return True",
-        },
-    )
-    authorization_sha256 = "8" * 64
-
-    first = adapter["consume_marker"](
-        tmp_path,
-        authorization_sha256,
-        b"canonical-marker",
-    )
-    second = adapter["consume_marker"](
-        tmp_path,
-        authorization_sha256,
-        b"canonical-marker",
-    )
-
-    assert first.result == "PRECALL_FAILED"
-    assert adapter["attempt_states"][authorization_sha256] == "IN_PROGRESS"
-    assert second.result == "INDETERMINATE"
 
 
-@pytest.mark.parametrize("close_behavior", ("pass", "false", "raise"))
-def test_created_marker_exception_closes_owned_leaf_and_retained_ancestors(
+@pytest.mark.parametrize("close_behavior", ("false", "raise"))
+def test_fix_round_one_i1_publish_close_uncertainty_never_path_cleans(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     close_behavior: str,
 ) -> None:
-    closes: list[int] = []
+    destination = _fix_round_one_destination(tmp_path / "private.json", 101)
+    cleanup_calls: list[int] = []
 
-    def test_close(handle: int) -> bool:
-        closes.append(handle)
+    monkeypatch.setattr(
+        formal_worker,
+        "_windows_nt_relative_file",
+        lambda *_args: (True, 0, 0, 2, 202),
+    )
+    monkeypatch.setattr(formal_worker, "_windows_file_information", lambda _handle: (0, (1, 2, 3)))
+    monkeypatch.setattr(formal_worker, "_windows_normalized_handle_name", lambda _handle: "trusted")
+    monkeypatch.setattr(formal_worker, "_windows_names_equal", lambda *_args: True)
+    monkeypatch.setattr(formal_worker, "_windows_write_all", lambda *_args: None)
+    monkeypatch.setattr(formal_worker, "_windows_flush", lambda _handle: None)
+    monkeypatch.setattr(formal_worker, "_revalidate_retained_ancestors", lambda _item: None)
+    monkeypatch.setattr(formal_worker, "_revalidate_final_handle", lambda *_args: None)
+
+    def close(_handle: int) -> bool:
         if close_behavior == "raise":
-            raise OSError("synthetic close failure")
-        return close_behavior != "false"
+            raise OSError("synthetic close uncertainty")
+        return False
 
-    destination = SimpleNamespace(
-        parent_handle=101,
-        leaf_name="marker.json",
-        absolute_path=tmp_path / "marker.json",
-        ancestors=(SimpleNamespace(handle=101, volume_serial_number=1),),
-        closed=False,
-    )
-    adapter = _isolated_mutation_factory_adapter(
-        ctypes,
-        binding_overrides={
-            "test_close": test_close,
-            "test_destination": destination,
-        },
-        function_overrides={
-            "_retained_destination": "return test_destination",
-            "_windows_nt_relative_file": "return (True, 0, 0, 2, 202)",
-            "_windows_file_information": ("raise _PublicationError('PUBLICATION_FAILED')"),
-            "_windows_close": "return test_close(handle)",
-        },
-    )
-    authorization_sha256 = "9" * 64
-
-    result = adapter["consume_marker"](
-        tmp_path,
-        authorization_sha256,
-        b"canonical-marker",
+    monkeypatch.setattr(formal_worker, "_windows_close", close)
+    monkeypatch.setattr(
+        formal_worker,
+        "_windows_set_delete_disposition",
+        lambda handle: cleanup_calls.append(handle) or True,
+        raising=False,
     )
 
-    assert (result.result, result.leaf_state) == ("INDETERMINATE", "PRESENT")
-    assert adapter["attempt_states"][authorization_sha256] == "UNKNOWN"
-    assert closes == [202, 101]
+    with pytest.raises(formal_worker._PublicationError, match="^PUBLICATION_FAILED$"):
+        formal_worker._publish_retained(destination, b"private")
+
+    assert cleanup_calls == []
 
 
-def test_production_factory_is_deleted_and_exposes_exactly_two_wrappers() -> None:
-    source = Path(run_evidence.__file__).read_text(encoding="utf-8")
-    assert source.count("windll.ntdll.NtCreateFile") == 1
-    assert "FlushFileBuffers(parent_handle)" not in source
-    assert not hasattr(run_evidence, "_make_evidence_mutation_surface")
-    assert not hasattr(run_evidence, "_MUTATION_BINDINGS")
-    assert not hasattr(run_evidence, "RetainedDestination")
-    assert not hasattr(run_evidence, "MarkerAttempt")
+def test_fix_round_one_i1_private_first_terminal_last_and_pair_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = _fix_round_one_destination(tmp_path / "private.json", 101)
+    terminal = _fix_round_one_destination(tmp_path / "private.json.public.json", 102)
+    pair = formal_worker._RetainedPublicationPair(private=private, terminal=terminal)
+    publications: list[str] = []
+    closes: list[int] = []
+    monkeypatch.setattr(
+        formal_worker,
+        "_publish_retained",
+        lambda destination, _content: publications.append(destination.leaf_name),
+    )
+    monkeypatch.setattr(
+        formal_worker,
+        "_windows_close",
+        lambda handle: closes.append(handle) or True,
+    )
+
+    with pytest.raises(formal_worker._PublicationError, match="^PUBLICATION_FAILED$"):
+        formal_worker._publish_terminal(pair, b"terminal")
+    formal_worker._publish_private(pair, b"private")
+    with pytest.raises(formal_worker._PublicationError, match="^PUBLICATION_FAILED$"):
+        formal_worker._publish_private(pair, b"private-again")
+    formal_worker._publish_terminal(pair, b"terminal")
+    assert formal_worker._close_pair(pair)
+
+    assert publications == ["private.json", "private.json.public.json"]
+    assert closes == [102, 101]
 
 
-@pytest.mark.skipif(os.name != "nt", reason="formal marker publication is Windows-only")
-def test_isolated_factory_consumes_one_marker_under_eight_callers(tmp_path: Path) -> None:
-    adapter = _isolated_mutation_factory_adapter(ctypes)
-    consumption_root = (tmp_path / "consumption").absolute()
-    consumption_root.mkdir()
-    authorization_sha256 = "9" * 64
-    marker_bytes = canonicalize_json({"authorization_sha256": authorization_sha256})
+@pytest.mark.skipif(os.name != "nt", reason="authoritative marker publication is Windows-only")
+def test_fix_round_one_i1_marker_is_one_shot_under_eight_retained_boundaries(
+    tmp_path: Path,
+) -> None:
+    consumption = (tmp_path / "consumption").absolute()
+    consumption.mkdir()
+    marker_path = consumption / f"{'9' * 64}.consumed.json"
+    marker_bytes = canonicalize_json({"authorization_sha256": "9" * 64})
+    destinations = tuple(formal_worker._retained_destination(marker_path) for _ in range(8))
+
+    def publish(destination: object) -> str:
+        try:
+            formal_worker._publish_retained(destination, marker_bytes)
+        except formal_worker._PublicationError as error:
+            return str(error)
+        finally:
+            assert formal_worker._close_destination(destination)
+        return "CREATED"
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        outcomes = tuple(
-            pool.map(
-                lambda _: adapter["consume_marker"](
-                    consumption_root, authorization_sha256, marker_bytes
-                ),
-                range(8),
-            )
-        )
+        results = tuple(pool.map(publish, destinations))
 
-    assert sum(item.result == "CREATED" for item in outcomes) == 1
-    assert all(item.result in {"CREATED", "COLLISION", "INDETERMINATE"} for item in outcomes)
-    assert adapter["attempt_states"][authorization_sha256] == "CONSUMED"
-    marker_path = consumption_root / f"{authorization_sha256}.consumed.json"
+    assert results.count("CREATED") == 1
+    assert all(result in {"CREATED", "DESTINATION_EXISTS"} for result in results)
     assert marker_path.read_bytes() == marker_bytes
-    repeated = adapter["consume_marker"](consumption_root, authorization_sha256, marker_bytes)
-    assert repeated.result == "COLLISION"
 
 
 @pytest.mark.parametrize(

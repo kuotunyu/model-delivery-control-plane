@@ -357,26 +357,20 @@ def _assert_single_factory_and_cli_edge(run_source: str, cli_source: str) -> Non
     assert len(factories) == 1
     factory = factories[0]
     assert not any(isinstance(node, ast.Global) for node in ast.walk(factory))
-    nonlocal_names = {
-        name for node in ast.walk(factory) if isinstance(node, ast.Nonlocal) for name in node.names
-    }
-    assert nonlocal_names == {"exit_attempted", "pre_seal_attempted"}
+    assert not any(isinstance(node, ast.Nonlocal) for node in ast.walk(factory))
 
     nested_functions = {
         node.name
         for node in factory.body
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
-    assert {"write_synthetic", "execute", "formal_operation"}.issubset(nested_functions)
+    assert "write_synthetic" in nested_functions
+    assert {"execute", "formal_operation", "encode_natural"}.isdisjoint(nested_functions)
     factory_returns = [node for node in factory.body if isinstance(node, ast.Return)]
     assert len(factory_returns) == 1
     returned = factory_returns[0].value
-    assert isinstance(returned, ast.Tuple)
-    assert tuple(element.id for element in returned.elts if isinstance(element, ast.Name)) == (
-        "write_synthetic",
-        "execute",
-    )
-    assert len(returned.elts) == 2
+    assert isinstance(returned, ast.Name)
+    assert returned.id == "write_synthetic"
 
     factory_assignment = [
         node
@@ -388,11 +382,8 @@ def _assert_single_factory_and_cli_edge(run_source: str, cli_source: str) -> Non
     ]
     assert len(factory_assignment) == 1
     target = factory_assignment[0].targets
-    assert len(target) == 1 and isinstance(target[0], ast.Tuple)
-    assert tuple(element.id for element in target[0].elts if isinstance(element, ast.Name)) == (
-        "write_synthetic_bundle_no_clobber",
-        "_retired_in_process_formal_operation",
-    )
+    assert len(target) == 1 and isinstance(target[0], ast.Name)
+    assert target[0].id == "write_synthetic_bundle_no_clobber"
     deleted = {
         target.id
         for node in run_tree.body
@@ -400,11 +391,7 @@ def _assert_single_factory_and_cli_edge(run_source: str, cli_source: str) -> Non
         for target in node.targets
         if isinstance(target, ast.Name)
     }
-    assert {
-        "_make_evidence_mutation_surface",
-        "_MUTATION_BINDINGS",
-        "_retired_in_process_formal_operation",
-    }.issubset(deleted)
+    assert {"_make_evidence_mutation_surface", "_MUTATION_BINDINGS"}.issubset(deleted)
 
     for node in ast.walk(factory):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -438,11 +425,7 @@ def _assert_single_factory_and_cli_edge(run_source: str, cli_source: str) -> Non
     ):
         parent = factory_parents[reference]
         direct_callee = isinstance(parent, ast.Call) and parent.func is reference
-        exact_factory_return = (
-            isinstance(parent, ast.Tuple)
-            and factory_parents.get(parent) is factory_returns[0]
-            and reference.id in {"write_synthetic", "execute"}
-        )
+        exact_factory_return = parent is factory_returns[0] and reference.id == "write_synthetic"
         assert direct_callee or exact_factory_return
 
     dispatches = [
@@ -1080,18 +1063,18 @@ def test_structural_proof_rejects_wildcard_cli_dispatch(module: str) -> None:
 @pytest.mark.parametrize(
     "escape",
     (
-        '    attempt_states["writer"] = publish_private\n',
-        "    execute.publisher = publish_private\n",
-        "    leaked_writer = publish_private\n",
-        '    setattr(execute, "publisher", publish_private)\n',
-        '    attempt_states.update({"writer": publish_private})\n',
-        "    def leaked_writer():\n        return publish_private\n",
+        "    write_synthetic.publisher = publish_synthetic\n",
+        "    leaked_writer = publish_synthetic\n",
+        '    setattr(write_synthetic, "publisher", publish_synthetic)\n',
+        '    leaked_registry = {"writer": publish_synthetic}\n',
+        "    leaked_alias = write_synthetic\n",
+        "    def leaked_writer():\n        return publish_synthetic\n",
     ),
 )
 def test_factory_escape_proof_rejects_registry_attribute_and_alias_sinks(escape: str) -> None:
     run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
     cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
-    needle = "    return write_synthetic, execute\n"
+    needle = "    return write_synthetic\n"
     assert run_source.count(needle) == 1
     mutated = run_source.replace(needle, f"{escape}{needle}", 1)
     try:
@@ -1145,3 +1128,24 @@ def test_allowed_factory_results_are_only_the_two_closed_wrappers() -> None:
         "(destination: 'ClosurePath', bundle: 'PrivateRunBundle') -> 'PrivateBundleIdentity'",
         "(request: 'FormalDevelopmentRequest') -> 'FormalDevelopmentOutcome'",
     )
+
+
+def test_forbidden_worker_capability_has_no_command_callback_or_retry_surface() -> None:
+    import mdcp.temporal.formal_worker as formal_worker
+
+    for name in ("main", "_execute_worker_request", "_execute_natural_run"):
+        function = getattr(formal_worker, name)
+        parameters = set(inspect.signature(function).parameters)
+        assert parameters.isdisjoint(
+            {
+                "callback",
+                "command",
+                "executor",
+                "factory",
+                "loader",
+                "module",
+                "registry",
+                "retry",
+                "stream",
+            }
+        )

@@ -381,10 +381,23 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("os", None),
             ("pathlib", "Path"),
             ("pathlib", "PurePosixPath"),
+            ("stat", None),
             ("subprocess", None),
             ("sys", None),
             ("time", None),
             ("typing", "Literal"),
+            ("mdcp.temporal.formal_worker_protocol", "FORMAL_WORKER_SOURCE_PATHS"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerSourceEntry"),
+            (
+                "mdcp.temporal.formal_worker_protocol",
+                "formal_worker_inventory_sha256",
+            ),
+            ("mdcp.temporal.formal_worker_protocol", "SEARCH_SOURCE_PATHS"),
+            ("mdcp.temporal.formal_worker_protocol", "SearchSourceEntry"),
+            (
+                "mdcp.temporal.formal_worker_protocol",
+                "search_source_inventory_sha256",
+            ),
         }
     ),
     "src/mdcp/temporal/runner.py": frozenset(
@@ -495,19 +508,67 @@ _FORMAL_IMPORT_ALLOWLIST = {
     "src/mdcp/temporal/formal_worker.py": frozenset(
         {
             ("__future__", "annotations"),
+            ("base64", "b64encode"),
+            ("ctypes", None),
+            ("ctypes", "wintypes"),
+            ("dataclasses", "asdict"),
+            ("dataclasses", "dataclass"),
+            ("dataclasses", "is_dataclass"),
+            ("datetime", "datetime"),
             ("hashlib", None),
+            ("mdcp.common.canonical", "canonicalize_json"),
+            ("mdcp.common.canonical", "parse_json_bytes"),
+            ("mdcp.common.digests", "sha256_hex"),
+            ("mdcp.common.enums", "GateVerdict"),
+            ("mdcp.temporal", "run_evidence"),
+            ("mdcp.temporal.completeness", "AdapterOutcome"),
+            ("mdcp.temporal.completeness", "LabelOutcome"),
+            ("mdcp.temporal.completeness", "PredictionOutcome"),
+            ("mdcp.temporal.folds", "load_fold_specs"),
+            ("mdcp.temporal.folds", "materialize_folds"),
             ("mdcp.temporal.formal_worker_protocol", "FORMAL_WORKER_SOURCE_PATHS"),
-            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerSourceEntry"),
-            ("mdcp.temporal.formal_worker_protocol", "formal_worker_inventory_sha256"),
-            ("mdcp.temporal.formal_worker_protocol", "MAX_WORKER_MESSAGE_BYTES"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalRunAuthorization"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerPrivateIdentity"),
             ("mdcp.temporal.formal_worker_protocol", "FormalWorkerResponse"),
+            ("mdcp.temporal.formal_worker_protocol", "FormalWorkerSourceEntry"),
+            ("mdcp.temporal.formal_worker_protocol", "MAX_WORKER_MESSAGE_BYTES"),
+            ("mdcp.temporal.formal_worker_protocol", "PRIVATE_LOGICAL_OUTPUTS"),
+            ("mdcp.temporal.formal_worker_protocol", "SEARCH_SOURCE_PATHS"),
+            ("mdcp.temporal.formal_worker_protocol", "SearchEvidenceIndex"),
+            ("mdcp.temporal.formal_worker_protocol", "SearchReceipt"),
+            ("mdcp.temporal.formal_worker_protocol", "SearchSourceEntry"),
             ("mdcp.temporal.formal_worker_protocol", "encode_formal_worker_response"),
+            ("mdcp.temporal.formal_worker_protocol", "formal_worker_inventory_sha256"),
             ("mdcp.temporal.formal_worker_protocol", "launch_profile_sha256"),
             ("mdcp.temporal.formal_worker_protocol", "parse_formal_worker_request"),
+            ("mdcp.temporal.formal_worker_protocol", "search_source_inventory_sha256"),
             ("mdcp.temporal.formal_worker_protocol", "worker_request_sha256"),
+            ("mdcp.temporal.run_evidence", "FormalDevelopmentSeal"),
+            ("mdcp.temporal.run_evidence", "PrivateFoldEvidence"),
+            ("mdcp.temporal.run_evidence", "PublicDevelopmentResult"),
+            ("mdcp.temporal.runner", "DevelopmentFoldResult"),
+            ("mdcp.temporal.runner", "DevelopmentRunBundle"),
+            ("mdcp.temporal.runner", "DevelopmentStateMachine"),
+            ("mdcp.temporal.runner", "EXACT_FOLD_IDS"),
+            ("mdcp.temporal.runner", "EXACT_TRIAL_IDS"),
+            ("mdcp.temporal.runner", "FitPhase"),
+            ("mdcp.temporal.runner", "_formal_groups"),
+            ("mdcp.temporal.runtime_guards", "RuntimeStage"),
+            ("mdcp.temporal.runtime_guards", "build_worker_runtime_guard"),
+            ("mdcp.temporal.trials", "_feature_names"),
+            ("mdcp.temporal.trials", "_materialize_features"),
+            ("mdcp.temporal.trials", "build_estimator"),
+            ("mdcp.temporal.trials", "canonical_trial_identity"),
+            ("mdcp.temporal.trials", "load_trial_specs"),
+            ("mdcp.temporal.trials", "training_rows_for_trial"),
+            ("mdcp.workload.dataset", "load_uci_development_archive"),
+            ("mdcp.workload.splits", "split_development_rows"),
+            ("os", None),
             ("pathlib", "Path"),
+            ("shutil", None),
             ("stat", None),
             ("sys", None),
+            ("unicodedata", None),
         }
     ),
     "src/mdcp/temporal/run_evidence.py": frozenset(
@@ -520,17 +581,11 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("dataclasses", "dataclass"),
             ("dataclasses", "field"),
             ("contextlib", "suppress"),
-            ("datetime", "datetime"),
             ("json", None),
             ("math", None),
             ("mdcp.common.canonical", "canonicalize_json"),
             ("mdcp.common.canonical", "parse_json_bytes"),
             ("mdcp.common.digests", "sha256_hex"),
-            ("mdcp.common.enums", "GateVerdict"),
-            ("mdcp.temporal.completeness", "AdapterOutcome"),
-            ("mdcp.temporal.completeness", "LabelOutcome"),
-            ("mdcp.temporal.completeness", "PredictionOutcome"),
-            ("mdcp.temporal.evaluation", "qualify_trial"),
             ("mdcp.temporal.evidence", "public_evidence_violations"),
             ("mdcp.temporal.formal_worker_protocol", "FORMAL_WORKER_SOURCE_PATHS"),
             ("mdcp.temporal.formal_worker_protocol", "FormalWorkerSourceEntry"),
@@ -556,41 +611,8 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("mdcp.temporal.formal_worker_protocol", "MAX_WORKER_MESSAGE_BYTES"),
             ("mdcp.temporal.formal_worker_protocol", "WORKER_STDOUT_PROBE_BYTES"),
             ("mdcp.temporal.formal_worker_protocol", "parse_formal_worker_response"),
-            ("mdcp.temporal.folds", "load_fold_specs"),
-            ("mdcp.temporal.folds", "materialize_folds"),
-            ("mdcp.temporal.runner", "DevelopmentRunBundle"),
-            ("mdcp.temporal.runner", "DevelopmentRunError"),
-            ("mdcp.temporal.runner", "EXACT_FOLD_IDS"),
             ("mdcp.temporal.runner", "EXACT_TRIAL_IDS"),
-            ("mdcp.temporal.runner", "FitLedger"),
-            ("mdcp.temporal.runner", "FitPhase"),
-            ("mdcp.temporal.runner", "_DevelopmentFoldResult"),
-            ("mdcp.temporal.runner", "_evaluate_trial"),
-            ("mdcp.temporal.runner", "_formal_groups"),
-            ("mdcp.temporal.runner", "_private_fold_evidence"),
-            ("mdcp.temporal.runner", "_process_fold"),
-            ("mdcp.temporal.runner", "_public_result"),
-            ("mdcp.temporal.runner", "_replay_digest"),
-            ("mdcp.temporal.runner", "_valid_fold_result"),
-            ("mdcp.temporal.runtime_guards", "RuntimeObservation"),
-            ("mdcp.temporal.runtime_guards", "RuntimeStage"),
-            ("mdcp.temporal.runtime_guards", "build_production_runtime_guard"),
-            ("mdcp.temporal.search_identity", "FormalRunAuthorization"),
-            ("mdcp.temporal.search_identity", "SearchReceipt"),
-            ("mdcp.temporal.search_identity", "verify_search_freeze"),
-            ("mdcp.temporal.selection", "ReplayFoldDigests"),
-            ("mdcp.temporal.selection", "ReplayResult"),
-            ("mdcp.temporal.selection", "ReplaySelectionSession"),
-            ("mdcp.temporal.selection", "SelectionDecision"),
-            ("mdcp.temporal.selection", "finalize_selection"),
-            ("mdcp.temporal.trials", "_feature_names"),
-            ("mdcp.temporal.trials", "_materialize_features"),
-            ("mdcp.temporal.trials", "build_estimator"),
             ("mdcp.temporal.trials", "canonical_trial_identity"),
-            ("mdcp.temporal.trials", "load_trial_specs"),
-            ("mdcp.temporal.trials", "training_rows_for_trial"),
-            ("mdcp.workload.dataset", "load_uci_development_archive"),
-            ("mdcp.workload.splits", "split_development_rows"),
             ("os", None),
             ("pathlib", "Path"),
             ("pathlib", "PurePosixPath"),
@@ -604,7 +626,6 @@ _FORMAL_IMPORT_ALLOWLIST = {
             ("stat", None),
             ("subprocess", None),
             ("sys", None),
-            ("threading", "Lock"),
             ("threading", "Event"),
             ("threading", "Thread"),
             ("time", None),
@@ -615,6 +636,32 @@ _FORMAL_IMPORT_ALLOWLIST = {
     ),
 }
 _SCOPED_IMPORT_ALLOWLIST = {
+    "src/mdcp/temporal/runtime_guards.py": {
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FORMAL_WORKER_SOURCE_PATHS",
+        ): frozenset({"_formal_worker_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FormalWorkerSourceEntry",
+        ): frozenset({"_formal_worker_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "formal_worker_inventory_sha256",
+        ): frozenset({"_formal_worker_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SEARCH_SOURCE_PATHS",
+        ): frozenset({"_worker_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SearchSourceEntry",
+        ): frozenset({"_worker_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "search_source_inventory_sha256",
+        ): frozenset({"_worker_source_inventory"}),
+    },
     "src/mdcp/temporal/run_evidence.py": {
         ("sys", None): frozenset({"_current_python_executable", "_supervisor_preflight"}),
         ("subprocess", None): frozenset({"_git_bytes", "_run_fixed_worker_transport"}),
@@ -691,37 +738,153 @@ _SCOPED_IMPORT_ALLOWLIST = {
     },
     "src/mdcp/temporal/formal_worker.py": {
         ("__future__", "annotations"): frozenset({None}),
+        ("base64", "b64encode"): frozenset({"_encode_natural"}),
+        ("ctypes", None): frozenset({None}),
+        ("ctypes", "wintypes"): frozenset({None}),
+        ("dataclasses", "asdict"): frozenset({"_json_value"}),
+        ("dataclasses", "dataclass"): frozenset({None}),
+        ("dataclasses", "is_dataclass"): frozenset({"_json_value"}),
+        ("datetime", "datetime"): frozenset({"_fit_natural_request"}),
         ("hashlib", None): frozenset({None}),
-        ("pathlib", "Path"): frozenset({None}),
-        ("stat", None): frozenset({None}),
-        ("sys", None): frozenset({None}),
+        ("mdcp.common.canonical", "canonicalize_json"): frozenset(
+            {
+                "_validate_preconsumption",
+                "_create_durable_marker",
+                "_fit_natural_request",
+                "_formalize_natural",
+                "_encode_natural",
+                "_complete_finalized_run",
+            }
+        ),
+        ("mdcp.common.canonical", "parse_json_bytes"): frozenset(
+            {"_validate_preconsumption", "_formalize_natural", "_execute_natural_run"}
+        ),
+        ("mdcp.common.digests", "sha256_hex"): frozenset(
+            {
+                "_fit_natural_request",
+                "_formalize_natural",
+                "_encode_natural",
+                "_execute_natural_run",
+                "_complete_finalized_run",
+                "_response",
+            }
+        ),
+        ("mdcp.common.enums", "GateVerdict"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal", "run_evidence"): frozenset({"_encode_natural"}),
+        ("mdcp.temporal.completeness", "AdapterOutcome"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.completeness", "LabelOutcome"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.completeness", "PredictionOutcome"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.folds", "load_fold_specs"): frozenset({"_execute_natural_run"}),
+        ("mdcp.temporal.folds", "materialize_folds"): frozenset({"_execute_natural_run"}),
         (
             "mdcp.temporal.formal_worker_protocol",
             "FORMAL_WORKER_SOURCE_PATHS",
         ): frozenset({"_source_inventory"}),
         (
             "mdcp.temporal.formal_worker_protocol",
+            "FormalRunAuthorization",
+        ): frozenset({"_validate_preconsumption"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FormalWorkerPrivateIdentity",
+        ): frozenset({"_response"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "FormalWorkerResponse",
+        ): frozenset({"_response"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
             "FormalWorkerSourceEntry",
         ): frozenset({"_source_inventory"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "MAX_WORKER_MESSAGE_BYTES",
+        ): frozenset({"main"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "PRIVATE_LOGICAL_OUTPUTS",
+        ): frozenset({"_validate_preconsumption"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SEARCH_SOURCE_PATHS",
+        ): frozenset({"_validate_preconsumption"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SearchEvidenceIndex",
+        ): frozenset({"_validate_preconsumption"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SearchReceipt",
+        ): frozenset({"_validate_preconsumption"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "SearchSourceEntry",
+        ): frozenset({"_validate_preconsumption"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "encode_formal_worker_response",
+        ): frozenset({"_emit_response"}),
         (
             "mdcp.temporal.formal_worker_protocol",
             "formal_worker_inventory_sha256",
         ): frozenset({"_source_inventory"}),
         (
             "mdcp.temporal.formal_worker_protocol",
-            "MAX_WORKER_MESSAGE_BYTES",
-        ): frozenset({"main"}),
-        ("mdcp.temporal.formal_worker_protocol", "FormalWorkerResponse"): frozenset({"main"}),
-        (
-            "mdcp.temporal.formal_worker_protocol",
-            "encode_formal_worker_response",
-        ): frozenset({"main"}),
-        ("mdcp.temporal.formal_worker_protocol", "launch_profile_sha256"): frozenset({"main"}),
+            "launch_profile_sha256",
+        ): frozenset({"_response", "main"}),
         (
             "mdcp.temporal.formal_worker_protocol",
             "parse_formal_worker_request",
         ): frozenset({"main"}),
-        ("mdcp.temporal.formal_worker_protocol", "worker_request_sha256"): frozenset({"main"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "search_source_inventory_sha256",
+        ): frozenset({"_validate_preconsumption"}),
+        (
+            "mdcp.temporal.formal_worker_protocol",
+            "worker_request_sha256",
+        ): frozenset({"_response"}),
+        ("mdcp.temporal.run_evidence", "FormalDevelopmentSeal"): frozenset(
+            {"_complete_finalized_run"}
+        ),
+        ("mdcp.temporal.run_evidence", "PrivateFoldEvidence"): frozenset({"_formalize_natural"}),
+        ("mdcp.temporal.run_evidence", "PublicDevelopmentResult"): frozenset(
+            {"_formalize_natural"}
+        ),
+        ("mdcp.temporal.runner", "DevelopmentFoldResult"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.runner", "DevelopmentRunBundle"): frozenset({"_formalize_natural"}),
+        ("mdcp.temporal.runner", "DevelopmentStateMachine"): frozenset({"_execute_natural_run"}),
+        ("mdcp.temporal.runner", "EXACT_FOLD_IDS"): frozenset(
+            {"_formalize_natural", "_execute_natural_run"}
+        ),
+        ("mdcp.temporal.runner", "EXACT_TRIAL_IDS"): frozenset(
+            {"_formalize_natural", "_execute_natural_run"}
+        ),
+        ("mdcp.temporal.runner", "FitPhase"): frozenset({"_formalize_natural"}),
+        ("mdcp.temporal.runner", "_formal_groups"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.runtime_guards", "RuntimeStage"): frozenset(
+            {"_complete_finalized_run", "_execute_natural_run"}
+        ),
+        (
+            "mdcp.temporal.runtime_guards",
+            "build_worker_runtime_guard",
+        ): frozenset({"_execute_natural_run"}),
+        ("mdcp.temporal.trials", "_feature_names"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.trials", "_materialize_features"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.trials", "build_estimator"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.trials", "canonical_trial_identity"): frozenset({"_fit_natural_request"}),
+        ("mdcp.temporal.trials", "load_trial_specs"): frozenset({"_execute_natural_run"}),
+        ("mdcp.temporal.trials", "training_rows_for_trial"): frozenset({"_fit_natural_request"}),
+        ("mdcp.workload.dataset", "load_uci_development_archive"): frozenset(
+            {"_execute_natural_run"}
+        ),
+        ("mdcp.workload.splits", "split_development_rows"): frozenset({"_execute_natural_run"}),
+        ("os", None): frozenset({None}),
+        ("pathlib", "Path"): frozenset({None}),
+        ("shutil", None): frozenset({None}),
+        ("stat", None): frozenset({None}),
+        ("sys", None): frozenset({None}),
+        ("unicodedata", None): frozenset({None}),
     },
 }
 _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
@@ -745,9 +908,11 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.Call",
             "ast.ClassDef",
             "ast.Constant",
+            "ast.Del",
             "ast.Div",
             "ast.ExceptHandler",
             "ast.Expr",
+            "ast.For",
             "ast.FunctionDef",
             "ast.Global",
             "ast.IfExp",
@@ -755,6 +920,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ast.ImportFrom",
             "ast.Is",
             "ast.List",
+            "ast.Lambda",
             "ast.Load",
             "ast.Add",
             "ast.Compare",
@@ -805,10 +971,13 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     ),
     "src/mdcp/temporal/runtime_guards.py": frozenset(
         {
+            "ctypes.POINTER",
             "ctypes.Structure",
             "ctypes.byref",
+            "ctypes.c_int",
             "ctypes.c_size_t",
             "ctypes.c_ulong",
+            "ctypes.c_void_p",
             "ctypes.sizeof",
             "ctypes.windll",
             "ctypes.windll.kernel32",
@@ -820,6 +989,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "os.fsdecode",
             "os.fsencode",
             "os.readlink",
+            "stat.S_ISREG",
             "subprocess.run",
             "sys.platform",
             "sys.platform.startswith",
@@ -895,17 +1065,9 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "ctypes.windll",
             "ctypes.windll.kernel32",
             "ctypes.windll.kernel32.CloseHandle",
-            "ctypes.windll.kernel32.CompareStringOrdinal",
             "ctypes.windll.kernel32.CreateFileW",
-            "ctypes.windll.kernel32.FlushFileBuffers",
             "ctypes.windll.kernel32.GetFileInformationByHandle",
-            "ctypes.windll.kernel32.GetFinalPathNameByHandleW",
-            "ctypes.windll.kernel32.GetLastError",
             "ctypes.windll.kernel32.ReadFile",
-            "ctypes.windll.kernel32.SetFileInformationByHandle",
-            "ctypes.windll.kernel32.WriteFile",
-            "ctypes.windll.ntdll",
-            "ctypes.windll.ntdll.NtCreateFile",
             "windll.kernel32",
             "windll.kernel32.CloseHandle",
             "windll.kernel32.CompareStringOrdinal",
@@ -954,7 +1116,51 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
     ),
     "src/mdcp/temporal/formal_worker.py": frozenset(
         {
+            "ctypes.POINTER",
+            "ctypes.Structure",
+            "ctypes.Union",
+            "ctypes.byref",
+            "ctypes.c_int",
+            "ctypes.c_size_t",
+            "ctypes.c_void_p",
+            "ctypes.cast",
+            "ctypes.create_string_buffer",
+            "ctypes.create_unicode_buffer",
+            "ctypes.pointer",
+            "ctypes.sizeof",
+            "ctypes.windll",
+            "ctypes.windll.kernel32",
+            "ctypes.windll.kernel32.CloseHandle",
+            "ctypes.windll.kernel32.CompareStringOrdinal",
+            "ctypes.windll.kernel32.CreateFileW",
+            "ctypes.windll.kernel32.FlushFileBuffers",
+            "ctypes.windll.kernel32.GetFileInformationByHandle",
+            "ctypes.windll.kernel32.GetFinalPathNameByHandleW",
+            "ctypes.windll.kernel32.GetLastError",
+            "ctypes.windll.kernel32.WriteFile",
+            "ctypes.windll.ntdll",
+            "ctypes.windll.ntdll.NtCreateFile",
+            "ctypes.wintypes.BOOL",
+            "ctypes.wintypes.DWORD",
+            "ctypes.wintypes.FILETIME",
+            "ctypes.wintypes.HANDLE",
+            "ctypes.wintypes.LONG",
+            "ctypes.wintypes.LPCWSTR",
+            "ctypes.wintypes.LPWSTR",
+            "ctypes.wintypes.ULONG",
+            "ctypes.wintypes.USHORT",
             "hashlib.sha256",
+            "os.O_CREAT",
+            "os.O_EXCL",
+            "os.O_WRONLY",
+            "os.close",
+            "os.environ",
+            "os.fstat",
+            "os.fsync",
+            "os.open",
+            "os.write",
+            "pathlib.Path.cwd",
+            "shutil.which",
             "stat.S_ISDIR",
             "stat.S_ISREG",
             "sys.argv",
@@ -973,6 +1179,7 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
             "sys.stdout.buffer.flush",
             "sys.stdout.buffer.write",
             "sys.version_info",
+            "unicodedata.normalize",
         }
     ),
 }
@@ -988,6 +1195,7 @@ _FILE_ACCESS_METHODS = frozenset(
         "readinto1",
         "readline",
         "readlines",
+        "lstat",
         "write",
         "write_bytes",
         "write_text",
@@ -1019,6 +1227,10 @@ _ALLOWED_FILE_ACCESS_CALLS = {
         {
             ("_linux_peak_process_bytes", "read_text", "Path:/proc/self/status"),
             ("_repository_inventory", "read_bytes", "name:working_path"),
+            ("_formal_worker_source_inventory", "lstat", "name:path"),
+            ("_formal_worker_source_inventory", "read_bytes", "name:path"),
+            ("_worker_source_inventory", "lstat", "name:path"),
+            ("_worker_source_inventory", "read_bytes", "name:path"),
         }
     ),
     "src/mdcp/temporal/search_identity.py": frozenset(
@@ -1026,6 +1238,7 @@ _ALLOWED_FILE_ACCESS_CALLS = {
             ("_parse_formal_authorization", "read_text", "name:_FORMAL_AUTHORIZATION_SCHEMA_PATH"),
             ("_bound_digests_recompute", "read_bytes", "Path:root/relative_path"),
             ("_read_expected_public_file", "read_bytes", "name:expected_path"),
+            ("_read_regular_nonlink_file", "lstat", "name:os"),
             ("_read_regular_nonlink_file", "read_bytes", "name:path"),
             ("prepare_search_freeze", "read_bytes", "Path:root/path"),
             ("_publish_no_clobber", "open", "name:os"),
@@ -1035,8 +1248,7 @@ _ALLOWED_FILE_ACCESS_CALLS = {
     "src/mdcp/temporal/cli.py": frozenset({("main", "write", None)}),
     "src/mdcp/temporal/run_evidence.py": frozenset(
         {
-            ("_build_formal_execution_plan", "read_bytes", "name:protocol_path"),
-            ("_preflight_windows_destination", "lstat", "name:checked_destination"),
+            ("_canonical_existing_path", "lstat", "name:path"),
             ("_read_private_container_posix", "open", "name:os"),
             (
                 "_checked_in_schema",
@@ -1045,15 +1257,23 @@ _ALLOWED_FILE_ACCESS_CALLS = {
             ),
             ("verify_development_result", "read_bytes", "name:path"),
             ("_read_private_container_posix", "read", "name:os"),
+            ("_recovery_leaf", "lstat", "name:path"),
             ("read_response", "read", "attr:process.stdout"),
             ("write_request", "write", "attr:process.stdin"),
         }
     ),
     "src/mdcp/temporal/formal_worker.py": frozenset(
         {
+            ("_canonical_path", "lstat", "name:path"),
+            ("_hash_archive", "open", "name:path"),
+            ("_hash_archive", "read", "name:source"),
+            ("_read_regular", "read_bytes", "name:checked"),
+            ("_read_regular", "lstat", "name:checked"),
             ("_source_inventory", "read_bytes", "name:path"),
+            ("_validate_preconsumption", "read_bytes", "name:path"),
+            ("_validate_preconsumption", "lstat", "name:archive_path"),
+            ("_emit_response", "write", "attr:sys.stdout.buffer"),
             ("main", "read", "attr:sys.stdin.buffer"),
-            ("main", "write", "attr:sys.stdout.buffer"),
         }
     ),
 }
@@ -1082,6 +1302,7 @@ _ALLOWED_ENVIRONMENT_KEYS = {
         }
     ),
     "src/mdcp/temporal/run_evidence.py": frozenset({"SYSTEMROOT", "WINDIR"}),
+    "src/mdcp/temporal/formal_worker.py": frozenset({"SYSTEMROOT", "WINDIR"}),
 }
 _CLI_THREAD_ENVIRONMENT_KEYS = frozenset(
     {
@@ -1142,8 +1363,14 @@ _PINNED_FILE_CAPABILITY_MODULES = {
     "src/mdcp/temporal/golden_vectors.py": (
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
+    "src/mdcp/temporal/formal_worker.py": (
+        "cb119465d04112e11bc30301dbce58ec4d8358ffd8b148b12695e24eae6868e2"
+    ),
     "src/mdcp/temporal/runner.py": (
         "81334542d1aceb0bb00edfcc1b4d31dac68824223866fa4d38954bb33c8483e9"
+    ),
+    "src/mdcp/temporal/runtime_guards.py": (
+        "f27d267ac1418c4feacdd8522c4f68a9517583a442adc78a8e3124b8bad7d7cd"
     ),
 }
 _ALLOWED_PRIVATE_ATTRIBUTES = {
@@ -1159,6 +1386,16 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
             "_tracked_paths",
             "_unknown",
             "_core",
+        }
+    ),
+    "src/mdcp/temporal/formal_worker.py": frozenset(
+        {
+            "_PrivateContainer",
+            "_PrivateContainerEntry",
+            "_inventory_core",
+            "_manifest_core",
+            "_raw_paths",
+            "_validated_private_files",
         }
     ),
     "src/mdcp/temporal/runner.py": frozenset(
@@ -1183,7 +1420,7 @@ _ALLOWED_PRIVATE_ATTRIBUTES = {
             "_session",
         }
     ),
-    "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths", "_state"}),
+    "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths"}),
 }
 _ALLOWED_SUBPROCESS_CALLS = {
     "src/mdcp/temporal/runtime_guards.py": {
@@ -1773,6 +2010,17 @@ def _environment_access_allowed(
     logical_path: str,
     parents: dict[ast.AST, ast.AST],
 ) -> bool:
+    if logical_path == "src/mdcp/temporal/formal_worker.py" and qualified_name == "os.environ":
+        parent = parents.get(node)
+        return (
+            isinstance(parent, ast.Call)
+            and parent.args == [node]
+            and not parent.keywords
+            and isinstance(parent.func, ast.Name)
+            and parent.func.id == "set"
+            and _enclosing_function(node, parents)
+            in {"_bootstrap_paths", "_validate_preconsumption"}
+        )
     if (
         logical_path == "src/mdcp/temporal/run_evidence.py"
         and _enclosing_function(node, parents) != "_run_fixed_worker_transport"
@@ -2066,6 +2314,27 @@ def _validate_formal_worker_bootstrap(tree: ast.AST, logical_path: str) -> None:
     ]
     if len(bootstrap) != 1 or len(main) != 1:
         _fail()
+    bootstrap_function = bootstrap[0]
+    expected_environment_guard = ast.parse(
+        'if set(os.environ) != {"SYSTEMROOT", "WINDIR"}:\n    raise ValueError'
+    ).body[0]
+    expected_cwd_guard = ast.parse(
+        "if _canonical_path(Path.cwd(), directory=True) != repository_root:\n    raise ValueError"
+    ).body[0]
+    environment_guards = [
+        node
+        for node in bootstrap_function.body
+        if ast.dump(node, include_attributes=False)
+        == ast.dump(expected_environment_guard, include_attributes=False)
+    ]
+    cwd_guards = [
+        node
+        for node in bootstrap_function.body
+        if ast.dump(node, include_attributes=False)
+        == ast.dump(expected_cwd_guard, include_attributes=False)
+    ]
+    if len(environment_guards) != 1 or len(cwd_guards) != 1:
+        _fail()
     derivation_names = {
         "script",
         "repository_root",
@@ -2106,6 +2375,20 @@ def _validate_formal_worker_bootstrap(tree: ast.AST, logical_path: str) -> None:
         ast.dump(node, include_attributes=False) for node in expected_derivations
     ):
         _fail()
+    derivation_lines = {
+        node.targets[0].id: node.lineno
+        for node in observed_derivations
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    }
+    if not (
+        environment_guards[0].lineno < derivation_lines["script"]
+        and derivation_lines["repository_root"]
+        < cwd_guards[0].lineno
+        < derivation_lines["source_root"]
+    ):
+        _fail()
     reads = [
         node
         for node in ast.walk(main[0])
@@ -2126,6 +2409,293 @@ def _validate_formal_worker_bootstrap(tree: ast.AST, logical_path: str) -> None:
         or read.args[0].right.value != 1
     ):
         _fail()
+
+
+def _validate_formal_worker_lifecycle(tree: ast.AST, logical_path: str) -> None:
+    if logical_path != "src/mdcp/temporal/formal_worker.py":
+        return
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    required = {
+        "_execute_worker_request",
+        "_execute_natural_run",
+        "_complete_finalized_run",
+        "_create_durable_marker",
+        "_hash_archive",
+        "_publish_retained",
+        "_publish_private",
+        "_publish_terminal",
+        "_emit_response",
+        "main",
+    }
+    if not required.issubset(functions):
+        _fail()
+
+    execute = functions["_execute_worker_request"]
+    lifecycle_names = {
+        "_validate_preconsumption",
+        "_create_durable_marker",
+        "_hash_archive",
+        "_execute_natural_run",
+        "_publish_private",
+        "_publish_terminal",
+    }
+    execute_calls = tuple(
+        node.func.id
+        for node in sorted(
+            (
+                item
+                for item in ast.walk(execute)
+                if isinstance(item, ast.Call)
+                and isinstance(item.func, ast.Name)
+                and item.func.id in lifecycle_names
+            ),
+            key=lambda item: (item.lineno, item.col_offset),
+        )
+    )
+    if execute_calls != (
+        "_validate_preconsumption",
+        "_create_durable_marker",
+        "_hash_archive",
+        "_execute_natural_run",
+    ):
+        _fail()
+
+    natural = functions["_execute_natural_run"]
+    execution_events: list[str] = []
+    for call in sorted(
+        (item for item in ast.walk(natural) if isinstance(item, ast.Call)),
+        key=lambda item: (item.lineno, item.col_offset),
+    ):
+        if isinstance(call.func, ast.Name) and call.func.id == "_checkpoint":
+            if (
+                len(call.args) != 2
+                or call.keywords
+                or not isinstance(call.args[1], ast.Attribute)
+                or not isinstance(call.args[1].value, ast.Name)
+                or call.args[1].value.id != "RuntimeStage"
+                or call.args[1].attr not in {"PRE_LOAD", "PRE_FIT", "POST_FIT", "PRE_SEAL", "EXIT"}
+            ):
+                _fail()
+            execution_events.append(f"checkpoint:{call.args[1].attr}")
+        elif isinstance(call.func, ast.Name) and call.func.id == "_complete_finalized_run":
+            if (
+                len(call.args) != 5
+                or call.keywords
+                or not isinstance(call.args[0], ast.Name)
+                or call.args[0].id != "context"
+                or not isinstance(call.args[1], ast.Name)
+                or call.args[1].id != "marker_sha256"
+                or not isinstance(call.args[2], ast.Name)
+                or call.args[2].id != "guard"
+                or not isinstance(call.args[3], ast.Name)
+                or call.args[3].id != "result"
+                or not isinstance(call.args[4], ast.Name)
+                or call.args[4].id != "fit_count"
+            ):
+                _fail()
+            execution_events.append("complete-finalized")
+    if tuple(execution_events) != (
+        "checkpoint:PRE_LOAD",
+        "checkpoint:PRE_FIT",
+        "checkpoint:POST_FIT",
+        "complete-finalized",
+    ):
+        _fail()
+
+    finalized = functions["_complete_finalized_run"]
+    finalized_events: list[str] = []
+    for node in sorted(
+        (item for item in ast.walk(finalized) if isinstance(item, ast.Call | ast.Assign)),
+        key=lambda item: (item.lineno, item.col_offset),
+    ):
+        if isinstance(node, ast.Assign):
+            if (
+                len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "seal_bytes"
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "canonicalize_json"
+            ):
+                finalized_events.append("encode:terminal")
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == "_checkpoint":
+            if (
+                len(node.args) != 2
+                or node.keywords
+                or not isinstance(node.args[1], ast.Attribute)
+                or not isinstance(node.args[1].value, ast.Name)
+                or node.args[1].value.id != "RuntimeStage"
+                or node.args[1].attr not in {"PRE_SEAL", "EXIT"}
+            ):
+                _fail()
+            finalized_events.append(f"checkpoint:{node.args[1].attr}")
+        elif isinstance(node.func, ast.Name) and node.func.id in {
+            "_formalize_natural",
+            "_encode_natural",
+            "_publish_private",
+            "FormalDevelopmentSeal",
+            "_publish_terminal",
+        }:
+            finalized_events.append(node.func.id)
+    if tuple(finalized_events) != (
+        "_formalize_natural",
+        "checkpoint:PRE_SEAL",
+        "_encode_natural",
+        "_publish_private",
+        "checkpoint:EXIT",
+        "FormalDevelopmentSeal",
+        "encode:terminal",
+        "_publish_terminal",
+    ):
+        _fail()
+
+    main_calls = tuple(
+        node.func.id
+        for node in sorted(
+            (
+                item
+                for item in ast.walk(functions["main"])
+                if isinstance(item, ast.Call)
+                and isinstance(item.func, ast.Name)
+                and item.func.id in {"_execute_worker_request", "_emit_response"}
+            ),
+            key=lambda item: (item.lineno, item.col_offset),
+        )
+    )
+    if main_calls != ("_execute_worker_request", "_emit_response"):
+        _fail()
+    emitter_calls = tuple(
+        _simple_attribute_identity(node.func)
+        for node in sorted(
+            (item for item in ast.walk(functions["_emit_response"]) if isinstance(item, ast.Call)),
+            key=lambda item: (item.lineno, item.col_offset),
+        )
+        if _simple_attribute_identity(node.func)
+        in {"encode_formal_worker_response", "sys.stdout.buffer.write", "sys.stdout.buffer.flush"}
+    )
+    if emitter_calls != (
+        "encode_formal_worker_response",
+        "sys.stdout.buffer.write",
+        "sys.stdout.buffer.flush",
+    ):
+        _fail()
+
+
+def _validate_runtime_guard_inventories(tree: ast.AST, logical_path: str) -> None:
+    if logical_path != "src/mdcp/temporal/runtime_guards.py":
+        return
+    direct_nodes = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    }
+    expected = {
+        "_worker_source_inventory": (
+            ast.FunctionDef,
+            "SEARCH_SOURCE_PATHS",
+            "5163a07f008182936e773e2c599d814fde3251d708f006744307b15ab5c48871",
+        ),
+        "_formal_worker_source_inventory": (
+            ast.FunctionDef,
+            "FORMAL_WORKER_SOURCE_PATHS",
+            "67797519cf49c14939a06c25be3712e481b54f578cf9dba2677c881be97c30f0",
+        ),
+        "_WorkerRuntimeGuard": (
+            ast.ClassDef,
+            None,
+            "1afcc05d9cc79ec1c9e425fdda88a6c0dd6a83e5e0f673c97ef1dd230946f7f9",
+        ),
+        "build_worker_runtime_guard": (
+            ast.FunctionDef,
+            None,
+            "051ba83878ca7a30b3a89973767f43489b8eed04a4060bbd34d15795d2de0855",
+        ),
+    }
+    if not expected.keys() <= direct_nodes.keys():
+        _fail()
+    for protected_name, (node_type, path_name, expected_sha256) in expected.items():
+        protected_node = direct_nodes[protected_name]
+        if type(protected_node) is not node_type:
+            _fail()
+        normalized = ast.dump(protected_node, include_attributes=False).encode("utf-8")
+        if sha256_hex(normalized) != expected_sha256:
+            _fail()
+        if path_name is not None:
+            loops = [node for node in ast.walk(protected_node) if isinstance(node, ast.For)]
+            if len(loops) != 1:
+                _fail()
+            loop = loops[0]
+            if (
+                not isinstance(loop.target, ast.Name)
+                or loop.target.id != "logical_path"
+                or not isinstance(loop.iter, ast.Name)
+                or loop.iter.id != path_name
+            ):
+                _fail()
+
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+    def has_local_scope(node: ast.AST) -> bool:
+        current = node
+        parent = parents.get(current)
+        while parent is not None:
+            if isinstance(parent, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                if current in parent.body:
+                    return True
+                current = parent
+                parent = parents.get(current)
+                continue
+            if isinstance(parent, ast.Lambda):
+                if current is parent.body:
+                    return True
+                current = parent
+                parent = parents.get(current)
+                continue
+            current = parent
+            parent = parents.get(current)
+        return False
+
+    module_bindings: dict[str, list[ast.AST]] = {name: [] for name in expected}
+    for node in ast.walk(tree):
+        binding_names: tuple[str, ...] = ()
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            binding_names = (node.name,)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+            binding_names = (node.id,)
+        elif isinstance(node, ast.Import):
+            binding_names = tuple(
+                alias.asname or alias.name.split(".", 1)[0] for alias in node.names
+            )
+        elif isinstance(node, ast.ImportFrom):
+            binding_names = tuple(alias.asname or alias.name for alias in node.names)
+        elif (
+            isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar)
+            and node.name is not None
+        ):
+            binding_names = (node.name,)
+        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+            binding_names = (node.rest,)
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            binding_names = tuple(node.names)
+        if not binding_names:
+            continue
+        is_scope_declaration = isinstance(node, ast.Global | ast.Nonlocal)
+        if has_local_scope(node) and not is_scope_declaration:
+            continue
+        for binding_name in binding_names:
+            if binding_name in module_bindings:
+                module_bindings[binding_name].append(node)
+
+    for protected_name, protected_node in direct_nodes.items():
+        if protected_name in module_bindings and module_bindings[protected_name] != [
+            protected_node
+        ]:
+            _fail()
 
 
 def _allowed_run_evidence_git_call(
@@ -2232,20 +2802,43 @@ def _allowed_getattr_reference(
     parents: dict[ast.AST, ast.AST],
 ) -> bool:
     parent = parents.get(node)
+    if logical_path == "src/mdcp/temporal/formal_worker.py" and (
+        node.id == "getattr"
+        and isinstance(parent, ast.Call)
+        and parent.func is node
+        and _enclosing_function(node, parents) == "_write_exclusive"
+        and len(parent.args) == 3
+        and not parent.keywords
+        and isinstance(parent.args[0], ast.Name)
+        and parent.args[0].id == "os"
+        and isinstance(parent.args[1], ast.Constant)
+        and parent.args[1].value == "O_BINARY"
+        and isinstance(parent.args[2], ast.Constant)
+        and parent.args[2].value == 0
+    ):
+        return True
     if logical_path in {
         "src/mdcp/temporal/formal_worker.py",
         "src/mdcp/temporal/run_evidence.py",
+        "src/mdcp/temporal/runtime_guards.py",
     }:
-        expected_scope = (
-            "_canonical_path"
-            if logical_path == "src/mdcp/temporal/formal_worker.py"
-            else "_canonical_existing_path"
-        )
+        if logical_path == "src/mdcp/temporal/runtime_guards.py":
+            expected_scopes = {
+                "_worker_source_inventory",
+                "_formal_worker_source_inventory",
+            }
+        else:
+            expected_scopes = {
+                {
+                    "src/mdcp/temporal/formal_worker.py": "_canonical_path",
+                    "src/mdcp/temporal/run_evidence.py": "_canonical_existing_path",
+                }[logical_path]
+            }
         return (
             node.id == "getattr"
             and isinstance(parent, ast.Call)
             and parent.func is node
-            and _enclosing_function(node, parents) == expected_scope
+            and _enclosing_function(node, parents) in expected_scopes
             and len(parent.args) == 3
             and not parent.keywords
             and isinstance(parent.args[0], ast.Name)
@@ -2269,9 +2862,31 @@ def _allowed_getattr_reference(
     )
 
 
+def _allowed_formal_worker_module_reference(
+    node: ast.Name,
+    logical_path: str,
+    parents: dict[ast.AST, ast.AST],
+) -> bool:
+    parent = parents.get(node)
+    return (
+        logical_path == "src/mdcp/temporal/formal_worker.py"
+        and node.id == "os"
+        and isinstance(parent, ast.Call)
+        and len(parent.args) == 3
+        and parent.args[0] is node
+        and isinstance(parent.func, ast.Name)
+        and parent.func.id == "getattr"
+        and _allowed_getattr_reference(parent.func, logical_path, parents)
+    )
+
+
 def _import_allowed(logical_path: str, module: str, imported_name: str | None) -> bool:
-    if imported_name is not None and module in _ALLOWED_DIRECT_IMPORTS:
-        return imported_name in _ALLOWED_DIRECT_IMPORTS[module]
+    if (
+        imported_name is not None
+        and module in _ALLOWED_DIRECT_IMPORTS
+        and imported_name not in _ALLOWED_DIRECT_IMPORTS[module]
+    ):
+        return False
     return (module, imported_name) in _FORMAL_IMPORT_ALLOWLIST.get(logical_path, frozenset())
 
 
@@ -2283,6 +2898,19 @@ def _scoped_import_allowed(
     parents: dict[ast.AST, ast.AST],
 ) -> bool:
     allowed_scopes = _SCOPED_IMPORT_ALLOWLIST.get(logical_path, {}).get((module, imported_name))
+    if logical_path == "src/mdcp/temporal/formal_worker.py":
+        matching_aliases = tuple(
+            alias
+            for alias in node.names
+            if (alias.name if isinstance(node, ast.ImportFrom) else None) == imported_name
+            or (isinstance(node, ast.Import) and alias.name == module)
+        )
+        if (
+            allowed_scopes is None
+            or len(matching_aliases) != 1
+            or matching_aliases[0].asname is not None
+        ):
+            return False
     return allowed_scopes is None or _enclosing_function(node, parents) in allowed_scopes
 
 
@@ -2425,6 +3053,8 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     _validate_pinned_file_capability_functions(tree, logical_path)
     _validate_fixed_worker_transport(tree, logical_path)
     _validate_formal_worker_bootstrap(tree, logical_path)
+    _validate_formal_worker_lifecycle(tree, logical_path)
+    _validate_runtime_guard_inventories(tree, logical_path)
     bindings, module_roots = _build_bindings(tree, logical_path)
     allowed_module_attributes = _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST.get(logical_path, frozenset())
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
@@ -2608,6 +3238,7 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 and not (
                     isinstance(parents.get(node), ast.Attribute) and parents[node].value is node
                 )
+                and not _allowed_formal_worker_module_reference(node, logical_path, parents)
             ):
                 _fail()
             if (

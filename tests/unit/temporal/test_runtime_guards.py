@@ -286,3 +286,188 @@ def test_runtime_checkpoint_fails_closed(tmp_path: Path, mutation: str, reason: 
 
     assert result.verdict == "UNKNOWN"
     assert result.reason_codes == (reason,)
+
+
+def _write_formal_worker_inventory(tmp_path: Path) -> str:
+    from mdcp.temporal.formal_worker_protocol import (
+        FORMAL_WORKER_SOURCE_PATHS,
+        FormalWorkerSourceEntry,
+        formal_worker_inventory_sha256,
+    )
+
+    entries = []
+    for index, logical_path in enumerate(FORMAL_WORKER_SOURCE_PATHS):
+        path = tmp_path / logical_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = f"worker-{index}\n".encode()
+        path.write_bytes(raw)
+        entries.append(
+            FormalWorkerSourceEntry(
+                logical_path=logical_path,
+                sha256=runtime_guards.hashlib.sha256(raw).hexdigest(),
+            )
+        )
+    return formal_worker_inventory_sha256(tuple(entries))
+
+
+def test_worker_runtime_guard_rereads_exact_source_inventory_without_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mdcp.temporal.formal_worker_protocol import (
+        SEARCH_SOURCE_PATHS,
+        SearchSourceEntry,
+        search_source_inventory_sha256,
+    )
+
+    entries = []
+    for index, logical_path in enumerate(SEARCH_SOURCE_PATHS):
+        path = tmp_path / logical_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = f"source-{index}\n".encode()
+        path.write_bytes(raw)
+        entries.append(
+            SearchSourceEntry(
+                logical_path=logical_path,
+                git_mode="100644",
+                byte_size=len(raw),
+                sha256=runtime_guards.hashlib.sha256(raw).hexdigest(),
+            )
+        )
+    expected = search_source_inventory_sha256(tuple(entries))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker invoked Git")),
+    )
+
+    guard = runtime_guards.build_worker_runtime_guard(
+        tmp_path, expected, _write_formal_worker_inventory(tmp_path)
+    )
+    result = guard.checkpoint(RuntimeStage.PRE_LOAD)
+
+    assert result.verdict == "PASS"
+    assert result.reason_codes == ()
+    assert result.repository_inventory_sha256 == expected
+
+
+def test_worker_runtime_guard_denies_source_drift_without_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mdcp.temporal.formal_worker_protocol import (
+        SEARCH_SOURCE_PATHS,
+        SearchSourceEntry,
+        search_source_inventory_sha256,
+    )
+
+    entries = []
+    for logical_path in SEARCH_SOURCE_PATHS:
+        path = tmp_path / logical_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixed")
+        entries.append(
+            SearchSourceEntry(
+                logical_path=logical_path,
+                git_mode="100644",
+                byte_size=5,
+                sha256=runtime_guards.hashlib.sha256(b"fixed").hexdigest(),
+            )
+        )
+    guard = runtime_guards.build_worker_runtime_guard(
+        tmp_path,
+        search_source_inventory_sha256(tuple(entries)),
+        _write_formal_worker_inventory(tmp_path),
+    )
+    (tmp_path / SEARCH_SOURCE_PATHS[-1]).write_bytes(b"drift")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker invoked Git")),
+    )
+
+    result = guard.checkpoint(RuntimeStage.EXIT)
+
+    assert result.verdict == "UNKNOWN"
+    assert result.reason_codes == ("SOURCE_INVENTORY_CHANGED",)
+
+
+def _fix_round_one_worker_inventories(tmp_path: Path) -> tuple[str, str]:
+    from mdcp.temporal.formal_worker_protocol import (
+        FORMAL_WORKER_SOURCE_PATHS,
+        SEARCH_SOURCE_PATHS,
+        FormalWorkerSourceEntry,
+        SearchSourceEntry,
+        formal_worker_inventory_sha256,
+        search_source_inventory_sha256,
+    )
+
+    search_entries = []
+    for index, logical_path in enumerate(SEARCH_SOURCE_PATHS):
+        path = tmp_path / logical_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = f"search-{index}\n".encode()
+        path.write_bytes(raw)
+        search_entries.append(
+            SearchSourceEntry(
+                logical_path=logical_path,
+                git_mode="100644",
+                byte_size=len(raw),
+                sha256=runtime_guards.hashlib.sha256(raw).hexdigest(),
+            )
+        )
+    worker_entries = []
+    for index, logical_path in enumerate(FORMAL_WORKER_SOURCE_PATHS):
+        path = tmp_path / logical_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = f"worker-{index}\n".encode()
+        path.write_bytes(raw)
+        worker_entries.append(
+            FormalWorkerSourceEntry(
+                logical_path=logical_path,
+                sha256=runtime_guards.hashlib.sha256(raw).hexdigest(),
+            )
+        )
+    return (
+        search_source_inventory_sha256(tuple(search_entries)),
+        formal_worker_inventory_sha256(tuple(worker_entries)),
+    )
+
+
+def test_fix_round_one_i2_worker_guard_checks_independent_43_and_4_inventories(
+    tmp_path: Path,
+) -> None:
+    search_sha256, worker_sha256 = _fix_round_one_worker_inventories(tmp_path)
+
+    guard = runtime_guards.build_worker_runtime_guard(tmp_path, search_sha256, worker_sha256)
+    result = guard.checkpoint(RuntimeStage.PRE_LOAD)
+
+    assert result.verdict == "PASS"
+    assert result.reason_codes == ()
+    assert result.repository_inventory_sha256 == search_sha256
+
+
+@pytest.mark.parametrize("worker_index", range(4))
+def test_fix_round_one_i2_every_worker_source_drift_fails_every_checkpoint(
+    tmp_path: Path,
+    worker_index: int,
+) -> None:
+    from mdcp.temporal.formal_worker_protocol import FORMAL_WORKER_SOURCE_PATHS
+
+    search_sha256, worker_sha256 = _fix_round_one_worker_inventories(tmp_path)
+    guard = runtime_guards.build_worker_runtime_guard(tmp_path, search_sha256, worker_sha256)
+    (tmp_path / FORMAL_WORKER_SOURCE_PATHS[worker_index]).write_bytes(b"worker-drift")
+
+    for stage in RuntimeStage:
+        result = guard.checkpoint(stage)
+        assert result.verdict == "UNKNOWN"
+        assert result.reason_codes == ("FORMAL_WORKER_INVENTORY_CHANGED",)
+
+
+def test_fix_round_one_i2_worker_guard_rejects_wrong_worker_inventory_digest(
+    tmp_path: Path,
+) -> None:
+    search_sha256, _worker_sha256 = _fix_round_one_worker_inventories(tmp_path)
+
+    with pytest.raises(ValueError, match="^WORKER_RUNTIME_GUARD_INVALID$"):
+        runtime_guards.build_worker_runtime_guard(tmp_path, search_sha256, "f" * 64)
