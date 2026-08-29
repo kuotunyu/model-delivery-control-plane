@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -325,3 +326,114 @@ def test_evidence_taxonomy_and_license_qualifiers_are_explicit() -> None:
     assert "not authenticated by the closure commit" in guide
     assert license_text.startswith("MIT License\n\nCopyright (c) 2026 kuotunyu\n")
     assert "第三方 dependency、dataset 或其他材料仍保留其各自" in readme
+
+
+def test_fast_path_is_fail_fast_offline_and_matches_the_documented_selector() -> None:
+    path = REPOSITORY_ROOT / "scripts" / "reviewer-fast-path.ps1"
+    assert path.is_file()
+    script = path.read_text(encoding="utf-8")
+    quickstart = (REPOSITORY_ROOT / "docs/reviewer/quickstart.md").read_text(encoding="utf-8")
+    selected_tests = (
+        "tests/publication/test_public_release_surface.py",
+        "tests/publication/test_release_workflow.py",
+        "tests/contract/workload/test_serving_identity_isolation.py",
+        "tests/contract/workload/test_serving_identity_v2.py",
+        "tests/unit/temporal/test_formal_worker_protocol.py",
+        "tests/integration/temporal/test_formal_worker_process.py",
+        "tests/security/temporal/test_public_evidence_boundary.py",
+    )
+
+    assert "Set-StrictMode -Version Latest" in script
+    assert "$ErrorActionPreference = 'Stop'" in script
+    assert "uv run --no-sync python scripts/verify-public-release.py" in script
+    assert "uv run --no-sync pytest -p no:cacheprovider -q" in script
+    assert script.index("verify-public-release.py") < script.index("pytest -p no:cacheprovider")
+    assert "PUBLIC_RELEASE_FAST_PATH_PASS" in script
+    assert "uv sync" not in script
+    for selected_test in selected_tests:
+        assert selected_test in script
+        assert selected_test in quickstart
+    for prohibited in (
+        "Invoke-WebRequest",
+        "curl ",
+        "docker ",
+        "git push",
+        "gh ",
+        "prepare-search-freeze",
+        "formal-run",
+    ):
+        assert prohibited.casefold() not in script.casefold()
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell unavailable")
+@pytest.mark.parametrize("failing_call", (1, 2))
+def test_fast_path_detects_mutation_when_a_command_fails(tmp_path: Path, failing_call: int) -> None:
+    repository = tmp_path / "repository"
+    scripts = repository / "scripts"
+    scripts.mkdir(parents=True)
+    wrapper = scripts / "reviewer-fast-path.ps1"
+    wrapper.write_bytes((REPOSITORY_ROOT / "scripts/reviewer-fast-path.ps1").read_bytes())
+    escaped_repository = str(repository).replace("'", "''")
+    harness = repository / "harness.ps1"
+    harness.write_text(
+        f"""$ErrorActionPreference = 'Stop'
+$repository = '{escaped_repository}'
+$startingLocation = (Get-Location).Path
+$env:PYTHONDONTWRITEBYTECODE = 'original'
+$script:gitCalls = 0
+$script:uvCalls = 0
+
+function git {{
+    $script:gitCalls += 1
+    if (Test-Path -LiteralPath (Join-Path $repository 'mutation.txt')) {{
+        Write-Output '?? mutation.txt'
+    }}
+    $global:LASTEXITCODE = 0
+}}
+
+function uv {{
+    $script:uvCalls += 1
+    if ($script:uvCalls -eq {failing_call}) {{
+        [IO.File]::WriteAllText((Join-Path $repository 'mutation.txt'), 'mutation')
+        $global:LASTEXITCODE = 1
+    }}
+    else {{
+        $global:LASTEXITCODE = 0
+    }}
+}}
+
+try {{
+    . (Join-Path $repository 'scripts/reviewer-fast-path.ps1')
+    Write-Output 'UNEXPECTED_PASS'
+}}
+catch {{
+    Write-Output "ERROR=$($_.Exception.Message)"
+}}
+
+Write-Output "UV_CALLS=$script:uvCalls"
+Write-Output "GIT_CALLS=$script:gitCalls"
+$locationRestored = ((Get-Location).Path -eq $startingLocation).ToString().ToLowerInvariant()
+$bytecodeRestored = ($env:PYTHONDONTWRITEBYTECODE -eq 'original').ToString().ToLowerInvariant()
+Write-Output "LOCATION_RESTORED=$locationRestored"
+Write-Output "BYTECODE_RESTORED=$bytecodeRestored"
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ("pwsh", "-NoProfile", "-File", str(harness)),
+        cwd=tmp_path,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=20,
+    )
+    output = completed.stdout.decode("utf-8", errors="strict")
+
+    assert completed.returncode == 0
+    assert "ERROR=reviewer fast path changed repository state" in output
+    assert f"UV_CALLS={failing_call}" in output
+    assert "GIT_CALLS=2" in output
+    assert "LOCATION_RESTORED=true" in output
+    assert "BYTECODE_RESTORED=true" in output
+    assert "UNEXPECTED_PASS" not in output
