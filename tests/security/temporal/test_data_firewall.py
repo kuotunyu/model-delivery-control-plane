@@ -1171,7 +1171,7 @@ def test_static_firewall_rejects_unapproved_search_identity_git_call(tmp_path: P
 @pytest.mark.parametrize(
     ("mutation", "needle", "replacement"),
     (
-        ("unlisted-import", "import subprocess\n", "import inspect\nimport subprocess\n"),
+        ("unlisted-import", "import stat\n", "import inspect\nimport stat\n"),
         ("module-attribute", "import time\n", "import time\nunused = time.sleep\n"),
         (
             "environment-key",
@@ -1643,8 +1643,55 @@ def test_fix_round_four_runtime_guard_normalized_module_ast_hash_is_exact() -> N
     normalized = ast.dump(tree, include_attributes=False).encode("utf-8")
 
     assert hashlib.sha256(normalized).hexdigest() == (
-        "f27d267ac1418c4feacdd8522c4f68a9517583a442adc78a8e3124b8bad7d7cd"
+        "b27864394e5d3fa2a1e80bc21c79ab7977dfa264fd2d86bbcdab29bf7c9a5f64"
     )
+
+
+def test_runtime_guard_subprocess_imports_are_scoped_to_supervisor_git_helpers(
+    tmp_path: Path,
+) -> None:
+    import ast
+
+    logical_path = "src/mdcp/temporal/runtime_guards.py"
+    source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    import_scopes = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Import) or not any(
+            alias.name == "subprocess" for alias in node.names
+        ):
+            continue
+        current: ast.AST | None = node
+        while current is not None and not isinstance(current, ast.FunctionDef):
+            current = parents.get(current)
+        import_scopes.append(current.name if isinstance(current, ast.FunctionDef) else None)
+
+    expected_scopes = {"_repository_head", "_repository_is_dirty", "_tracked_paths"}
+    assert set(import_scopes) == expected_scopes
+    assert len(import_scopes) == len(expected_scopes)
+
+    local_import = "    import subprocess\n"
+    assert source.count(local_import) == len(expected_scopes)
+    module_scope_mutation = source.replace(local_import, "").replace(
+        "import stat\n", "import stat\nimport subprocess\n", 1
+    )
+    extra_scope_needle = "def _authoritative_peak_process_bytes() -> int | None:\n"
+    assert source.count(extra_scope_needle) == 1
+    extra_scope_mutation = source.replace(
+        extra_scope_needle,
+        f"{extra_scope_needle}{local_import}",
+        1,
+    )
+
+    for case_id, mutated in (
+        ("module-scope", module_scope_mutation),
+        ("extra-function-scope", extra_scope_mutation),
+    ):
+        mutated_root = tmp_path / case_id
+        _write_logical_module(mutated_root, logical_path, mutated)
+        with pytest.raises(StaticFirewallError, match=f"^{FIXED_REASON_CODE}$"):
+            audit_static_h2_firewall(mutated_root, formal_paths=(logical_path,))
 
 
 @pytest.mark.parametrize(

@@ -4,7 +4,6 @@ import ctypes
 import hashlib
 import os
 import stat
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -339,6 +338,8 @@ def _build_runtime_guard_core(
 
 
 def _repository_head(repository_root: Path) -> str | None:
+    import subprocess
+
     try:
         completed = subprocess.run(
             ("git", "rev-parse", "HEAD"),
@@ -353,6 +354,8 @@ def _repository_head(repository_root: Path) -> str | None:
 
 
 def _tracked_paths(repository_root: Path, expected_head: str) -> tuple[bytes, ...] | None:
+    import subprocess
+
     try:
         completed = subprocess.run(
             ("git", "ls-tree", "-r", "-z", "--name-only", expected_head),
@@ -396,6 +399,8 @@ def _repository_inventory(repository_root: Path, tracked_paths: tuple[bytes, ...
 
 
 def _repository_is_dirty(repository_root: Path) -> bool:
+    import subprocess
+
     try:
         completed = subprocess.run(
             ("git", "status", "--porcelain=v1", "--untracked-files=all"),

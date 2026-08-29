@@ -327,6 +327,26 @@ def test_dedicated_worker_keeps_loader_and_model_imports_post_marker() -> None:
     )
 
 
+def test_dedicated_worker_transitive_import_closure_does_not_load_subprocess() -> None:
+    worker_path = REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py"
+    worker = ast.parse(worker_path.read_text(encoding="utf-8"))
+    worker_functions = _module_functions(worker)
+    worker_runtime_imports = {
+        node.module
+        for function_name in ("_complete_finalized_run", "_execute_natural_run")
+        for node in ast.walk(worker_functions[function_name])
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert "mdcp.temporal.runtime_guards" in worker_runtime_imports
+
+    runtime_path = REPOSITORY_ROOT / "src/mdcp/temporal/runtime_guards.py"
+    runtime = ast.parse(runtime_path.read_text(encoding="utf-8"))
+    module_imports = {
+        alias.name for node in runtime.body if isinstance(node, ast.Import) for alias in node.names
+    }
+    assert "subprocess" not in module_imports
+
+
 @pytest.mark.skipif(os.name != "nt", reason="authoritative retained publication is Windows-only")
 def test_fix_round_one_i1_retained_boundary_blocks_ancestor_substitution(
     tmp_path: Path,

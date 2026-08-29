@@ -602,6 +602,9 @@ _FORMAL_IMPORT_ALLOWLIST = {
 }
 _SCOPED_IMPORT_ALLOWLIST = {
     "src/mdcp/temporal/runtime_guards.py": {
+        ("subprocess", None): frozenset(
+            {"_repository_head", "_repository_is_dirty", "_tracked_paths"}
+        ),
         (
             "mdcp.temporal.formal_worker_protocol",
             "FORMAL_WORKER_SOURCE_PATHS",
@@ -1330,7 +1333,7 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "81334542d1aceb0bb00edfcc1b4d31dac68824223866fa4d38954bb33c8483e9"
     ),
     "src/mdcp/temporal/runtime_guards.py": (
-        "f27d267ac1418c4feacdd8522c4f68a9517583a442adc78a8e3124b8bad7d7cd"
+        "b27864394e5d3fa2a1e80bc21c79ab7977dfa264fd2d86bbcdab29bf7c9a5f64"
     ),
 }
 _ALLOWED_SUBPROCESS_CALLS = {
