@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import mdcp.temporal.formal_worker_protocol as worker_protocol
 import mdcp.temporal.run_evidence as run_evidence
 from mdcp.temporal.evidence import public_evidence_violations
 from mdcp.temporal.run_evidence import (
@@ -85,10 +86,18 @@ _CLOSED_COMMAND_ARGUMENTS = (
             "a" * 64,
             "--expected-search-receipt-sha256",
             "b" * 64,
+            "--expected-worker-request-sha256",
+            "f" * 64,
+            "--expected-formal-worker-inventory-sha256",
+            "1" * 64,
+            "--expected-launch-profile-sha256",
+            "2" * 64,
             "--expected-source-inventory-sha256",
             "c" * 64,
             "--expected-repository-inventory-sha256",
             "d" * 64,
+            "--expected-evidence-index-sha256",
+            "3" * 64,
             "--expected-seal-record-sha256",
             "e" * 64,
         ),
@@ -131,7 +140,7 @@ def _development_arguments(tmp_path: Path) -> tuple[list[str], tuple[object, ...
     marker = (tmp_path / "consumption-marker.json").resolve()
     private = (tmp_path / "private-container.json").resolve()
     terminal = (tmp_path / "terminal-seal.json").resolve()
-    digests = ("a" * 64, "b" * 64, "c" * 64, "d" * 64, "e" * 64)
+    digests = tuple(character * 64 for character in "abcdef123")
     arguments = [
         "verify-development-result",
         "--consumption-marker",
@@ -144,12 +153,20 @@ def _development_arguments(tmp_path: Path) -> tuple[list[str], tuple[object, ...
         digests[0],
         "--expected-search-receipt-sha256",
         digests[1],
-        "--expected-source-inventory-sha256",
+        "--expected-worker-request-sha256",
         digests[2],
-        "--expected-repository-inventory-sha256",
+        "--expected-formal-worker-inventory-sha256",
         digests[3],
-        "--expected-seal-record-sha256",
+        "--expected-launch-profile-sha256",
         digests[4],
+        "--expected-source-inventory-sha256",
+        digests[5],
+        "--expected-repository-inventory-sha256",
+        digests[6],
+        "--expected-evidence-index-sha256",
+        digests[7],
+        "--expected-seal-record-sha256",
+        digests[8],
     ]
     return arguments, (marker, private, terminal, *digests)
 
@@ -414,8 +431,12 @@ def test_development_result_cli_emits_exact_status_and_forwards_exact_inputs(
         *,
         expected_authorization_sha256: str,
         expected_search_receipt_sha256: str,
+        expected_worker_request_sha256: str,
+        expected_formal_worker_inventory_sha256: str,
+        expected_launch_profile_sha256: str,
         expected_source_inventory_sha256: str,
         expected_repository_inventory_sha256: str,
+        expected_evidence_index_sha256: str,
         expected_seal_record_sha256: str,
     ) -> FormalSealCheck:
         calls.append(
@@ -425,8 +446,12 @@ def test_development_result_cli_emits_exact_status_and_forwards_exact_inputs(
                 terminal,
                 expected_authorization_sha256,
                 expected_search_receipt_sha256,
+                expected_worker_request_sha256,
+                expected_formal_worker_inventory_sha256,
+                expected_launch_profile_sha256,
                 expected_source_inventory_sha256,
                 expected_repository_inventory_sha256,
+                expected_evidence_index_sha256,
                 expected_seal_record_sha256,
             )
         )
@@ -441,7 +466,7 @@ def test_development_result_cli_emits_exact_status_and_forwards_exact_inputs(
     )
     assert calls == [expected_forwarding]
     assert len(set(expected_forwarding[:3])) == 3
-    assert len(set(expected_forwarding[3:])) == 5
+    assert len(set(expected_forwarding[3:])) == 9
     assert denial_calls == {
         "uci_loader": 0,
         "h1_loader": 0,
@@ -519,7 +544,7 @@ def test_public_scan_rejects_private_metadata_without_echoing_values() -> None:
         ({"raw_environment": "NAME=value"}, ("RAW_ENVIRONMENT",)),
         ({"hostname": "private-host"}, ("RAW_ENVIRONMENT",)),
         ({"container_id": "a" * 64}, ("CONTAINER_ID",)),
-        ({"payload": {"row": 1}}, ("OPAQUE_PAYLOAD",)),
+        ({"payload": {"row": 1}}, ("OPAQUE_PAYLOAD", "RAW_EXECUTION")),
     ],
 )
 def test_public_scan_returns_fixed_low_cardinality_codes(
@@ -697,3 +722,105 @@ def test_private_verifier_sanitizes_path_and_identity_type_failures(tmp_path: Pa
 
     assert check.reason_codes == ("PRIVATE_CONTAINER_INVALID",)
     assert str(secret) not in repr(check)
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        {"command": "python formal_worker.py"},
+        {"row": {"cnt": 42}},
+        {"label": 42.0},
+        {"prediction": 41.0},
+        {"created_at_utc": "2026-08-29T00:00:00Z"},
+    ),
+)
+def test_public_worker_response_scanner_rejects_raw_execution_shapes(
+    document: dict[str, object],
+) -> None:
+    violations = public_evidence_violations(document)
+    assert violations
+    assert all(repr(value) not in repr(violations) for value in document.values())
+
+
+def test_complete_closed_search_receipt_with_created_at_utc_remains_scanner_clean() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    raw = (repository_root / "evidence/public/v02/search/search-receipt.json").read_bytes()
+    receipt = worker_protocol.SearchReceipt.model_validate_json(raw)
+    document = receipt.model_dump(mode="json")
+
+    assert set(document) == set(worker_protocol.SearchReceipt.model_fields)
+    assert document["schema_version"] == "mdcp.search-receipt.v1"
+    assert "created_at_utc" in document
+    assert public_evidence_violations(document) == ()
+
+
+def test_search_receipt_timestamp_exemption_requires_the_exact_closed_document() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    raw = (repository_root / "evidence/public/v02/search/search-receipt.json").read_bytes()
+    document = worker_protocol.SearchReceipt.model_validate_json(raw).model_dump(mode="json")
+    document["unexpected"] = "aggregate"
+
+    assert public_evidence_violations(document) == ("RAW_TIMESTAMP",)
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    (
+        pytest.param(
+            (
+                "closed_search_receipt = (\n"
+                "                frozenset(current) == _SEARCH_RECEIPT_KEYS\n"
+                '                and current.get("schema_version") == '
+                '"mdcp.search-receipt.v1"\n'
+                "            )"
+            ),
+            (
+                "closed_search_receipt = (\n"
+                '                current.get("schema_version") == '
+                '"mdcp.search-receipt.v1"\n'
+                "            )"
+            ),
+            id="arbitrary-receipt-exemption",
+        ),
+        pytest.param(
+            "if normalized in _RAW_EXECUTION_KEYS:",
+            'if normalized in _RAW_EXECUTION_KEYS or normalized.endswith("_command"):',
+            id="generic-scanner-capability",
+        ),
+    ),
+)
+def test_task_six_firewall_rejects_scanner_source_capability_mutations(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    import mdcp.temporal.firewall as firewall
+
+    logical_path = "src/mdcp/temporal/evidence.py"
+    repository_root = Path(__file__).resolve().parents[3]
+    source = (repository_root / logical_path).read_text(encoding="utf-8")
+    mutated = source.replace(needle, replacement, 1)
+    assert mutated != source
+    target = tmp_path / logical_path
+    target.parent.mkdir(parents=True)
+    target.write_text(mutated, encoding="utf-8")
+
+    with pytest.raises(
+        firewall.StaticFirewallError,
+        match="^H2_IMPORT_CAPABILITY_FORBIDDEN$",
+    ):
+        firewall.audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
+def test_public_worker_response_scanner_keeps_exact_not_generic_execution_keys() -> None:
+    assert (
+        public_evidence_violations(
+            {
+                "commands": 1,
+                "rows": 2,
+                "labels": 3,
+                "predictions": 4,
+            }
+        )
+        == ()
+    )

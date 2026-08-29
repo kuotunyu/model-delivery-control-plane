@@ -39,6 +39,10 @@ R = "c" * 64
 S = "d" * 64
 INVENTORY = "e" * 64
 P = "f" * 64
+WORKER_REQUEST = "3" * 64
+WORKER_INVENTORY = "4" * 64
+LAUNCH_PROFILE = "5" * 64
+EVIDENCE_INDEX = "6" * 64
 FREEZE = "1" * 40
 ARCHIVE = "b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401"
 
@@ -153,7 +157,11 @@ def seal_document(
         "consumption_marker_sha256": M,
         "search_freeze_commit": FREEZE,
         "search_receipt_sha256": S,
+        "worker_request_sha256": WORKER_REQUEST,
+        "formal_worker_inventory_sha256": WORKER_INVENTORY,
+        "launch_profile_sha256": LAUNCH_PROFILE,
         "source_inventory_sha256": INVENTORY,
+        "evidence_index_sha256": EVIDENCE_INDEX,
         "protocol_sha256": P,
         "repository_inventory_sha256": R,
         "dataset_archive_sha256": ARCHIVE,
@@ -300,7 +308,11 @@ def test_terminal_schema_is_the_exact_checked_in_top_level() -> None:
         consumption_marker_sha256=M,
         search_freeze_commit=FREEZE,
         search_receipt_sha256=S,
+        worker_request_sha256=WORKER_REQUEST,
+        formal_worker_inventory_sha256=WORKER_INVENTORY,
+        launch_profile_sha256=LAUNCH_PROFILE,
         source_inventory_sha256=INVENTORY,
+        evidence_index_sha256=EVIDENCE_INDEX,
         protocol_sha256=P,
         repository_inventory_sha256=R,
         dataset_archive_sha256=ARCHIVE,
@@ -320,6 +332,152 @@ def test_terminal_schema_is_the_exact_checked_in_top_level() -> None:
         ).__class__.model_validate(
             {**seal.model_dump(mode="json"), "selection_status": "NO_ELIGIBLE_CANDIDATE"}
         )
+
+
+def test_worker_request_sha256_and_evidence_index_sha256_are_required_nonzero() -> None:
+    identity_fields = (
+        "worker_request_sha256",
+        "formal_worker_inventory_sha256",
+        "launch_profile_sha256",
+        "evidence_index_sha256",
+    )
+    document = seal_document()
+    seal = FormalDevelopmentSeal.model_validate(document)
+    assert tuple(getattr(seal, field) for field in identity_fields) == (
+        WORKER_REQUEST,
+        WORKER_INVENTORY,
+        LAUNCH_PROFILE,
+        EVIDENCE_INDEX,
+    )
+
+    schema = FormalDevelopmentSeal.model_json_schema()
+    assert all(field in schema["required"] for field in identity_fields)
+    assert all(field in schema["properties"] for field in identity_fields)
+    for field in identity_fields:
+        missing = dict(document)
+        missing.pop(field)
+        with pytest.raises(ValueError):
+            FormalDevelopmentSeal.model_validate(missing)
+        zero = dict(document)
+        zero[field] = ZERO
+        with pytest.raises(ValueError, match="FORMAL_DEVELOPMENT_SEAL_INVALID"):
+            FormalDevelopmentSeal.model_validate(zero)
+
+
+def test_terminal_anchor_recovery_requires_all_worker_identity_anchors() -> None:
+    parameters = inspect.signature(run_evidence.verify_formal_development_seal).parameters
+    assert {
+        "expected_worker_request_sha256",
+        "expected_formal_worker_inventory_sha256",
+        "expected_launch_profile_sha256",
+        "expected_evidence_index_sha256",
+    }.issubset(parameters)
+
+
+def _task_six_live_acceptance(
+    tmp_path: Path,
+    *,
+    seal_mutation: tuple[str, str] | None = None,
+) -> tuple[run_evidence._SupervisorLaunch, bytes]:
+    request = formal_worker_protocol.FormalWorkerRequest(
+        schema_version="mdcp.formal-worker-request.v1",
+        canonicalization_version="RFC8785",
+        expected_freeze_head=FREEZE,
+        repository_root="C:/repository",
+        search_receipt_path="C:/repository/receipt.json",
+        evidence_index_path="C:/repository/index.json",
+        authorization_path="C:/external/authorization.json",
+        consumption_root="C:/external/consumption",
+        archive_path="C:/external/archive.zip",
+        private_container_path="C:/external/private.json",
+        search_receipt_sha256=S,
+        evidence_index_sha256=EVIDENCE_INDEX,
+        authorization_sha256=A,
+        source_inventory_sha256=INVENTORY,
+        repository_inventory_sha256=R,
+        formal_worker_inventory_sha256=WORKER_INVENTORY,
+        launch_profile_sha256=LAUNCH_PROFILE,
+    )
+    request_raw = formal_worker_protocol.encode_formal_worker_request(request)
+    request_sha256 = sha256_hex(request_raw)
+    launch = run_evidence._SupervisorLaunch(
+        repository_root=tmp_path,
+        executable=tmp_path / "python.exe",
+        worker_script=tmp_path / "formal_worker.py",
+        request=request,
+        request_bytes=request_raw,
+        request_sha256=request_sha256,
+        snapshot=run_evidence._RepositorySnapshot(
+            head=FREEZE,
+            inventory_sha256=R,
+        ),
+        terminal_seal_path=tmp_path / "terminal.json",
+    )
+    document = seal_document()
+    document["worker_request_sha256"] = request_sha256
+    if seal_mutation is not None:
+        document[seal_mutation[0]] = seal_mutation[1]
+    seal = FormalDevelopmentSeal.model_validate(document)
+    terminal_raw = canonicalize_json(seal.model_dump(mode="json"))
+    launch.terminal_seal_path.write_bytes(terminal_raw)
+    identity = formal_worker_protocol.FormalWorkerPrivateIdentity(
+        **private_identity().model_dump(mode="python")
+    )
+    response = formal_worker_protocol.FormalWorkerResponse(
+        schema_version="mdcp.formal-worker-response.v1",
+        canonicalization_version="RFC8785",
+        verdict="PASS",
+        reason_codes=(),
+        private_identity=identity,
+        seal_record_sha256=sha256_hex(terminal_raw),
+        repository_inventory_sha256=R,
+        authorization_sha256=A,
+        consumption_marker_sha256=M,
+        fit_count=84,
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+        worker_request_sha256=request_sha256,
+        formal_worker_inventory_sha256=WORKER_INVENTORY,
+        launch_profile_sha256=LAUNCH_PROFILE,
+    )
+    return launch, formal_worker_protocol.encode_formal_worker_response(response)
+
+
+def test_terminal_anchor_live_acceptance_requires_one_coherent_physical_seal(
+    tmp_path: Path,
+) -> None:
+    launch, response = _task_six_live_acceptance(tmp_path)
+
+    outcome = run_evidence._accept_worker_response(launch, response)
+
+    assert outcome.verdict == "PASS"
+    assert outcome.seal_record_sha256 == sha256_hex(launch.terminal_seal_path.read_bytes())
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    (
+        ("search_freeze_commit", "2" * 40),
+        ("worker_request_sha256", "7" * 64),
+        ("formal_worker_inventory_sha256", "7" * 64),
+        ("launch_profile_sha256", "7" * 64),
+        ("source_inventory_sha256", "7" * 64),
+        ("evidence_index_sha256", "7" * 64),
+        ("repository_inventory_sha256", "7" * 64),
+    ),
+)
+def test_terminal_anchor_live_acceptance_rejects_each_terminal_identity_mismatch(
+    tmp_path: Path,
+    field: str,
+    wrong_value: str,
+) -> None:
+    launch, response = _task_six_live_acceptance(
+        tmp_path,
+        seal_mutation=(field, wrong_value),
+    )
+
+    with pytest.raises(run_evidence._WorkerProcessUnknown):
+        run_evidence._accept_worker_response(launch, response)
 
 
 @pytest.mark.parametrize(
@@ -489,15 +647,91 @@ def test_worker_is_the_only_natural_execution_owner() -> None:
     assert callable(formal_worker._execute_natural_run)
 
 
+def test_task_six_firewall_rejects_another_worker_request_digest_caller(
+    tmp_path: Path,
+) -> None:
+    import mdcp.temporal.firewall as firewall
+
+    logical_path = "src/mdcp/temporal/formal_worker.py"
+    source = Path(logical_path).read_text(encoding="utf-8")
+    mutation = (
+        "def _forbidden_request_digest_caller(request: object) -> str:\n"
+        "    from mdcp.temporal.formal_worker_protocol import worker_request_sha256\n"
+        "    return worker_request_sha256(request)\n\n\n"
+    )
+    target = tmp_path / logical_path
+    target.parent.mkdir(parents=True)
+    target.write_text(mutation + source, encoding="utf-8")
+
+    with pytest.raises(
+        firewall.StaticFirewallError,
+        match="^H2_IMPORT_CAPABILITY_FORBIDDEN$",
+    ):
+        firewall.audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+    assert firewall._SCOPED_IMPORT_ALLOWLIST[logical_path][
+        ("mdcp.temporal.formal_worker_protocol", "worker_request_sha256")
+    ] == frozenset({"_complete_finalized_run", "_response"})
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    (
+        pytest.param(
+            'development.add_argument("--expected-worker-request-sha256", required=True)',
+            'development.add_argument("--expected-worker-request-sha256", required=False)',
+            id="optional-cli-anchor",
+        ),
+        pytest.param(
+            "check = run_evidence.verify_formal_development_seal(",
+            "check = run_evidence.verify_development_result(",
+            id="alternate-verifier",
+        ),
+    ),
+)
+def test_task_six_firewall_rejects_cli_trust_route_source_mutations(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+) -> None:
+    import mdcp.temporal.firewall as firewall
+
+    logical_path = "src/mdcp/temporal/cli.py"
+    source = Path(logical_path).read_text(encoding="utf-8")
+    mutated = source.replace(needle, replacement, 1)
+    assert mutated != source
+    target = tmp_path / logical_path
+    target.parent.mkdir(parents=True)
+    target.write_text(mutated, encoding="utf-8")
+
+    with pytest.raises(
+        firewall.StaticFirewallError,
+        match="^H2_IMPORT_CAPABILITY_FORBIDDEN$",
+    ):
+        firewall.audit_static_h2_firewall(tmp_path, formal_paths=(logical_path,))
+
+
 def _fix_round_one_finalized_context() -> SimpleNamespace:
     return SimpleNamespace(
         publications=object(),
-        request=SimpleNamespace(
-            authorization_sha256=A,
+        request=formal_worker_protocol.FormalWorkerRequest(
+            schema_version="mdcp.formal-worker-request.v1",
+            canonicalization_version="RFC8785",
             expected_freeze_head=FREEZE,
+            repository_root="C:/repository",
+            search_receipt_path="C:/repository/receipt.json",
+            evidence_index_path="C:/repository/index.json",
+            authorization_path="C:/external/authorization.json",
+            consumption_root="C:/external/consumption",
+            archive_path="C:/external/archive.zip",
+            private_container_path="C:/external/private.json",
             search_receipt_sha256=S,
+            evidence_index_sha256=EVIDENCE_INDEX,
+            authorization_sha256=A,
             source_inventory_sha256=INVENTORY,
             repository_inventory_sha256=R,
+            formal_worker_inventory_sha256=WORKER_INVENTORY,
+            launch_profile_sha256=LAUNCH_PROFILE,
         ),
         receipt=SimpleNamespace(
             dataset_contract_sha256=P,
@@ -897,10 +1131,14 @@ def test_mutating_cli_commands_have_no_digest_injection_flags() -> None:
         "verify-search-source": {"--expected-index-sha256"},
         "verify-development-result": {
             "--expected-authorization-sha256",
+            "--expected-evidence-index-sha256",
+            "--expected-formal-worker-inventory-sha256",
+            "--expected-launch-profile-sha256",
             "--expected-repository-inventory-sha256",
             "--expected-seal-record-sha256",
             "--expected-search-receipt-sha256",
             "--expected-source-inventory-sha256",
+            "--expected-worker-request-sha256",
         },
     }
 
@@ -912,8 +1150,12 @@ def _recover(marker: Path, private: Path, terminal: Path) -> run_evidence.Formal
         terminal,
         expected_authorization_sha256=A,
         expected_search_receipt_sha256=S,
+        expected_worker_request_sha256=WORKER_REQUEST,
+        expected_formal_worker_inventory_sha256=WORKER_INVENTORY,
+        expected_launch_profile_sha256=LAUNCH_PROFILE,
         expected_source_inventory_sha256=INVENTORY,
         expected_repository_inventory_sha256=R,
+        expected_evidence_index_sha256=EVIDENCE_INDEX,
         expected_seal_record_sha256=ZERO,
     )
 
@@ -1391,7 +1633,11 @@ def _write_valid_recovery_chain(
         consumption_marker_sha256=sha256_hex(marker_raw),
         search_freeze_commit=FREEZE,
         search_receipt_sha256=S,
+        worker_request_sha256=WORKER_REQUEST,
+        formal_worker_inventory_sha256=WORKER_INVENTORY,
+        launch_profile_sha256=LAUNCH_PROFILE,
         source_inventory_sha256=INVENTORY,
+        evidence_index_sha256=EVIDENCE_INDEX,
         protocol_sha256=P,
         repository_inventory_sha256=R,
         dataset_archive_sha256=ARCHIVE,
@@ -1498,10 +1744,113 @@ def _anchored_recovery(
         terminal_path,
         expected_authorization_sha256=A,
         expected_search_receipt_sha256=S,
+        expected_worker_request_sha256=WORKER_REQUEST,
+        expected_formal_worker_inventory_sha256=WORKER_INVENTORY,
+        expected_launch_profile_sha256=LAUNCH_PROFILE,
         expected_source_inventory_sha256=INVENTORY,
         expected_repository_inventory_sha256=R,
+        expected_evidence_index_sha256=EVIDENCE_INDEX,
         expected_seal_record_sha256=terminal_sha256,
     )
+
+
+def test_recovery_anchors_marker_before_reading_private_or_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker_path, private_path, terminal_path, _seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+    original_leaf = run_evidence._recovery_leaf
+    reads: list[Path] = []
+
+    def recording_leaf(path: Path, maximum_bytes: int) -> tuple[str, bytes | None]:
+        reads.append(path)
+        return original_leaf(path, maximum_bytes)
+
+    monkeypatch.setattr(run_evidence, "_recovery_leaf", recording_leaf)
+
+    check = run_evidence.verify_formal_development_seal(
+        marker_path,
+        private_path,
+        terminal_path,
+        expected_authorization_sha256="7" * 64,
+        expected_search_receipt_sha256=S,
+        expected_worker_request_sha256=WORKER_REQUEST,
+        expected_formal_worker_inventory_sha256=WORKER_INVENTORY,
+        expected_launch_profile_sha256=LAUNCH_PROFILE,
+        expected_source_inventory_sha256=INVENTORY,
+        expected_repository_inventory_sha256=R,
+        expected_evidence_index_sha256=EVIDENCE_INDEX,
+        expected_seal_record_sha256=sha256_hex(terminal_raw),
+    )
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_TRUST_MISMATCH",),
+    )
+    assert reads == [marker_path]
+
+
+def test_recovery_verifies_private_identity_before_reading_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker_path, private_path, terminal_path, _seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+    private_path.write_bytes(b"{}")
+    original_leaf = run_evidence._recovery_leaf
+    reads: list[Path] = []
+
+    def recording_leaf(path: Path, maximum_bytes: int) -> tuple[str, bytes | None]:
+        reads.append(path)
+        return original_leaf(path, maximum_bytes)
+
+    monkeypatch.setattr(run_evidence, "_recovery_leaf", recording_leaf)
+
+    check = _anchored_recovery(
+        marker_path,
+        private_path,
+        terminal_path,
+        sha256_hex(terminal_raw),
+    )
+
+    assert (check.verdict, check.reason_codes) == (
+        "UNKNOWN",
+        ("FORMAL_SEAL_INCOMPLETE",),
+    )
+    assert reads == [marker_path, private_path]
+
+
+def test_recovery_checks_external_terminal_digest_before_parsing_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker_path, private_path, terminal_path, _seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+    original_parser = run_evidence.parse_json_bytes
+    parsed: list[bytes] = []
+
+    def recording_parser(raw: bytes) -> object:
+        parsed.append(raw)
+        return original_parser(raw)
+
+    monkeypatch.setattr(run_evidence, "parse_json_bytes", recording_parser)
+
+    check = _anchored_recovery(
+        marker_path,
+        private_path,
+        terminal_path,
+        "7" * 64,
+    )
+
+    assert (check.verdict, check.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_TRUST_MISMATCH",),
+    )
+    assert terminal_raw not in parsed
 
 
 def test_recovery_requires_external_terminal_anchor(
@@ -1524,8 +1873,12 @@ def test_recovery_requires_external_terminal_anchor(
         terminal_path,
         expected_authorization_sha256=A,
         expected_search_receipt_sha256=S,
+        expected_worker_request_sha256=WORKER_REQUEST,
+        expected_formal_worker_inventory_sha256=WORKER_INVENTORY,
+        expected_launch_profile_sha256=LAUNCH_PROFILE,
         expected_source_inventory_sha256=INVENTORY,
         expected_repository_inventory_sha256=R,
+        expected_evidence_index_sha256=EVIDENCE_INDEX,
         expected_seal_record_sha256=ZERO,
     )
     assert (check.verdict, check.reason_codes) == (
@@ -1546,11 +1899,59 @@ def test_recovery_requires_external_terminal_anchor(
         terminal_path,
         expected_authorization_sha256=A,
         expected_search_receipt_sha256=S,
+        expected_worker_request_sha256=WORKER_REQUEST,
+        expected_formal_worker_inventory_sha256=WORKER_INVENTORY,
+        expected_launch_profile_sha256=LAUNCH_PROFILE,
         expected_source_inventory_sha256=INVENTORY,
         expected_repository_inventory_sha256="3" * 64,
+        expected_evidence_index_sha256=EVIDENCE_INDEX,
         expected_seal_record_sha256=sha256_hex(terminal_raw),
     )
     assert (trust_mismatch.verdict, trust_mismatch.reason_codes) == (
+        "FAIL",
+        ("FORMAL_SEAL_TRUST_MISMATCH",),
+    )
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    (
+        "expected_worker_request_sha256",
+        "expected_formal_worker_inventory_sha256",
+        "expected_launch_profile_sha256",
+        "expected_source_inventory_sha256",
+        "expected_repository_inventory_sha256",
+        "expected_evidence_index_sha256",
+    ),
+)
+def test_terminal_anchor_recovery_rejects_each_independent_identity_mismatch(
+    tmp_path: Path,
+    anchor: str,
+) -> None:
+    marker_path, private_path, terminal_path, _seal, terminal_raw = _write_valid_recovery_chain(
+        tmp_path
+    )
+    expectations = {
+        "expected_authorization_sha256": A,
+        "expected_search_receipt_sha256": S,
+        "expected_worker_request_sha256": WORKER_REQUEST,
+        "expected_formal_worker_inventory_sha256": WORKER_INVENTORY,
+        "expected_launch_profile_sha256": LAUNCH_PROFILE,
+        "expected_source_inventory_sha256": INVENTORY,
+        "expected_repository_inventory_sha256": R,
+        "expected_evidence_index_sha256": EVIDENCE_INDEX,
+        "expected_seal_record_sha256": sha256_hex(terminal_raw),
+    }
+    expectations[anchor] = "7" * 64
+
+    check = run_evidence.verify_formal_development_seal(
+        marker_path,
+        private_path,
+        terminal_path,
+        **expectations,
+    )
+
+    assert (check.verdict, check.reason_codes) == (
         "FAIL",
         ("FORMAL_SEAL_TRUST_MISMATCH",),
     )

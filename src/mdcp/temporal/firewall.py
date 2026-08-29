@@ -843,7 +843,7 @@ _SCOPED_IMPORT_ALLOWLIST = {
         (
             "mdcp.temporal.formal_worker_protocol",
             "worker_request_sha256",
-        ): frozenset({"_response"}),
+        ): frozenset({"_complete_finalized_run", "_response"}),
         ("mdcp.temporal.run_evidence", "FormalDevelopmentSeal"): frozenset(
             {"_complete_finalized_run"}
         ),
@@ -1325,6 +1325,10 @@ _PINNED_FILE_CAPABILITY_FUNCTIONS = {
             "1e0beb1151f8323d21c1d79f3a3a3a04d682786198c355d157d32921584628f8"
         )
     },
+    "src/mdcp/temporal/cli.py": {
+        "build_parser": "efb9630bc0c7c5fb868d1887a6cac04bfbb720c1d4910bc4b875c866f8528e4f",
+        "main": "88e8ab0f5b5cbd355a01cb22fed0dd0e271c09becc0a1e12a75635ac40cf6122",
+    },
     "src/mdcp/temporal/contract_gate.py": {
         "_checked_json": "e4508a7b837471a78db8ffc3873c055315f5392b033c59f100e6935e57d59214",
         "_check_golden_vector_inventory": (
@@ -1347,6 +1351,12 @@ _PINNED_FILE_CAPABILITY_FUNCTIONS = {
             "3b9fda1edda8772d9c0cb9abe55bf83fa0f9f80dc20dae5e9e43c9e9d4adbe92"
         ),
     },
+    "src/mdcp/temporal/evidence.py": {
+        "_key_violation": ("0b46472b463cab894ac9582c2db4bff1171c6099d48c7d3e678754506a008866"),
+        "public_evidence_violations": (
+            "433cc57f76d0eddab71cda6acc0221de15b5d8b88b9179a8ab481b33af9ab59f"
+        ),
+    },
     "src/mdcp/temporal/golden_vectors.py": {
         "verify_golden_vector_manifest": (
             "a3afbe4051812bfcd039d7171f839e2395865288daf457b75c590f7fee4e3994"
@@ -1364,7 +1374,7 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "a5b6458b522bc43e1a64925118d8c9617377cada5955dd214271d0c59dedf490"
     ),
     "src/mdcp/temporal/formal_worker.py": (
-        "cb119465d04112e11bc30301dbce58ec4d8358ffd8b148b12695e24eae6868e2"
+        "3e9312f5f55fb5be20cc1921c8b3ea60c5b03bfc0be8dd6ae6f483360a15ee70"
     ),
     "src/mdcp/temporal/runner.py": (
         "81334542d1aceb0bb00edfcc1b4d31dac68824223866fa4d38954bb33c8483e9"

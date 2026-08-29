@@ -1260,6 +1260,7 @@ def _complete_finalized_run(
 ) -> _NaturalResult:
     from mdcp.common.canonical import canonicalize_json
     from mdcp.common.digests import sha256_hex
+    from mdcp.temporal.formal_worker_protocol import worker_request_sha256
     from mdcp.temporal.run_evidence import FormalDevelopmentSeal
     from mdcp.temporal.runtime_guards import RuntimeStage
 
@@ -1295,7 +1296,11 @@ def _complete_finalized_run(
             consumption_marker_sha256=marker_sha256,
             search_freeze_commit=context.request.expected_freeze_head,
             search_receipt_sha256=context.request.search_receipt_sha256,
+            worker_request_sha256=worker_request_sha256(context.request),
+            formal_worker_inventory_sha256=context.request.formal_worker_inventory_sha256,
+            launch_profile_sha256=context.request.launch_profile_sha256,
             source_inventory_sha256=context.request.source_inventory_sha256,
+            evidence_index_sha256=context.request.evidence_index_sha256,
             protocol_sha256=context.receipt.dataset_contract_sha256,
             repository_inventory_sha256=context.request.repository_inventory_sha256,
             dataset_archive_sha256=context.receipt.dataset_archive_sha256,

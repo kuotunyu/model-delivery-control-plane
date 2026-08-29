@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import os
@@ -114,6 +115,41 @@ def test_worker_process_bootstrap_is_a_no_argument_import_safe_target() -> None:
 
     assert str(inspect.signature(worker.main)) == "() -> 'int'"
     assert worker.main() == 2
+
+
+def test_worker_request_sha256_is_bound_into_terminal_seal_by_exact_worker_inputs() -> None:
+    import mdcp.temporal.formal_worker as worker
+
+    tree = ast.parse(inspect.getsource(worker))
+    complete = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_complete_finalized_run"
+    )
+    imports = {
+        alias.name
+        for node in ast.walk(complete)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "mdcp.temporal.formal_worker_protocol"
+        for alias in node.names
+    }
+    seal_call = next(
+        node
+        for node in ast.walk(complete)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "FormalDevelopmentSeal"
+    )
+    keywords = {keyword.arg: keyword.value for keyword in seal_call.keywords}
+
+    assert imports == {"worker_request_sha256"}
+    expected = {
+        "worker_request_sha256": "worker_request_sha256(context.request)",
+        "formal_worker_inventory_sha256": ("context.request.formal_worker_inventory_sha256"),
+        "launch_profile_sha256": "context.request.launch_profile_sha256",
+        "evidence_index_sha256": "context.request.evidence_index_sha256",
+    }
+    assert {name: ast.unparse(keywords[name]) for name in expected} == expected
 
 
 def test_worker_process_missing_trusted_inputs_is_canonical_and_fail_closed() -> None:

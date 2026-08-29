@@ -394,12 +394,60 @@
     {
       "not": {
         "properties": {
+          "worker_request_sha256": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "required": [
+          "worker_request_sha256"
+        ]
+      }
+    },
+    {
+      "not": {
+        "properties": {
+          "formal_worker_inventory_sha256": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "required": [
+          "formal_worker_inventory_sha256"
+        ]
+      }
+    },
+    {
+      "not": {
+        "properties": {
+          "launch_profile_sha256": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "required": [
+          "launch_profile_sha256"
+        ]
+      }
+    },
+    {
+      "not": {
+        "properties": {
           "source_inventory_sha256": {
             "const": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         },
         "required": [
           "source_inventory_sha256"
+        ]
+      }
+    },
+    {
+      "not": {
+        "properties": {
+          "evidence_index_sha256": {
+            "const": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "required": [
+          "evidence_index_sha256"
         ]
       }
     },
@@ -589,9 +637,29 @@
       "title": "Search Receipt Sha256",
       "type": "string"
     },
+    "worker_request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Worker Request Sha256",
+      "type": "string"
+    },
+    "formal_worker_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Formal Worker Inventory Sha256",
+      "type": "string"
+    },
+    "launch_profile_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Launch Profile Sha256",
+      "type": "string"
+    },
     "source_inventory_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Source Inventory Sha256",
+      "type": "string"
+    },
+    "evidence_index_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Evidence Index Sha256",
       "type": "string"
     },
     "protocol_sha256": {
@@ -661,7 +729,11 @@
     "consumption_marker_sha256",
     "search_freeze_commit",
     "search_receipt_sha256",
+    "worker_request_sha256",
+    "formal_worker_inventory_sha256",
+    "launch_profile_sha256",
     "source_inventory_sha256",
+    "evidence_index_sha256",
     "protocol_sha256",
     "repository_inventory_sha256",
     "dataset_archive_sha256",

@@ -566,7 +566,11 @@ class FormalDevelopmentSeal(BaseModel):
                         "authorization_sha256",
                         "consumption_marker_sha256",
                         "search_receipt_sha256",
+                        "worker_request_sha256",
+                        "formal_worker_inventory_sha256",
+                        "launch_profile_sha256",
                         "source_inventory_sha256",
+                        "evidence_index_sha256",
                         "protocol_sha256",
                         "repository_inventory_sha256",
                         "exit_observation_sha256",
@@ -636,7 +640,11 @@ class FormalDevelopmentSeal(BaseModel):
     consumption_marker_sha256: Sha256
     search_freeze_commit: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
     search_receipt_sha256: Sha256
+    worker_request_sha256: Sha256
+    formal_worker_inventory_sha256: Sha256
+    launch_profile_sha256: Sha256
     source_inventory_sha256: Sha256
+    evidence_index_sha256: Sha256
     protocol_sha256: Sha256
     repository_inventory_sha256: Sha256
     dataset_archive_sha256: Literal[
@@ -657,7 +665,11 @@ class FormalDevelopmentSeal(BaseModel):
             self.authorization_sha256,
             self.consumption_marker_sha256,
             self.search_receipt_sha256,
+            self.worker_request_sha256,
+            self.formal_worker_inventory_sha256,
+            self.launch_profile_sha256,
             self.source_inventory_sha256,
+            self.evidence_index_sha256,
             self.protocol_sha256,
             self.repository_inventory_sha256,
             self.exit_observation_sha256,
@@ -2115,14 +2127,16 @@ def _formal_worker_inventory(repository_root: Path) -> str:
     from mdcp.temporal.formal_worker_protocol import (
         FORMAL_WORKER_SOURCE_PATHS,
         FormalWorkerSourceEntry,
-        formal_worker_inventory_sha256,
+    )
+    from mdcp.temporal.formal_worker_protocol import (
+        formal_worker_inventory_sha256 as compute_formal_worker_inventory_sha256,
     )
 
     entries = []
     for logical_path in FORMAL_WORKER_SOURCE_PATHS:
         raw = _read_supervisor_file(repository_root / logical_path, 4_194_304)
         entries.append(FormalWorkerSourceEntry(logical_path=logical_path, sha256=sha256_hex(raw)))
-    return formal_worker_inventory_sha256(tuple(entries))
+    return compute_formal_worker_inventory_sha256(tuple(entries))
 
 
 def _verified_search_source_inventory(repository_root: Path, index: object) -> str:
@@ -2220,11 +2234,15 @@ def _supervisor_preflight(request: FormalDevelopmentRequest) -> _SupervisorLaunc
         FormalWorkerRequest,
         SearchEvidenceIndex,
         encode_formal_worker_request,
-        launch_profile_sha256,
-        worker_request_sha256,
     )
     from mdcp.temporal.formal_worker_protocol import (
         SearchReceipt as ProtocolSearchReceipt,
+    )
+    from mdcp.temporal.formal_worker_protocol import (
+        launch_profile_sha256 as compute_launch_profile_sha256,
+    )
+    from mdcp.temporal.formal_worker_protocol import (
+        worker_request_sha256 as compute_worker_request_sha256,
     )
 
     if type(request) is not FormalDevelopmentRequest:
@@ -2319,7 +2337,7 @@ def _supervisor_preflight(request: FormalDevelopmentRequest) -> _SupervisorLaunc
         source_inventory_sha256=source_inventory_sha256,
         repository_inventory_sha256=snapshot.inventory_sha256,
         formal_worker_inventory_sha256=worker_inventory,
-        launch_profile_sha256=launch_profile_sha256(),
+        launch_profile_sha256=compute_launch_profile_sha256(),
     )
     raw = encode_formal_worker_request(worker_request)
     return _SupervisorLaunch(
@@ -2328,7 +2346,7 @@ def _supervisor_preflight(request: FormalDevelopmentRequest) -> _SupervisorLaunc
         worker_script=worker_script,
         request=worker_request,
         request_bytes=raw,
-        request_sha256=worker_request_sha256(worker_request),
+        request_sha256=compute_worker_request_sha256(worker_request),
         snapshot=snapshot,
         terminal_seal_path=terminal_path,
     )
@@ -2525,7 +2543,12 @@ def _accept_worker_response(launch: _SupervisorLaunch, raw: bytes) -> FormalDeve
         if (
             seal.authorization_sha256 != request.authorization_sha256
             or seal.search_receipt_sha256 != request.search_receipt_sha256
+            or seal.worker_request_sha256 != launch.request_sha256
+            or seal.formal_worker_inventory_sha256 != request.formal_worker_inventory_sha256
+            or seal.launch_profile_sha256 != request.launch_profile_sha256
             or seal.source_inventory_sha256 != request.source_inventory_sha256
+            or seal.evidence_index_sha256 != request.evidence_index_sha256
+            or seal.search_freeze_commit != request.expected_freeze_head
             or seal.repository_inventory_sha256 != launch.snapshot.inventory_sha256
             or seal.consumption_marker_sha256 != response.consumption_marker_sha256
             or seal.fit_count != response.fit_count
@@ -3279,8 +3302,12 @@ def verify_formal_development_seal(
     *,
     expected_authorization_sha256: str,
     expected_search_receipt_sha256: str,
+    expected_worker_request_sha256: str,
+    expected_formal_worker_inventory_sha256: str,
+    expected_launch_profile_sha256: str,
     expected_source_inventory_sha256: str,
     expected_repository_inventory_sha256: str,
+    expected_evidence_index_sha256: str,
     expected_seal_record_sha256: str,
 ) -> FormalSealCheck:
     """Read and verify one fully anchored terminal chain without mutation or resume."""
@@ -3288,27 +3315,27 @@ def verify_formal_development_seal(
     expectations = (
         expected_authorization_sha256,
         expected_search_receipt_sha256,
+        expected_worker_request_sha256,
+        expected_formal_worker_inventory_sha256,
+        expected_launch_profile_sha256,
         expected_source_inventory_sha256,
         expected_repository_inventory_sha256,
+        expected_evidence_index_sha256,
         expected_seal_record_sha256,
     )
     if (
         any(not isinstance(path, Path) or not path.is_absolute() for path in paths)
         or len({str(path) for path in paths}) != 3
         or any(not _valid_sha256(value) for value in expectations)
-        or any(value == "0" * 64 for value in expectations[:4])
+        or any(value == "0" * 64 for value in expectations[:-1])
     ):
         return _seal_check("FAIL", "FORMAL_SEAL_REQUEST_INVALID")
     marker_state, marker_raw = _recovery_leaf(consumption_marker_path, 65_536)
-    private_state, private_raw = _recovery_leaf(
-        private_container_path, _MAX_PRIVATE_CONTAINER_BYTES
-    )
-    terminal_state, terminal_raw = _recovery_leaf(terminal_seal_path, 4_194_304)
-    if "UNKNOWN" in (marker_state, private_state, terminal_state):
+    if marker_state == "UNKNOWN":
         return _seal_check("UNKNOWN", "FORMAL_SEAL_INSPECTION_UNKNOWN")
-    if marker_state == private_state == terminal_state == "ABSENT":
-        return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_ABSENT")
     if marker_state == "ABSENT":
+        if not private_container_path.exists() and not terminal_seal_path.exists():
+            return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_ABSENT")
         return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_INVALID")
     if marker_raw is None:
         return _seal_check("UNKNOWN", "FORMAL_SEAL_CONSUMPTION_UNKNOWN")
@@ -3319,32 +3346,69 @@ def verify_formal_development_seal(
     except Exception:
         return _seal_check("UNKNOWN", "FORMAL_SEAL_CONSUMPTION_UNKNOWN")
     if (
-        private_state != "PRESENT"
-        or private_raw is None
-        or terminal_state != "PRESENT"
-        or terminal_raw is None
+        marker.authorization_sha256 != expected_authorization_sha256
+        or marker.search_receipt_sha256 != expected_search_receipt_sha256
     ):
-        return _seal_check("UNKNOWN", "FORMAL_SEAL_INCOMPLETE")
-    try:
-        seal = FormalDevelopmentSeal.model_validate(parse_json_bytes(terminal_raw))
-        if canonicalize_json(seal.model_dump(mode="json")) != terminal_raw:
-            raise ValueError
-    except Exception:
+        return _seal_check("FAIL", "FORMAL_SEAL_TRUST_MISMATCH")
+
+    private_state, private_raw = _recovery_leaf(
+        private_container_path, _MAX_PRIVATE_CONTAINER_BYTES
+    )
+    if private_state == "UNKNOWN":
+        return _seal_check("UNKNOWN", "FORMAL_SEAL_INSPECTION_UNKNOWN")
+    if private_state != "PRESENT" or private_raw is None:
         return _seal_check("UNKNOWN", "FORMAL_SEAL_INCOMPLETE")
     try:
         private_document = parse_json_bytes(private_raw)
         private_container = _PrivateContainer.model_validate(private_document)
         if canonicalize_json(private_container.model_dump(mode="json")) != private_raw:
             raise ValueError
+        if (
+            private_container.evidence_class != "natural_development"
+            or private_container.file_count != 5
+            or tuple(entry.logical_path for entry in private_container.entries)
+            != (
+                "provisional-winner.json",
+                "qualification-report.json",
+                "ranking-report.json",
+                "replay-report.json",
+                "trial-summary.json",
+            )
+        ):
+            return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_INVALID")
+        declared_private_identity = PrivateBundleIdentity(
+            file_count=private_container.file_count,
+            total_bytes=private_container.total_bytes,
+            inventory_sha256=private_container.inventory_sha256,
+            manifest_sha256=private_container.manifest_sha256,
+        )
     except Exception:
         return _seal_check("UNKNOWN", "FORMAL_SEAL_INCOMPLETE")
-    private_check = _verify_private_container_raw(private_raw, seal.private_identity)
+    private_check = _verify_private_container_raw(private_raw, declared_private_identity)
     if private_check.verdict != "PASS" or private_check.identity is None:
+        return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_INVALID")
+
+    terminal_state, terminal_raw = _recovery_leaf(terminal_seal_path, 4_194_304)
+    if terminal_state == "UNKNOWN":
+        return _seal_check("UNKNOWN", "FORMAL_SEAL_INSPECTION_UNKNOWN")
+    if terminal_state != "PRESENT" or terminal_raw is None:
+        return _seal_check("UNKNOWN", "FORMAL_SEAL_INCOMPLETE")
+    seal_sha256 = sha256_hex(terminal_raw)
+    if expected_seal_record_sha256 == "0" * 64:
+        return _seal_check("UNKNOWN", "FORMAL_SEAL_UNANCHORED")
+    if seal_sha256 != expected_seal_record_sha256:
+        return _seal_check("FAIL", "FORMAL_SEAL_TRUST_MISMATCH")
+    try:
+        seal = FormalDevelopmentSeal.model_validate(parse_json_bytes(terminal_raw))
+        if canonicalize_json(seal.model_dump(mode="json")) != terminal_raw:
+            raise ValueError
+    except Exception:
+        return _seal_check("UNKNOWN", "FORMAL_SEAL_INCOMPLETE")
+    if seal.private_identity != private_check.identity:
         return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_INVALID")
     if not _valid_natural_container(private_raw, seal):
         return _seal_check("FAIL", "FORMAL_SEAL_CHAIN_INVALID")
     marker_sha256 = sha256_hex(marker_raw)
-    seal_sha256 = sha256_hex(terminal_raw)
     exit_sha256 = sha256_hex(
         canonicalize_json(
             {
@@ -3376,13 +3440,14 @@ def verify_formal_development_seal(
     if (
         seal.authorization_sha256 != expected_authorization_sha256
         or seal.search_receipt_sha256 != expected_search_receipt_sha256
+        or seal.worker_request_sha256 != expected_worker_request_sha256
+        or seal.formal_worker_inventory_sha256 != expected_formal_worker_inventory_sha256
+        or seal.launch_profile_sha256 != expected_launch_profile_sha256
         or seal.source_inventory_sha256 != expected_source_inventory_sha256
         or seal.repository_inventory_sha256 != expected_repository_inventory_sha256
-        or (expected_seal_record_sha256 != "0" * 64 and seal_sha256 != expected_seal_record_sha256)
+        or seal.evidence_index_sha256 != expected_evidence_index_sha256
     ):
         return _seal_check("FAIL", "FORMAL_SEAL_TRUST_MISMATCH")
-    if expected_seal_record_sha256 == "0" * 64:
-        return _seal_check("UNKNOWN", "FORMAL_SEAL_UNANCHORED")
     return _seal_check(
         "PASS",
         None,

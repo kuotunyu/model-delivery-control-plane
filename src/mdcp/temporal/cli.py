@@ -75,8 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
     development.add_argument("--terminal-seal", type=Path, required=True)
     development.add_argument("--expected-authorization-sha256", required=True)
     development.add_argument("--expected-search-receipt-sha256", required=True)
+    development.add_argument("--expected-worker-request-sha256", required=True)
+    development.add_argument("--expected-formal-worker-inventory-sha256", required=True)
+    development.add_argument("--expected-launch-profile-sha256", required=True)
     development.add_argument("--expected-source-inventory-sha256", required=True)
     development.add_argument("--expected-repository-inventory-sha256", required=True)
+    development.add_argument("--expected-evidence-index-sha256", required=True)
     development.add_argument("--expected-seal-record-sha256", required=True)
     return parser
 
@@ -165,8 +169,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
             parsed.terminal_seal,
             expected_authorization_sha256=parsed.expected_authorization_sha256,
             expected_search_receipt_sha256=parsed.expected_search_receipt_sha256,
+            expected_worker_request_sha256=parsed.expected_worker_request_sha256,
+            expected_formal_worker_inventory_sha256=(
+                parsed.expected_formal_worker_inventory_sha256
+            ),
+            expected_launch_profile_sha256=parsed.expected_launch_profile_sha256,
             expected_source_inventory_sha256=parsed.expected_source_inventory_sha256,
             expected_repository_inventory_sha256=parsed.expected_repository_inventory_sha256,
+            expected_evidence_index_sha256=parsed.expected_evidence_index_sha256,
             expected_seal_record_sha256=parsed.expected_seal_record_sha256,
         )
         document = {

@@ -40,6 +40,37 @@ _RAW_ENVIRONMENT_KEYS = frozenset(
 )
 _CONTAINER_ID_KEYS = frozenset({"container_id", "docker_container_id"})
 _OPAQUE_PAYLOAD_KEYS = frozenset({"evidence_payload", "opaque_payload", "payload", "raw_payload"})
+_RAW_EXECUTION_KEYS = frozenset({"command", "label", "prediction", "row"})
+_SEARCH_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "canonicalization_version",
+        "search_source_commit",
+        "approved_spec_sha256",
+        "dependency_lock_sha256",
+        "dataset_contract_sha256",
+        "dataset_archive_sha256",
+        "development_rows_sha256",
+        "temporal_schema_sha256",
+        "temporal_adapter_sha256",
+        "golden_vector_sha256",
+        "fold_table_sha256",
+        "trial_table_sha256",
+        "ranking_rule_sha256",
+        "quality_policy_sha256",
+        "statistical_code_sha256",
+        "execution_seed",
+        "estimator_threads",
+        "selection_fit_limit",
+        "replay_fit_limit",
+        "final_fit_limit",
+        "maximum_fit_limit",
+        "h1_role",
+        "h2_status",
+        "h2_loaded_rows",
+        "created_at_utc",
+    }
+)
 _ABSOLUTE_PATH = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"[A-Za-z]:[\\/]"
@@ -149,6 +180,8 @@ def _key_violation(key: str) -> str | None:
         return "CONTAINER_ID"
     if normalized in _OPAQUE_PAYLOAD_KEYS:
         return "OPAQUE_PAYLOAD"
+    if normalized in _RAW_EXECUTION_KEYS:
+        return "RAW_EXECUTION"
     return None
 
 
@@ -181,12 +214,20 @@ def public_evidence_violations(value: object) -> tuple[str, ...]:
 
         if isinstance(current, Mapping):
             active_container_ids.add(container_id)
+            closed_search_receipt = (
+                frozenset(current) == _SEARCH_RECEIPT_KEYS
+                and current.get("schema_version") == "mdcp.search-receipt.v1"
+            )
             for key, nested in current.items():
                 if not isinstance(key, str):
                     violations.add("OPAQUE_PAYLOAD")
                 else:
                     if code := _key_violation(key):
                         violations.add(code)
+                    if key.casefold().replace("-", "_") == "created_at_utc" and not (
+                        closed_search_receipt
+                    ):
+                        violations.add("RAW_TIMESTAMP")
                 walk(nested)
             active_container_ids.remove(container_id)
             return

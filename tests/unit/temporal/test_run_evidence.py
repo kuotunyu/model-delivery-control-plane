@@ -1350,6 +1350,58 @@ def test_task_four_round_two_preflight_accepts_direct_child_freeze_topology(
     )
 
 
+def test_worker_request_sha256_and_evidence_index_sha256_are_independently_reproduced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, state = _task_four_preflight_fixture(tmp_path)
+    _write_task_four_preflight_documents(state)
+    _install_task_four_topology_git(monkeypatch, state)
+    _install_task_four_snapshot(monkeypatch, request)
+    captured: list[bytes] = []
+
+    def capture_request(
+        _repository: Path,
+        _executable: Path,
+        _worker: Path,
+        request_bytes: bytes,
+    ) -> bytes:
+        captured.append(request_bytes)
+        raise run_evidence._WorkerLaunchFailed
+
+    monkeypatch.setattr(run_evidence, "_run_fixed_worker_transport", capture_request)
+
+    outcome = run_evidence.execute_authorized_formal_development(request)
+
+    assert outcome.reason_codes == ("FORMAL_WORKER_LAUNCH_FAILED",)
+    assert len(captured) == 1
+    worker_request = worker_protocol.parse_formal_worker_request(captured[0])
+    repository = state["repository"]
+    source_entries = state["entries"]
+    assert isinstance(repository, Path)
+    assert isinstance(source_entries, tuple)
+    worker_entries = tuple(
+        worker_protocol.FormalWorkerSourceEntry(
+            logical_path=logical_path,
+            sha256=sha256_hex((repository / logical_path).read_bytes()),
+        )
+        for logical_path in worker_protocol.FORMAL_WORKER_SOURCE_PATHS
+    )
+    index_raw = request.evidence_index_path.read_bytes()
+
+    assert worker_request.evidence_index_sha256 == sha256_hex(index_raw)
+    assert worker_request.source_inventory_sha256 == (
+        worker_protocol.search_source_inventory_sha256(source_entries)
+    )
+    assert worker_request.source_inventory_sha256 != worker_request.evidence_index_sha256
+    assert worker_request.formal_worker_inventory_sha256 == (
+        worker_protocol.formal_worker_inventory_sha256(worker_entries)
+    )
+    assert len(worker_entries) == 4
+    assert worker_request.launch_profile_sha256 == worker_protocol.launch_profile_sha256()
+    assert worker_protocol.worker_request_sha256(worker_request) == sha256_hex(captured[0])
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -1598,6 +1650,7 @@ class _TaskFourMatrixProcess:
     def __init__(
         self,
         *,
+        stdout_raw: bytes = b"response",
         returncode: int = 0,
         close_error: bool = False,
         write_zero: bool = False,
@@ -1608,6 +1661,7 @@ class _TaskFourMatrixProcess:
     ) -> None:
         self.stdin = _TaskFourMatrixInput(close_error=close_error, write_zero=write_zero)
         self.stdout = _TaskFourMatrixOutput(
+            stdout_raw,
             read_error=read_error,
             missing_eof=missing_eof,
             wrong_type=wrong_type,
@@ -2108,6 +2162,182 @@ def _execute_task_four_fake_response(
     return run_evidence.execute_authorized_formal_development(request), launches
 
 
+def _task_six_pass_terminal_and_response(
+    launch: run_evidence._SupervisorLaunch,
+) -> tuple[bytes, bytes]:
+    identity = worker_protocol.FormalWorkerPrivateIdentity(
+        file_count=5,
+        total_bytes=100,
+        inventory_sha256="8" * 64,
+        manifest_sha256="9" * 64,
+    )
+    development = valid_public_result()
+    development["evidence_class"] = "natural_development"
+    development["status"] = "FAIL"
+    for trial in development["trials"]:
+        for fold in trial["folds"]:
+            fold["status"] = "FAIL"
+            fold["reason_codes"] = ["QUALITY_THRESHOLD_EXCEEDED"]
+    exit_observation_sha256 = sha256_hex(
+        canonicalize_json(
+            {
+                "elapsed_within_budget": True,
+                "max_elapsed_ns": 21_600_000_000_000,
+                "max_peak_process_bytes": 4_294_967_296,
+                "memory_within_budget": True,
+                "reason_codes": [],
+                "repository_inventory_sha256": launch.snapshot.inventory_sha256,
+                "schema_version": "mdcp.formal-exit-observation.v1",
+                "search_freeze_commit": launch.request.expected_freeze_head,
+                "stage": "EXIT",
+                "verdict": "PASS",
+            }
+        )
+    )
+    seal = run_evidence.FormalDevelopmentSeal(
+        schema_version="mdcp.formal-development-seal.v1",
+        canonicalization_version="RFC8785",
+        terminal_state="SEALED",
+        authorization_sha256=launch.request.authorization_sha256,
+        consumption_marker_sha256="b" * 64,
+        search_freeze_commit=launch.request.expected_freeze_head,
+        search_receipt_sha256=launch.request.search_receipt_sha256,
+        worker_request_sha256=launch.request_sha256,
+        formal_worker_inventory_sha256=launch.request.formal_worker_inventory_sha256,
+        launch_profile_sha256=launch.request.launch_profile_sha256,
+        source_inventory_sha256=launch.request.source_inventory_sha256,
+        evidence_index_sha256=launch.request.evidence_index_sha256,
+        protocol_sha256="c" * 64,
+        repository_inventory_sha256=launch.snapshot.inventory_sha256,
+        dataset_archive_sha256=("b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401"),
+        private_identity=run_evidence.PrivateBundleIdentity(**identity.model_dump(mode="python")),
+        exit_observation_sha256=exit_observation_sha256,
+        fit_count=80,
+        selection_status="NO_ELIGIBLE_CANDIDATE",
+        h1_role="OBSERVED_DEVELOPMENT_ONLY",
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+        development_result=run_evidence.PublicDevelopmentResult.model_validate(development),
+    )
+    terminal_raw = canonicalize_json(seal.model_dump(mode="json"))
+    response = worker_protocol.FormalWorkerResponse(
+        schema_version="mdcp.formal-worker-response.v1",
+        canonicalization_version="RFC8785",
+        verdict="PASS",
+        reason_codes=(),
+        private_identity=identity,
+        seal_record_sha256=sha256_hex(terminal_raw),
+        repository_inventory_sha256=launch.snapshot.inventory_sha256,
+        authorization_sha256=launch.request.authorization_sha256,
+        consumption_marker_sha256="b" * 64,
+        fit_count=80,
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+        worker_request_sha256=launch.request_sha256,
+        formal_worker_inventory_sha256=launch.request.formal_worker_inventory_sha256,
+        launch_profile_sha256=launch.request.launch_profile_sha256,
+    )
+    return terminal_raw, worker_protocol.encode_formal_worker_response(response)
+
+
+@pytest.mark.parametrize(
+    ("published_leaves", "stdout_kind", "process_kwargs"),
+    (
+        pytest.param(("marker",), "empty", {"returncode": 9}, id="after-marker"),
+        pytest.param(("marker",), "empty", {"wait_error": True}, id="during-execution"),
+        pytest.param(
+            ("marker", "private"),
+            "empty",
+            {"returncode": 9},
+            id="after-private-publication",
+        ),
+        pytest.param(
+            ("marker", "private", "terminal"),
+            "empty",
+            {"returncode": 9},
+            id="after-terminal-publication",
+        ),
+        pytest.param(
+            ("marker", "private", "terminal"),
+            "empty",
+            {"returncode": 0},
+            id="before-stdout",
+        ),
+        pytest.param(
+            ("marker", "private", "terminal"),
+            "pass",
+            {"returncode": 9},
+            id="after-stdout-before-observed-zero-exit",
+        ),
+        pytest.param(
+            ("marker", "private", "terminal"),
+            "pass",
+            {"wait_error": True},
+            id="after-stdout-with-unobservable-exit",
+        ),
+    ),
+)
+def test_crash_matrix_uses_stage_specific_transport_and_remains_unknown_unanchored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    published_leaves: tuple[str, ...],
+    stdout_kind: str,
+    process_kwargs: dict[str, object],
+) -> None:
+    launch = _task_four_acceptance_fixture(tmp_path)
+    terminal_raw, pass_stdout = _task_six_pass_terminal_and_response(launch)
+    leaf_paths = {
+        "marker": tmp_path / "marker.json",
+        "private": tmp_path / "private.json",
+        "terminal": launch.terminal_seal_path,
+    }
+    for name in published_leaves:
+        leaf_paths[name].write_bytes(
+            terminal_raw if name == "terminal" else f"synthetic-{name}".encode()
+        )
+    launches = 0
+    process = _TaskFourMatrixProcess(
+        stdout_raw=pass_stdout if stdout_kind == "pass" else b"",
+        **process_kwargs,
+    )
+
+    def factory(*_args: object, **_kwargs: object) -> _TaskFourMatrixProcess:
+        nonlocal launches
+        launches += 1
+        return process
+
+    monkeypatch.setattr(run_evidence, "_supervisor_preflight", lambda _request: launch)
+    monkeypatch.setattr(run_evidence, "_repository_snapshot", lambda *_args: launch.snapshot)
+    monkeypatch.setattr(subprocess, "Popen", factory)
+    monkeypatch.setenv("SYSTEMROOT", "C:/Windows")
+    monkeypatch.setenv("WINDIR", "C:/Windows")
+    request = run_evidence.FormalDevelopmentRequest(
+        repository_root=launch.repository_root,
+        expected_freeze_head=launch.snapshot.head,
+        search_receipt_path=Path("C:/repository/receipt.json"),
+        evidence_index_path=Path("C:/repository/index.json"),
+        authorization_path=Path("C:/external/authorization.json"),
+        consumption_root=Path("C:/external/consumption"),
+        archive_path=Path("C:/external/archive.zip"),
+        private_container_path=Path("C:/external/private.json"),
+    )
+
+    outcome = run_evidence.execute_authorized_formal_development(request)
+
+    assert launches == 1
+    assert (outcome.verdict, outcome.reason_codes) == (
+        "UNKNOWN",
+        ("FORMAL_WORKER_PROCESS_UNKNOWN",),
+    )
+    assert outcome.fit_count is None
+    assert outcome.private_identity is None
+    assert outcome.seal_record_sha256 is None
+    assert outcome.repository_inventory_sha256 is None
+    assert {name for name, path in leaf_paths.items() if path.exists()} == set(published_leaves)
+    assert process.stdout.reads >= 1
+    assert process.waits
+
+
 @pytest.mark.parametrize("mutation", ("partial", "extra", "malformed", "noncanonical"))
 def test_task_four_corrective_text_response_matrix_is_sanitized(
     tmp_path: Path,
@@ -2222,6 +2452,110 @@ def test_task_four_corrective_public_terminal_leaf_mismatch_is_sanitized(
     assert outcome.private_identity is None
     assert outcome.seal_record_sha256 is None
     assert outcome.repository_inventory_sha256 is None
+
+
+def test_terminal_anchor_rejects_terminal_seal_with_mismatched_freeze_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch = _task_four_acceptance_fixture(tmp_path)
+    identity = worker_protocol.FormalWorkerPrivateIdentity(
+        file_count=5,
+        total_bytes=100,
+        inventory_sha256="8" * 64,
+        manifest_sha256="9" * 64,
+    )
+    development = valid_public_result()
+    development["evidence_class"] = "natural_development"
+    development["status"] = "FAIL"
+    for trial in development["trials"]:
+        for fold in trial["folds"]:
+            fold["status"] = "FAIL"
+            fold["reason_codes"] = ["QUALITY_THRESHOLD_EXCEEDED"]
+    mismatched_freeze = "f" * 40
+    exit_observation_sha256 = sha256_hex(
+        canonicalize_json(
+            {
+                "elapsed_within_budget": True,
+                "max_elapsed_ns": 21_600_000_000_000,
+                "max_peak_process_bytes": 4_294_967_296,
+                "memory_within_budget": True,
+                "reason_codes": [],
+                "repository_inventory_sha256": launch.snapshot.inventory_sha256,
+                "schema_version": "mdcp.formal-exit-observation.v1",
+                "search_freeze_commit": mismatched_freeze,
+                "stage": "EXIT",
+                "verdict": "PASS",
+            }
+        )
+    )
+    seal_fields: dict[str, object] = dict(
+        schema_version="mdcp.formal-development-seal.v1",
+        canonicalization_version="RFC8785",
+        terminal_state="SEALED",
+        authorization_sha256=launch.request.authorization_sha256,
+        consumption_marker_sha256="b" * 64,
+        search_freeze_commit=mismatched_freeze,
+        search_receipt_sha256=launch.request.search_receipt_sha256,
+        source_inventory_sha256=launch.request.source_inventory_sha256,
+        protocol_sha256="c" * 64,
+        repository_inventory_sha256=launch.snapshot.inventory_sha256,
+        dataset_archive_sha256=("b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401"),
+        private_identity=run_evidence.PrivateBundleIdentity(**identity.model_dump(mode="python")),
+        exit_observation_sha256=exit_observation_sha256,
+        fit_count=80,
+        selection_status="NO_ELIGIBLE_CANDIDATE",
+        h1_role="OBSERVED_DEVELOPMENT_ONLY",
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+        development_result=run_evidence.PublicDevelopmentResult.model_validate(development),
+    )
+    future_identity_fields = {
+        "worker_request_sha256": launch.request_sha256,
+        "formal_worker_inventory_sha256": launch.request.formal_worker_inventory_sha256,
+        "launch_profile_sha256": launch.request.launch_profile_sha256,
+        "evidence_index_sha256": launch.request.evidence_index_sha256,
+    }
+    seal_fields.update(
+        {
+            field: value
+            for field, value in future_identity_fields.items()
+            if field in run_evidence.FormalDevelopmentSeal.model_fields
+        }
+    )
+    seal = run_evidence.FormalDevelopmentSeal(**seal_fields)
+    terminal_raw = canonicalize_json(seal.model_dump(mode="json"))
+    launch.terminal_seal_path.write_bytes(terminal_raw)
+    response = worker_protocol.FormalWorkerResponse(
+        schema_version="mdcp.formal-worker-response.v1",
+        canonicalization_version="RFC8785",
+        verdict="PASS",
+        reason_codes=(),
+        private_identity=identity,
+        seal_record_sha256=sha256_hex(terminal_raw),
+        repository_inventory_sha256=launch.snapshot.inventory_sha256,
+        authorization_sha256=launch.request.authorization_sha256,
+        consumption_marker_sha256="b" * 64,
+        fit_count=80,
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+        worker_request_sha256=launch.request_sha256,
+        formal_worker_inventory_sha256=launch.request.formal_worker_inventory_sha256,
+        launch_profile_sha256=launch.request.launch_profile_sha256,
+    )
+
+    outcome, launches = _execute_task_four_fake_response(
+        monkeypatch,
+        launch,
+        worker_protocol.encode_formal_worker_response(response),
+    )
+
+    assert launches == 1
+    assert (outcome.verdict, outcome.reason_codes) == (
+        "UNKNOWN",
+        ("FORMAL_WORKER_PROCESS_UNKNOWN",),
+    )
+    assert outcome.fit_count is None
 
 
 @pytest.mark.parametrize("drift", ("head", "clean_state", "inventory"))
