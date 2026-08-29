@@ -1,1 +1,9 @@
 tests/fixtures/supply-chain/** -text
+/LICENSE text eol=lf
+/README.md text eol=lf
+docs/architecture.md text eol=lf
+docs/reviewer/quickstart.md text eol=lf
+docs/reviewer/release-evidence.md text eol=lf
+schemas/portfolio/local-release-readiness.schema.json text eol=lf
+scripts/reviewer-fast-path.ps1 text eol=lf
+scripts/verify-public-release.py text eol=lf

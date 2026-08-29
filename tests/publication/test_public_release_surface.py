@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -8,6 +9,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from mdcp.temporal.evidence import public_evidence_violations
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VERIFIER_PATH = REPOSITORY_ROOT / "scripts" / "verify-public-release.py"
@@ -437,3 +440,235 @@ Write-Output "BYTECODE_RESTORED=$bytecodeRestored"
     assert "LOCATION_RESTORED=true" in output
     assert "BYTECODE_RESTORED=true" in output
     assert "UNEXPECTED_PASS" not in output
+
+
+def test_checked_in_readiness_schema_matches_the_closed_model() -> None:
+    verifier = _load_verifier()
+    checked = json.loads((REPOSITORY_ROOT / verifier.SCHEMA_PATH).read_text(encoding="utf-8"))
+
+    assert checked == verifier.LocalReleaseReadiness.model_json_schema()
+    assert checked["additionalProperties"] is False
+
+
+def test_readiness_evidence_is_canonical_public_and_binds_surface() -> None:
+    verifier = _load_verifier()
+    readiness = verifier.load_readiness(REPOSITORY_ROOT)
+
+    assert readiness.public_surface_entries == verifier.build_public_surface_inventory(
+        REPOSITORY_ROOT
+    )
+    assert public_evidence_violations(readiness.model_dump(mode="json")) == ()
+    assert readiness.claim_execution.remote_release_executed is False
+    assert readiness.claim_execution.h2_executed is False
+
+
+def test_current_repository_public_release_slice_passes() -> None:
+    verifier = _load_verifier()
+    result = verifier.verify_public_release(REPOSITORY_ROOT)
+
+    assert result.formal_closure_commit == verifier.FORMAL_CLOSURE_COMMIT
+
+
+def _write_fixture_readiness(repository: Path, verifier: object) -> None:
+    document = json.loads((REPOSITORY_ROOT / verifier.READINESS_PATH).read_text(encoding="utf-8"))
+    entries = verifier.build_public_surface_inventory(repository)
+    entry_documents = [entry.model_dump(mode="json") for entry in entries]
+    document["public_surface_entries"] = entry_documents
+    document["public_surface_inventory_sha256"] = verifier.sha256_hex(
+        verifier.canonicalize_json(entry_documents)
+    )
+    model = verifier.LocalReleaseReadiness.model_validate(document)
+    target = repository / verifier.READINESS_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(verifier.canonicalize_json(model.model_dump(mode="json")))
+
+
+def _copy_public_release_fixture(tmp_path: Path, verifier: object) -> Path:
+    repository = tmp_path / "repository"
+    for logical_path in verifier.PUBLIC_SURFACE_PATHS:
+        source = REPOSITORY_ROOT / logical_path
+        target = repository / logical_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    for logical_path in verifier.PUBLIC_MARKDOWN_PATHS:
+        (repository / logical_path).write_text("# Public fixture\n", encoding="utf-8")
+    _write_fixture_readiness(repository, verifier)
+    return repository
+
+
+@pytest.mark.parametrize("mutation", ("missing", "directory_link"))
+def test_public_surface_rejects_missing_or_linked_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    verifier = _load_verifier()
+    repository = _copy_public_release_fixture(tmp_path, verifier)
+    monkeypatch.setattr(verifier, "verify_git_closure", lambda *_args: None)
+
+    if mutation == "missing":
+        (repository / "LICENSE").unlink()
+    else:
+        external_docs = tmp_path / "external-docs"
+        shutil.copytree(repository / "docs", external_docs)
+        shutil.rmtree(repository / "docs")
+        _create_directory_link(repository / "docs", external_docs)
+
+    with pytest.raises(verifier.PublicReleaseError) as error:
+        verifier.verify_public_release(repository)
+    assert error.value.reason_code == "PUBLIC_RELEASE_SLICE_FILE_INVALID"
+
+
+def test_public_surface_rejects_wrong_file_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier = _load_verifier()
+    repository = _copy_public_release_fixture(tmp_path, verifier)
+    monkeypatch.setattr(verifier, "verify_git_closure", lambda *_args: None)
+    (repository / "README.md").write_text("# Mutated after inventory\n", encoding="utf-8")
+
+    with pytest.raises(verifier.PublicReleaseError) as error:
+        verifier.verify_public_release(repository)
+    assert error.value.reason_code == "PUBLIC_RELEASE_SLICE_INVENTORY_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("noncanonical", "unknown_field", "true_execution_claim", "wrong_h2_state"),
+)
+def test_readiness_mutations_fail_with_the_evidence_reason_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    verifier = _load_verifier()
+    repository = _copy_public_release_fixture(tmp_path, verifier)
+    monkeypatch.setattr(verifier, "verify_git_closure", lambda *_args: None)
+    target = repository / verifier.READINESS_PATH
+    document = json.loads(target.read_text(encoding="utf-8"))
+
+    if mutation == "unknown_field":
+        document["private_extension"] = False
+    elif mutation == "true_execution_claim":
+        document["claim_execution"]["remote_release_executed"] = True
+    elif mutation == "wrong_h2_state":
+        document["h2_status"] = "LOADED"
+        document["h2_loaded_rows"] = 1
+    raw = verifier.canonicalize_json(document)
+    if mutation == "noncanonical":
+        raw += b"\n"
+    target.write_bytes(raw)
+
+    with pytest.raises(verifier.PublicReleaseError) as error:
+        verifier.verify_public_release(repository)
+    assert error.value.reason_code == "PUBLIC_RELEASE_SLICE_EVIDENCE_INVALID"
+
+
+def test_private_disclosure_gate_uses_the_fixed_reason_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier = _load_verifier()
+    repository = _copy_public_release_fixture(tmp_path, verifier)
+    monkeypatch.setattr(verifier, "verify_git_closure", lambda *_args: None)
+
+    def report_private_path(document: dict[str, object]) -> tuple[str, ...]:
+        mutated = {**document, "private_path": "C:/Users/private/secret"}
+        return public_evidence_violations(mutated)
+
+    monkeypatch.setattr(verifier, "public_evidence_violations", report_private_path)
+    with pytest.raises(verifier.PublicReleaseError) as error:
+        verifier.verify_public_release(repository)
+    assert error.value.reason_code == "PUBLIC_RELEASE_SLICE_DISCLOSURE"
+
+
+def test_wrong_git_parent_uses_the_fixed_git_reason_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier = _load_verifier()
+    repository = _copy_public_release_fixture(tmp_path, verifier)
+    monkeypatch.setattr(verifier, "_git_text", lambda *_args: "0" * 40)
+
+    with pytest.raises(verifier.PublicReleaseError) as error:
+        verifier.verify_public_release(repository)
+    assert error.value.reason_code == "PUBLIC_RELEASE_SLICE_GIT_INVALID"
+
+
+@pytest.mark.parametrize("target", ("missing.md", "../repository-escape.md"))
+def test_broken_or_escaping_relative_link_uses_the_fixed_link_reason_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    verifier = _load_verifier()
+    repository = _copy_public_release_fixture(tmp_path, verifier)
+    monkeypatch.setattr(verifier, "verify_git_closure", lambda *_args: None)
+    (repository / "README.md").write_text(f"[invalid]({target})\n", encoding="utf-8")
+    _write_fixture_readiness(repository, verifier)
+
+    with pytest.raises(verifier.PublicReleaseError) as error:
+        verifier.verify_public_release(repository)
+    assert error.value.reason_code == "PUBLIC_RELEASE_SLICE_LINK_INVALID"
+
+
+def test_public_surface_bytes_survive_a_fresh_autocrlf_checkout(tmp_path: Path) -> None:
+    verifier = _load_verifier()
+    source_repository = tmp_path / "source"
+    source_repository.mkdir()
+    _run_git(source_repository, "init", "--quiet")
+
+    tracked_paths = (".gitattributes", *verifier.PUBLIC_SURFACE_PATHS)
+    for logical_path in tracked_paths:
+        source = REPOSITORY_ROOT / logical_path
+        target = source_repository / logical_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    _run_git(source_repository, "add", "--", *tracked_paths)
+    _run_git(
+        source_repository,
+        "-c",
+        "user.name=Public Release Test",
+        "-c",
+        "user.email=public-release@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "public surface fixture",
+    )
+    nested_attributes = _run_git(
+        source_repository,
+        "check-attr",
+        "text",
+        "eol",
+        "--",
+        "nested/LICENSE",
+        "nested/README.md",
+    ).decode("utf-8")
+    assert nested_attributes.splitlines() == [
+        "nested/LICENSE: text: unspecified",
+        "nested/LICENSE: eol: unspecified",
+        "nested/README.md: text: unspecified",
+        "nested/README.md: eol: unspecified",
+    ]
+
+    checkout = tmp_path / "autocrlf-checkout"
+    subprocess.run(
+        (
+            "git",
+            "-c",
+            "core.autocrlf=true",
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            str(source_repository),
+            str(checkout),
+        ),
+        check=True,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=20,
+    )
+
+    for logical_path in verifier.PUBLIC_SURFACE_PATHS:
+        expected = (source_repository / logical_path).read_bytes()
+        assert b"\r\n" not in expected
+        assert (checkout / logical_path).read_bytes() == expected

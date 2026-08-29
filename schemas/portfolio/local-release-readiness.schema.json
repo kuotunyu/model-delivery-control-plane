@@ -1,0 +1,263 @@
+{
+  "$defs": {
+    "ClaimExecution": {
+      "additionalProperties": false,
+      "properties": {
+        "cv_workload_implemented": {
+          "const": false,
+          "title": "Cv Workload Implemented",
+          "type": "boolean"
+        },
+        "h2_executed": {
+          "const": false,
+          "title": "H2 Executed",
+          "type": "boolean"
+        },
+        "kubernetes_production_ready": {
+          "const": false,
+          "title": "Kubernetes Production Ready",
+          "type": "boolean"
+        },
+        "llm_workload_implemented": {
+          "const": false,
+          "title": "Llm Workload Implemented",
+          "type": "boolean"
+        },
+        "production_deployed": {
+          "const": false,
+          "title": "Production Deployed",
+          "type": "boolean"
+        },
+        "push_executed": {
+          "const": false,
+          "title": "Push Executed",
+          "type": "boolean"
+        },
+        "remote_release_executed": {
+          "const": false,
+          "title": "Remote Release Executed",
+          "type": "boolean"
+        },
+        "tag_created": {
+          "const": false,
+          "title": "Tag Created",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "remote_release_executed",
+        "push_executed",
+        "tag_created",
+        "production_deployed",
+        "kubernetes_production_ready",
+        "h2_executed",
+        "cv_workload_implemented",
+        "llm_workload_implemented"
+      ],
+      "title": "ClaimExecution",
+      "type": "object"
+    },
+    "PublicSurfaceEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_size": {
+          "minimum": 0,
+          "title": "Byte Size",
+          "type": "integer"
+        },
+        "logical_path": {
+          "title": "Logical Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "logical_path",
+        "byte_size",
+        "sha256"
+      ],
+      "title": "PublicSurfaceEntry",
+      "type": "object"
+    },
+    "TechnicalClosureVerification": {
+      "additionalProperties": false,
+      "properties": {
+        "full_suite_passed": {
+          "const": 1546,
+          "title": "Full Suite Passed",
+          "type": "integer"
+        },
+        "full_suite_skipped": {
+          "const": 7,
+          "title": "Full Suite Skipped",
+          "type": "integer"
+        },
+        "review_critical": {
+          "const": 0,
+          "title": "Review Critical",
+          "type": "integer"
+        },
+        "review_important": {
+          "const": 0,
+          "title": "Review Important",
+          "type": "integer"
+        },
+        "review_minor": {
+          "const": 0,
+          "title": "Review Minor",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "full_suite_passed",
+        "full_suite_skipped",
+        "review_critical",
+        "review_important",
+        "review_minor"
+      ],
+      "title": "TechnicalClosureVerification",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "canonicalization_version": {
+      "const": "RFC8785",
+      "title": "Canonicalization Version",
+      "type": "string"
+    },
+    "claim_ceiling": {
+      "const": "mdcp.local-portfolio-claim-ceiling.v1",
+      "title": "Claim Ceiling",
+      "type": "string"
+    },
+    "claim_execution": {
+      "$ref": "#/$defs/ClaimExecution"
+    },
+    "correction_commit": {
+      "const": "bfe517819ec2163d700519fc427dbe8bb8071258",
+      "title": "Correction Commit",
+      "type": "string"
+    },
+    "evidence_class": {
+      "const": "local_portfolio_release_readiness",
+      "title": "Evidence Class",
+      "type": "string"
+    },
+    "formal_closure_commit": {
+      "const": "b1bb0d80cd40e6f39372c0a45892500cc9530712",
+      "title": "Formal Closure Commit",
+      "type": "string"
+    },
+    "formal_closure_parent": {
+      "const": "407f68b63c06a17ef54d5ec17722ef1f801b1689",
+      "title": "Formal Closure Parent",
+      "type": "string"
+    },
+    "formal_worker_inventory_sha256": {
+      "const": "ebac7f1b61024e532f6cba9c3eb4cded12ad1972fb5a5a660a40c9bfd16a43d3",
+      "title": "Formal Worker Inventory Sha256",
+      "type": "string"
+    },
+    "h2_loaded_rows": {
+      "const": 0,
+      "title": "H2 Loaded Rows",
+      "type": "integer"
+    },
+    "h2_status": {
+      "const": "SEALED_NOT_LOADED",
+      "title": "H2 Status",
+      "type": "string"
+    },
+    "public_surface_entries": {
+      "items": {
+        "$ref": "#/$defs/PublicSurfaceEntry"
+      },
+      "title": "Public Surface Entries",
+      "type": "array"
+    },
+    "public_surface_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Public Surface Inventory Sha256",
+      "type": "string"
+    },
+    "publication_status": {
+      "const": "public",
+      "title": "Publication Status",
+      "type": "string"
+    },
+    "reviewer_entrypoint": {
+      "const": "scripts/reviewer-fast-path.ps1",
+      "title": "Reviewer Entrypoint",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "mdcp.local-release-readiness.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "search_index_sha256": {
+      "const": "2f630aa428fb539efb24904fd308f83fdf9458a46df6aa0cb7099a28ece4b205",
+      "title": "Search Index Sha256",
+      "type": "string"
+    },
+    "search_receipt_sha256": {
+      "const": "5c0dc214281af3191ecfef0bd95e4d0ff99e3cc6c710d894a1f0b4a3465b7d63",
+      "title": "Search Receipt Sha256",
+      "type": "string"
+    },
+    "source_inventory_sha256": {
+      "const": "cf2880259d9e82eae2291bb51fb041be0bf5f24a77f750565e8fe0227c1b539b",
+      "title": "Source Inventory Sha256",
+      "type": "string"
+    },
+    "static_firewall_sha256": {
+      "const": "e443596f27911614a5387975c424554d4dd9906b56d8bc330b2887bc113a5de1",
+      "title": "Static Firewall Sha256",
+      "type": "string"
+    },
+    "technical_closure_verification": {
+      "$ref": "#/$defs/TechnicalClosureVerification"
+    },
+    "v1_serving_identity": {
+      "const": "d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209",
+      "title": "V1 Serving Identity",
+      "type": "string"
+    },
+    "v2_serving_identity": {
+      "const": "198610d3cfcb48bf713b414a1d11073c2ac2e438f4a4dd99fc8dd907789152ea",
+      "title": "V2 Serving Identity",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "canonicalization_version",
+    "evidence_class",
+    "publication_status",
+    "formal_closure_commit",
+    "formal_closure_parent",
+    "correction_commit",
+    "search_receipt_sha256",
+    "search_index_sha256",
+    "source_inventory_sha256",
+    "formal_worker_inventory_sha256",
+    "v1_serving_identity",
+    "v2_serving_identity",
+    "static_firewall_sha256",
+    "public_surface_entries",
+    "public_surface_inventory_sha256",
+    "h2_status",
+    "h2_loaded_rows",
+    "technical_closure_verification",
+    "reviewer_entrypoint",
+    "claim_ceiling",
+    "claim_execution"
+  ],
+  "title": "LocalReleaseReadiness",
+  "type": "object"
+}
