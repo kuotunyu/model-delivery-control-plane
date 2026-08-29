@@ -1133,6 +1133,16 @@ def test_runtime_guard_and_command_surfaces_are_discovered() -> None:
     }.issubset(result.checked_paths)
 
 
+def test_dedicated_worker_source_tuple_has_one_protocol_owner() -> None:
+    from mdcp.temporal import formal_worker_protocol, search_identity
+
+    assert search_identity.SEARCH_SOURCE_PATHS is formal_worker_protocol.SEARCH_SOURCE_PATHS
+    assert len(formal_worker_protocol.SEARCH_SOURCE_PATHS) == 47
+    assert set(formal_worker_protocol.FORMAL_WORKER_SOURCE_PATHS).issubset(
+        formal_worker_protocol.SEARCH_SOURCE_PATHS
+    )
+
+
 def test_static_firewall_allows_exact_search_identity_git_calls(tmp_path: Path) -> None:
     logical_path = "src/mdcp/temporal/search_identity.py"
     source = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")

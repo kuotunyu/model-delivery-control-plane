@@ -4,6 +4,8 @@ import os
 import shutil
 import stat
 import subprocess
+import tarfile
+import tempfile
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -27,16 +29,18 @@ EXACT_SEARCH_SOURCE_PATHS = (
     "configs/workload/uci-bike-sharing-v1.json",
     "docs/superpowers/plans/2026-08-24-mdcp-v02-wave-3-formal-development.md",
     "docs/superpowers/plans/2026-08-25-mdcp-v02-wave-3-execution-boundary-corrective.md",
-    "docs/superpowers/plans/2026-08-26-mdcp-v02-wave-3-formal-seal-closure-corrective.md",
-    "docs/superpowers/plans/2026-08-26-mdcp-v02-wave-3-private-evidence-container-corrective.md",
+    "docs/superpowers/plans/2026-08-27-mdcp-v02-wave-3-dedicated-formal-worker-corrective.md",
     "docs/superpowers/specs/2026-08-24-mdcp-v02-temporal-retraining-design.md",
     "docs/superpowers/specs/2026-08-25-mdcp-v02-wave-3-execution-boundary-corrective-design.md",
-    "docs/superpowers/specs/2026-08-26-mdcp-v02-formal-seal-closure-design.md",
     "docs/superpowers/specs/2026-08-26-mdcp-v02-private-evidence-container-design.md",
+    "docs/superpowers/specs/2026-08-27-mdcp-v02-dedicated-formal-worker-design.md",
+    "docs/superpowers/specs/2026-08-27-mdcp-v02-rejected-freeze-topology-design.md",
     "pyproject.toml",
     "schemas/v2/bike-request.schema.json",
     "schemas/v2/development-result-index.schema.json",
     "schemas/v2/formal-run-authorization.schema.json",
+    "schemas/v2/formal-worker-request.schema.json",
+    "schemas/v2/formal-worker-response.schema.json",
     "schemas/v2/search-receipt.schema.json",
     "schemas/v2/temporal-contract-receipt.schema.json",
     "schemas/v2/temporal-development.schema.json",
@@ -55,6 +59,8 @@ EXACT_SEARCH_SOURCE_PATHS = (
     "src/mdcp/temporal/evidence.py",
     "src/mdcp/temporal/firewall.py",
     "src/mdcp/temporal/folds.py",
+    "src/mdcp/temporal/formal_worker.py",
+    "src/mdcp/temporal/formal_worker_protocol.py",
     "src/mdcp/temporal/golden_vectors.py",
     "src/mdcp/temporal/run_evidence.py",
     "src/mdcp/temporal/runner.py",
@@ -71,13 +77,43 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 RECEIPT_RELATIVE_PATH = Path("evidence/public/v02/search/search-receipt.json")
 INDEX_RELATIVE_PATH = Path("evidence/public/v02/search/evidence-index.json")
-FORMAL_SEAL_AMENDMENT_PATH = (
-    "docs/superpowers/specs/2026-08-26-mdcp-v02-formal-seal-closure-design.md"
+DEDICATED_WORKER_DESIGN_PATH = (
+    "docs/superpowers/specs/2026-08-27-mdcp-v02-dedicated-formal-worker-design.md"
 )
-FORMAL_SEAL_CORRECTIVE_PLAN_PATH = (
-    "docs/superpowers/plans/2026-08-26-mdcp-v02-wave-3-formal-seal-closure-corrective.md"
+DEDICATED_WORKER_PLAN_PATH = (
+    "docs/superpowers/plans/2026-08-27-mdcp-v02-wave-3-dedicated-formal-worker-corrective.md"
+)
+OBSOLETE_FINAL_REVIEW_DESIGN_PATH = (
+    "docs/superpowers/specs/2026-08-26-mdcp-v02-formal-seal-final-review-corrective-design.md"
+)
+OBSOLETE_FINAL_REVIEW_PLAN_PATH = (
+    "docs/superpowers/plans/2026-08-27-mdcp-v02-wave-3-final-review-corrective.md"
+)
+FORMAL_WORKER_SOURCE_PATHS = (
+    "schemas/v2/formal-worker-request.schema.json",
+    "schemas/v2/formal-worker-response.schema.json",
+    "src/mdcp/temporal/formal_worker.py",
+    "src/mdcp/temporal/formal_worker_protocol.py",
+)
+CRLF_ARCHIVE_PATHS = (
+    "src/mdcp/temporal/firewall.py",
+    "src/mdcp/temporal/run_evidence.py",
+    "src/mdcp/temporal/runner.py",
+    "src/mdcp/temporal/search_identity.py",
+)
+LF_DEDICATED_WORKER_PATHS = FORMAL_WORKER_SOURCE_PATHS
+IMPLEMENTATION_TEST_PATHS = (
+    "tests/integration/temporal/test_formal_worker_process.py",
+    "tests/unit/temporal/test_formal_worker_protocol.py",
 )
 EXTRA_TEST_PATH = "tests/security/temporal/test_data_firewall.py"
+EXTERNAL_ATTRIBUTES_PROFILE = (
+    "* text eol=lf\n"
+    "src/mdcp/temporal/firewall.py text eol=crlf\n"
+    "src/mdcp/temporal/run_evidence.py text eol=crlf\n"
+    "src/mdcp/temporal/runner.py text eol=crlf\n"
+    "src/mdcp/temporal/search_identity.py text eol=crlf\n"
+)
 _BOUND_FILES = {
     "approved_spec_sha256": (
         "docs/superpowers/specs/2026-08-24-mdcp-v02-temporal-retraining-design.md"
@@ -447,17 +483,93 @@ def _archive_source_tree(destination: Path) -> None:
         shutil.copyfile(REPOSITORY_ROOT / logical_path, target)
 
 
-def test_source_inventory_is_the_exact_ascii_ordered_43_path_closure(tmp_path: Path) -> None:
+def test_source_inventory_is_the_exact_ascii_ordered_47_path_closure(tmp_path: Path) -> None:
     archive = tmp_path / "source-archive"
     _archive_source_tree(archive)
     inventory = build_search_source_inventory(archive)
 
     assert SEARCH_SOURCE_PATHS == EXACT_SEARCH_SOURCE_PATHS
-    assert len(inventory) == 43
+    assert len(inventory) == 47
+    assert len(set(EXACT_SEARCH_SOURCE_PATHS)) == 47
+    assert tuple(sorted(EXACT_SEARCH_SOURCE_PATHS, key=str.encode)) == EXACT_SEARCH_SOURCE_PATHS
     assert tuple(entry.logical_path for entry in inventory) == EXACT_SEARCH_SOURCE_PATHS
     assert all(entry.git_mode == "100644" for entry in inventory)
+    assert all(EXACT_SEARCH_SOURCE_PATHS.count(path) == 1 for path in FORMAL_WORKER_SOURCE_PATHS)
+    assert DEDICATED_WORKER_PLAN_PATH in EXACT_SEARCH_SOURCE_PATHS
+    assert DEDICATED_WORKER_DESIGN_PATH in EXACT_SEARCH_SOURCE_PATHS
+    assert OBSOLETE_FINAL_REVIEW_PLAN_PATH not in EXACT_SEARCH_SOURCE_PATHS
+    assert OBSOLETE_FINAL_REVIEW_DESIGN_PATH not in EXACT_SEARCH_SOURCE_PATHS
+    assert all(path not in EXACT_SEARCH_SOURCE_PATHS for path in IMPLEMENTATION_TEST_PATHS)
     assert "evidence/public/v02/search/search-receipt.json" not in SEARCH_SOURCE_PATHS
     assert "evidence/public/v02/search/evidence-index.json" not in SEARCH_SOURCE_PATHS
+
+
+def test_source_archive_is_identical_under_all_three_autocrlf_modes() -> None:
+    tar_digests: tuple[str, ...]
+    temporary_root: Path
+    with tempfile.TemporaryDirectory(prefix="mdcp-task8-source-archive-") as raw_root:
+        temporary_root = Path(raw_root).resolve()
+        assert not temporary_root.is_relative_to(REPOSITORY_ROOT)
+        repository = temporary_root / "repository"
+        repository.mkdir()
+        _archive_source_tree(repository)
+        _git(repository, "init")
+        _git(repository, "-c", "core.autocrlf=false", "add", ".")
+        _commit_staged(repository, "source fixture")
+        profile = temporary_root / "source-archive.attributes"
+        profile.write_text(EXTERNAL_ATTRIBUTES_PROFILE, encoding="ascii", newline="")
+        assert profile.read_bytes() == EXTERNAL_ATTRIBUTES_PROFILE.encode("ascii")
+        assert not (repository / ".gitattributes").exists()
+
+        extracted_roots: list[Path] = []
+        digests: list[str] = []
+        for mode in ("true", "false", "input"):
+            tar_path = temporary_root / f"source-{mode}.tar"
+            subprocess.run(
+                (
+                    "git",
+                    "-c",
+                    f"core.autocrlf={mode}",
+                    "-c",
+                    f"core.attributesFile={profile}",
+                    "archive",
+                    "--format=tar",
+                    f"--output={tar_path}",
+                    "HEAD",
+                ),
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            extracted = temporary_root / f"extracted-{mode}"
+            extracted.mkdir()
+            with tarfile.open(tar_path, mode="r:") as archive:
+                archive.extractall(extracted, filter="data")
+            assert not (extracted / ".git").exists()
+            extracted_roots.append(extracted)
+            digests.append(sha256(tar_path.read_bytes()).hexdigest())
+
+        assert len(set(digests)) == 1
+        index_path = temporary_root / "external-index.json"
+        index_path.write_bytes(canonicalize_json(_index_document(extracted_roots[0], b"receipt")))
+        index_anchor = sha256(index_path.read_bytes()).hexdigest()
+        for extracted in extracted_roots:
+            result = verify_search_source_inventory(extracted, index_path, index_anchor)
+            assert result.verdict == "PASS"
+            assert result.reason_codes == ("SEARCH_SOURCE_INVENTORY_PASS",)
+            assert len(build_search_source_inventory(extracted)) == 47
+            for logical_path in CRLF_ARCHIVE_PATHS:
+                raw = (extracted / logical_path).read_bytes()
+                assert b"\r\n" in raw
+                assert raw.replace(b"\r\n", b"").find(b"\n") == -1
+            for logical_path in LF_DEDICATED_WORKER_PATHS:
+                raw = (extracted / logical_path).read_bytes()
+                assert b"\n" in raw
+                assert b"\r\n" not in raw
+        tar_digests = tuple(digests)
+
+    assert len(set(tar_digests)) == 1
+    assert not temporary_root.exists()
 
 
 def test_source_archive_without_dot_git_requires_an_external_nonzero_index_anchor(
@@ -509,6 +621,50 @@ def test_source_archive_rejects_a_missing_indexed_file(tmp_path: Path) -> None:
 
     assert result.verdict == "FAIL"
     assert result.reason_codes == ("SEARCH_SOURCE_FILE_INVALID",)
+
+
+def test_source_archive_rejects_wrong_eol_bytes(tmp_path: Path) -> None:
+    archive, index_path, document = _fresh_archive_index(tmp_path, "wrong-eol")
+    result = _verify_index_document(archive, index_path, document)
+    assert result.verdict == "PASS"
+    target = archive / "src/mdcp/temporal/formal_worker_protocol.py"
+    raw = target.read_bytes()
+    wrong_eol = raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n")
+    assert wrong_eol != raw
+    target.write_bytes(wrong_eol)
+
+    result = verify_search_source_inventory(
+        archive, index_path, sha256(index_path.read_bytes()).hexdigest()
+    )
+
+    assert result.verdict == "FAIL"
+    assert result.reason_codes == ("SEARCH_SOURCE_INVENTORY_MISMATCH",)
+
+
+def test_source_archive_verifier_has_no_dot_git_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mdcp.temporal import search_identity
+
+    archive, index_path, document = _fresh_archive_index(tmp_path, "without-dot-git")
+    assert not (archive / ".git").exists()
+    result = _verify_index_document(archive, index_path, document)
+    assert result.verdict == "PASS"
+
+    monkeypatch.setattr(
+        search_identity,
+        "_git",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source archive verification must not invoke Git")
+        ),
+    )
+
+    result = verify_search_source_inventory(
+        archive, index_path, sha256(index_path.read_bytes()).hexdigest()
+    )
+
+    assert result.verdict == "PASS"
+    assert result.reason_codes == ("SEARCH_SOURCE_INVENTORY_PASS",)
 
 
 def test_source_archive_rejects_an_absent_external_index(tmp_path: Path) -> None:
@@ -714,7 +870,7 @@ def test_prepare_search_freeze_rejects_a_clean_non_100644_source_mode(tmp_path: 
         prepare_search_freeze(archive, datetime(2026, 8, 26, 12, 0, tzinfo=UTC))
 
 
-def test_freeze_verifier_rejects_a_120000_blob_in_the_43_path_source_tree(
+def test_freeze_verifier_rejects_a_120000_blob_in_the_47_path_source_tree(
     tmp_path: Path,
 ) -> None:
     repository = tmp_path / "source-repository"
@@ -789,24 +945,38 @@ def test_source_index_rejects_reordered_source_entries(tmp_path: Path) -> None:
     _assert_index_invalid(_verify_index_document(archive, index_path, document))
 
 
-def test_source_index_rejects_the_legacy_41_path_inventory(tmp_path: Path) -> None:
-    archive, index_path, document = _fresh_archive_index(tmp_path, "legacy-41")
+def test_source_index_rejects_the_transitional_43_path_inventory(tmp_path: Path) -> None:
+    archive, index_path, document = _fresh_archive_index(tmp_path, "transitional-43")
     entries = _source_entries(document)
     entries[:] = [
-        entry
-        for entry in entries
-        if entry["logical_path"]
-        not in (FORMAL_SEAL_AMENDMENT_PATH, FORMAL_SEAL_CORRECTIVE_PLAN_PATH)
+        entry for entry in entries if entry["logical_path"] not in FORMAL_WORKER_SOURCE_PATHS
     ]
-    assert len(entries) == 41
+    substitutions = {
+        DEDICATED_WORKER_PLAN_PATH: OBSOLETE_FINAL_REVIEW_PLAN_PATH,
+        DEDICATED_WORKER_DESIGN_PATH: OBSOLETE_FINAL_REVIEW_DESIGN_PATH,
+    }
+    for current_path, obsolete_path in substitutions.items():
+        position = next(
+            index for index, entry in enumerate(entries) if entry["logical_path"] == current_path
+        )
+        raw = (REPOSITORY_ROOT / obsolete_path).read_bytes()
+        _write(archive, obsolete_path, raw)
+        entries[position] = {
+            "logical_path": obsolete_path,
+            "git_mode": "100644",
+            "byte_size": len(raw),
+            "sha256": sha256(raw).hexdigest(),
+        }
+    entries.sort(key=lambda entry: str(entry["logical_path"]).encode())
+    assert len(entries) == 43
 
     _assert_index_invalid(_verify_index_document(archive, index_path, document))
 
 
 @pytest.mark.parametrize(
     "omitted_path",
-    (FORMAL_SEAL_AMENDMENT_PATH, FORMAL_SEAL_CORRECTIVE_PLAN_PATH),
-    ids=("exact-amendment", "exact-corrective-plan"),
+    (DEDICATED_WORKER_DESIGN_PATH, DEDICATED_WORKER_PLAN_PATH),
+    ids=("dedicated-worker-design", "dedicated-worker-plan"),
 )
 def test_source_index_rejects_one_exact_required_document_omission(
     tmp_path: Path, omitted_path: str
@@ -815,7 +985,7 @@ def test_source_index_rejects_one_exact_required_document_omission(
     entries = _source_entries(document)
     position = EXACT_SEARCH_SOURCE_PATHS.index(omitted_path)
     del entries[position]
-    assert len(entries) == 42
+    assert len(entries) == 46
     assert omitted_path not in (entry["logical_path"] for entry in entries)
 
     _assert_index_invalid(_verify_index_document(archive, index_path, document))
@@ -832,7 +1002,7 @@ def test_source_index_rejects_test_path_substitution(tmp_path: Path) -> None:
         "byte_size": len(raw),
         "sha256": sha256(raw).hexdigest(),
     }
-    assert len(entries) == 43
+    assert len(entries) == 47
 
     _assert_index_invalid(_verify_index_document(archive, index_path, document))
 
@@ -859,7 +1029,7 @@ def test_source_index_rejects_each_extra_forbidden_entry(tmp_path: Path, extra_p
             "sha256": sha256(raw).hexdigest(),
         }
     )
-    assert len(entries) == 44
+    assert len(entries) == 48
 
     _assert_index_invalid(_verify_index_document(archive, index_path, document))
 
@@ -868,7 +1038,7 @@ def test_source_index_rejects_a_duplicate_entry_addition(tmp_path: Path) -> None
     archive, index_path, document = _fresh_archive_index(tmp_path, "duplicate")
     entries = _source_entries(document)
     entries.append(dict(entries[0]))
-    assert len(entries) == 44
+    assert len(entries) == 48
 
     _assert_index_invalid(_verify_index_document(archive, index_path, document))
 
@@ -879,7 +1049,7 @@ def test_source_index_rejects_an_unknown_path_substitution(tmp_path: Path) -> No
     original = archive / EXACT_SEARCH_SOURCE_PATHS[-1]
     _write(archive, "unlisted.txt", original.read_bytes())
     entries[-1]["logical_path"] = "unlisted.txt"
-    assert len(entries) == 43
+    assert len(entries) == 47
 
     _assert_index_invalid(_verify_index_document(archive, index_path, document))
 

@@ -102,7 +102,7 @@ class SearchSourceCheck:
 
 
 def build_search_source_inventory(root: Path) -> tuple[SearchSourceEntry, ...]:
-    """Build the closed 43-entry inventory from regular, non-link source files."""
+    """Build the closed 47-entry inventory from regular, non-link source files."""
     root = root.resolve()
     entries: list[SearchSourceEntry] = []
     for logical_path in SEARCH_SOURCE_PATHS:

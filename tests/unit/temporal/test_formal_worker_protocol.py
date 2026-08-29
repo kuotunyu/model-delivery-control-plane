@@ -134,6 +134,37 @@ def test_protocol_locks_fixed_transport_and_inventory_constants() -> None:
     )
 
 
+def test_protocol_owns_the_exact_ascii_ordered_47_dedicated_worker_source_paths() -> None:
+    protocol = _protocol()
+    current_documents = {
+        "docs/superpowers/plans/2026-08-27-mdcp-v02-wave-3-dedicated-formal-worker-corrective.md",
+        "docs/superpowers/specs/2026-08-27-mdcp-v02-dedicated-formal-worker-design.md",
+    }
+    obsolete_documents = {
+        "docs/superpowers/plans/2026-08-27-mdcp-v02-wave-3-final-review-corrective.md",
+        "docs/superpowers/specs/2026-08-26-mdcp-v02-formal-seal-final-review-corrective-design.md",
+    }
+    excluded_paths = {
+        "evidence/public/v02/search/evidence-index.json",
+        "evidence/public/v02/search/search-receipt.json",
+        "tests/integration/temporal/test_formal_worker_process.py",
+        "tests/unit/temporal/test_formal_worker_protocol.py",
+    }
+
+    assert len(protocol.SEARCH_SOURCE_PATHS) == 47
+    assert len(set(protocol.SEARCH_SOURCE_PATHS)) == 47
+    assert tuple(sorted(protocol.SEARCH_SOURCE_PATHS, key=str.encode)) == (
+        protocol.SEARCH_SOURCE_PATHS
+    )
+    assert current_documents.issubset(protocol.SEARCH_SOURCE_PATHS)
+    assert obsolete_documents.isdisjoint(protocol.SEARCH_SOURCE_PATHS)
+    assert excluded_paths.isdisjoint(protocol.SEARCH_SOURCE_PATHS)
+    assert all(
+        protocol.SEARCH_SOURCE_PATHS.count(path) == 1
+        for path in protocol.FORMAL_WORKER_SOURCE_PATHS
+    )
+
+
 def test_protocol_models_are_closed() -> None:
     protocol = _protocol()
     assert tuple(protocol.FormalWorkerRequest.model_fields) == REQUEST_FIELDS

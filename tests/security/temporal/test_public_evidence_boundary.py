@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
 import mdcp.temporal.formal_worker_protocol as worker_protocol
 import mdcp.temporal.run_evidence as run_evidence
+from mdcp.common.canonical import canonicalize_json
 from mdcp.temporal.evidence import public_evidence_violations
 from mdcp.temporal.run_evidence import (
     FormalDevelopmentOutcome,
@@ -752,6 +754,61 @@ def test_complete_closed_search_receipt_with_created_at_utc_remains_scanner_clea
     assert document["schema_version"] == "mdcp.search-receipt.v1"
     assert "created_at_utc" in document
     assert public_evidence_violations(document) == ()
+
+
+def test_dedicated_worker_source_and_physical_index_digests_keep_distinct_meanings() -> None:
+    assert len(worker_protocol.SEARCH_SOURCE_PATHS) == 47
+    assert set(worker_protocol.FORMAL_WORKER_SOURCE_PATHS).issubset(
+        worker_protocol.SEARCH_SOURCE_PATHS
+    )
+    source_entries = tuple(
+        worker_protocol.SearchSourceEntry(
+            logical_path=path,
+            git_mode="100644",
+            byte_size=len(path.encode("ascii")),
+            sha256=sha256(path.encode("ascii")).hexdigest(),
+        )
+        for path in worker_protocol.SEARCH_SOURCE_PATHS
+    )
+    worker_entries = tuple(
+        worker_protocol.FormalWorkerSourceEntry(
+            logical_path=path,
+            sha256=sha256(path.encode("ascii")).hexdigest(),
+        )
+        for path in worker_protocol.FORMAL_WORKER_SOURCE_PATHS
+    )
+    source_digest = worker_protocol.search_source_inventory_sha256(source_entries)
+    worker_digest = worker_protocol.formal_worker_inventory_sha256(worker_entries)
+    launch_digest = worker_protocol.launch_profile_sha256()
+    index = worker_protocol.SearchEvidenceIndex(
+        schema_version="mdcp.search-evidence-index.v1",
+        canonicalization_version="RFC8785",
+        source_entries=source_entries,
+        source_inventory_sha256=source_digest,
+        private_logical_outputs=worker_protocol.PRIVATE_LOGICAL_OUTPUTS,
+        search_receipt_sha256="a" * 64,
+        h2_status="SEALED_NOT_LOADED",
+        h2_loaded_rows=0,
+    )
+    index_digest = sha256(canonicalize_json(index.model_dump(mode="json"))).hexdigest()
+
+    assert len({source_digest, index_digest, worker_digest, launch_digest}) == 4
+    assert (
+        public_evidence_violations(
+            {
+                "source_inventory_sha256": source_digest,
+                "evidence_index_sha256": index_digest,
+                "formal_worker_inventory_sha256": worker_digest,
+                "launch_profile_sha256": launch_digest,
+            }
+        )
+        == ()
+    )
+
+    copied_index_document = index.model_dump(mode="json")
+    copied_index_document["source_inventory_sha256"] = index_digest
+    with pytest.raises(ValueError):
+        worker_protocol.SearchEvidenceIndex.model_validate(copied_index_document)
 
 
 def test_search_receipt_timestamp_exemption_requires_the_exact_closed_document() -> None:
