@@ -10,6 +10,13 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VERIFIER_PATH = REPOSITORY_ROOT / "scripts" / "verify-public-release.py"
+PUBLIC_DOCUMENTS = (
+    "LICENSE",
+    "README.md",
+    "docs/architecture.md",
+    "docs/reviewer/quickstart.md",
+    "docs/reviewer/release-evidence.md",
+)
 
 
 def _load_verifier():
@@ -206,3 +213,115 @@ def test_link_verifier_allows_contained_parent_segments_and_rejects_underflow(
     with pytest.raises(verifier.PublicReleaseError) as underflow:
         verifier.verify_document_links(root)
     assert underflow.value.reason_code == "PUBLIC_RELEASE_SLICE_LINK_INVALID"
+
+
+def test_public_documents_exist_as_regular_nonlinks() -> None:
+    for logical_path in PUBLIC_DOCUMENTS:
+        path = REPOSITORY_ROOT / logical_path
+        assert path.is_file()
+        assert not path.is_symlink()
+
+
+def test_readme_is_zh_tw_and_states_the_claim_ceiling() -> None:
+    path = REPOSITORY_ROOT / "README.md"
+    assert path.is_file()
+    readme = path.read_text(encoding="utf-8")
+
+    assert readme.startswith("<!-- lang: zh-TW -->\n")
+    for required in (
+        "offline score 不等於 deployment permission",
+        "temporal regression",
+        "H2",
+        "SEALED_NOT_LOADED",
+        "未執行 remote release",
+        "不宣稱 Kubernetes production readiness",
+        "不宣稱已實作 CV 或 LLM workload",
+        "不宣稱 production HA、multi-region 或 disaster recovery",
+        "沒有 real production incident evidence",
+        "不宣稱支援任意 model framework 或 task",
+    ):
+        assert required in readme
+
+
+def test_public_docs_do_not_present_designed_components_as_implemented() -> None:
+    path = REPOSITORY_ROOT / "docs" / "architecture.md"
+    assert path.is_file()
+    architecture = path.read_text(encoding="utf-8")
+
+    assert "Implemented verification path" in architecture
+    assert "Designed deployment path" in architecture
+    for component in ("control service", "router", "canary", "rollback", "recovery"):
+        assert f"{component} | Designed only" in architecture
+
+
+def test_public_documents_keep_production_and_workload_claims_negated() -> None:
+    claim_tokens = (
+        "production-ready",
+        "Kubernetes-ready",
+        "Kubernetes production readiness",
+        "remote release completed",
+        "production deployed",
+        "H2 PASS",
+        "CV workload implemented",
+        "LLM workload implemented",
+        "已實作 CV",
+        "已實作 LLM",
+    )
+    negating_markers = (
+        "未完成",
+        "未執行",
+        "不宣稱",
+        "Designed only",
+        "Not executed remotely",
+    )
+    for logical_path in PUBLIC_DOCUMENTS:
+        path = REPOSITORY_ROOT / logical_path
+        assert path.is_file()
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if any(token.casefold() in line.casefold() for token in claim_tokens):
+                assert any(marker.casefold() in line.casefold() for marker in negating_markers)
+
+
+def test_readme_heading_order_and_reviewer_setup_are_stable() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart = (REPOSITORY_ROOT / "docs/reviewer/quickstart.md").read_text(encoding="utf-8")
+    headings = (
+        "## 30 秒理解這個專案",
+        "## 目前完成度",
+        "## 實際 implemented verification path",
+        "## Reviewer fast path",
+        "## Evidence 與安全邊界",
+        "## Architecture 與程式碼導覽",
+        "## 技術棧與測試",
+        "## Claim ceiling",
+        "## License",
+    )
+
+    assert tuple(readme.index(heading) for heading in headings) == tuple(
+        sorted(readme.index(heading) for heading in headings)
+    )
+    assert "uv sync --frozen --group ml" in readme
+    assert "uv sync --frozen --group ml" in quickstart
+    assert "pwsh ./scripts/reviewer-fast-path.ps1" in quickstart
+    assert "uv run --no-sync python scripts/verify-public-release.py" in quickstart
+
+
+def test_evidence_taxonomy_and_license_qualifiers_are_explicit() -> None:
+    guide = (REPOSITORY_ROOT / "docs/reviewer/release-evidence.md").read_text(encoding="utf-8")
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    license_text = (REPOSITORY_ROOT / "LICENSE").read_text(encoding="utf-8")
+
+    for evidence_class in (
+        "Historical formal closure evidence",
+        "Local portfolio readiness evidence",
+        "Synthetic fixture evidence",
+        "Designed remote release-CI evidence",
+        "不存在的 evidence",
+    ):
+        assert evidence_class in guide
+    assert "LOCAL_PORTFOLIO_RELEASE_READY != REMOTE_RELEASED != PRODUCTION_READY" in guide
+    assert "reported historical closure-review measurement" in guide
+    assert "not authenticated by the closure commit" in guide
+    assert license_text.startswith("MIT License\n\nCopyright (c) 2026 kuotunyu\n")
+    assert "第三方 dependency、dataset 或其他材料仍保留其各自" in readme
