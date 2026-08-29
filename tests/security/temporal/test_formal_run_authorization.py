@@ -7,6 +7,7 @@ import copy
 import inspect
 import io
 import json
+import pickle
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -217,6 +218,112 @@ def test_protocol_owned_authorization_is_the_search_identity_reexport() -> None:
     assert search_identity.SearchSourceEntry is formal_worker_protocol.SearchSourceEntry
     assert search_identity.SearchEvidenceIndex is formal_worker_protocol.SearchEvidenceIndex
     assert search_identity.SEARCH_SOURCE_PATHS is formal_worker_protocol.SEARCH_SOURCE_PATHS
+
+
+def test_no_executable_value_ipc_models_are_closed_json_values() -> None:
+    """Finite defense-in-depth: IPC is closed JSON, not an object-graph proof."""
+    models = (
+        formal_worker_protocol.FormalWorkerRequest,
+        formal_worker_protocol.FormalWorkerPrivateIdentity,
+        formal_worker_protocol.FormalWorkerResponse,
+    )
+    schemas = tuple(model.model_json_schema() for model in models)
+    for schema in schemas:
+        pending: list[object] = [schema]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                if value.get("type") == "object":
+                    assert value.get("additionalProperties") is False
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+
+    annotations = " ".join(
+        str(field.annotation) for model in models for field in model.model_fields.values()
+    ).lower()
+    assert all(
+        forbidden not in annotations
+        for forbidden in (
+            "callable",
+            "code",
+            "module",
+            "pickle",
+            "type[",
+            "object",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "executable_value",
+    (
+        pytest.param(lambda: None, id="callable"),
+        pytest.param(dict, id="class"),
+        pytest.param(formal_worker_protocol, id="module"),
+        pytest.param((lambda: None).__code__, id="code"),
+        pytest.param(pickle.dumps({"opaque": True}), id="pickle"),
+        pytest.param(__import__, id="import"),
+        pytest.param(object(), id="opaque"),
+    ),
+)
+def test_no_executable_value_ipc_rejects_python_authority(
+    executable_value: object,
+) -> None:
+    document = {
+        "schema_version": "mdcp.formal-worker-request.v1",
+        "canonicalization_version": "RFC8785",
+        "expected_freeze_head": FREEZE,
+        "repository_root": "C:/repository",
+        "search_receipt_path": "C:/repository/receipt.json",
+        "evidence_index_path": "C:/repository/index.json",
+        "authorization_path": "C:/external/authorization.json",
+        "consumption_root": "C:/external/consumption",
+        "archive_path": "C:/external/archive.zip",
+        "private_container_path": "C:/external/private.json",
+        "search_receipt_sha256": S,
+        "evidence_index_sha256": EVIDENCE_INDEX,
+        "authorization_sha256": A,
+        "source_inventory_sha256": INVENTORY,
+        "repository_inventory_sha256": R,
+        "formal_worker_inventory_sha256": WORKER_INVENTORY,
+        "launch_profile_sha256": LAUNCH_PROFILE,
+        "executable_value": executable_value,
+    }
+
+    with pytest.raises(ValueError):
+        formal_worker_protocol.FormalWorkerRequest.model_validate(document)
+
+
+def test_finite_process_boundary_public_request_has_no_launch_injection() -> None:
+    public_fields = tuple(run_evidence.FormalDevelopmentRequest.__dataclass_fields__)
+    assert public_fields == (
+        "repository_root",
+        "expected_freeze_head",
+        "search_receipt_path",
+        "evidence_index_path",
+        "authorization_path",
+        "consumption_root",
+        "archive_path",
+        "private_container_path",
+    )
+    forbidden_fragments = {
+        "callable",
+        "command",
+        "cwd",
+        "env",
+        "executable",
+        "factory",
+        "handle",
+        "module",
+        "process",
+        "script",
+        "stream",
+    }
+    assert all(fragment not in field for field in public_fields for fragment in forbidden_fragments)
+    assert str(inspect.signature(run_evidence.execute_authorized_formal_development)) == (
+        "(request: 'FormalDevelopmentRequest') -> 'FormalDevelopmentOutcome'"
+    )
 
 
 @pytest.mark.parametrize(

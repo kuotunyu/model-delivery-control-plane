@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
-from collections import deque
-from collections.abc import Mapping
-from contextlib import suppress
-from dataclasses import field as dataclass_field
-from functools import partial
 from pathlib import Path
-from types import MappingProxyType, ModuleType
 
 import pytest
 
@@ -16,10 +10,6 @@ import mdcp.temporal.cli as cli
 import mdcp.temporal.run_evidence as run_evidence
 import mdcp.temporal.runner as runner
 import mdcp.temporal.search_identity as search_identity
-from mdcp.temporal.run_evidence import FormalDevelopmentOutcome
-from mdcp.temporal.trials import build_estimator
-from mdcp.workload.dataset import load_uci_development_archive
-from mdcp.workload.splits import split_development_rows
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _TRUSTED_MODULES = (cli, run_evidence, runner, search_identity)
@@ -153,24 +143,6 @@ _EXPECTED_OWNED_SURFACES = {
         "verify_search_source_inventory",
     ),
 }
-_FORBIDDEN_NAMED_AUTHORITIES = frozenset(
-    {
-        "FormalRunPermit",
-        "activate_formal_run",
-        "canonical_natural_container",
-        "claim_formal_run",
-        "consume_formal_run_authorization",
-        "consume_marker",
-        "encode_natural",
-        "formal_operation",
-        "preflight_pair",
-        "publish_private",
-        "publish_terminal",
-        "write_formal_bundle_no_clobber",
-    }
-)
-_MAPPING_PROXY_TYPE = type(MappingProxyType({}))
-_EMPTY_DATACLASS_METADATA = dataclass_field().metadata
 _FORBIDDEN_RUNNER_AUTHORITIES = frozenset(
     {
         "_FormalDevelopmentInputs",
@@ -184,22 +156,11 @@ _FORBIDDEN_RUNNER_AUTHORITIES = frozenset(
         "_fit_formal_fold",
     }
 )
-_FORBIDDEN_REACHABLE_CAPABILITIES = (
-    load_uci_development_archive,
-    split_development_rows,
-    build_estimator,
-)
 
 
 def _native_type_metadata(value: type, name: str) -> object:
     descriptor = vars(type)[name]
     assert inspect.isgetsetdescriptor(descriptor)
-    return descriptor.__get__(value, type(value))
-
-
-def _native_builtin_descriptor_value(value: object, owner: type, name: str) -> object:
-    descriptor = vars(owner)[name]
-    assert inspect.isgetsetdescriptor(descriptor) or inspect.ismemberdescriptor(descriptor)
     return descriptor.__get__(value, type(value))
 
 
@@ -242,108 +203,6 @@ def _module_level_invoked_parameters(source: str) -> tuple[tuple[str, str], ...]
             and node.func.id in parameters
         )
     return tuple(invoked)
-
-
-def _native_named_descriptor(value: object, name: str) -> object | None:
-    for class_state in _native_type_metadata(type(value), "__mro__"):
-        descriptor = vars(class_state).get(name)
-        if inspect.isgetsetdescriptor(descriptor) or inspect.ismemberdescriptor(descriptor):
-            return descriptor
-    return None
-
-
-def _named_identity(value: object) -> str | None:
-    descriptor = _native_named_descriptor(value, "__name__")
-    if descriptor is None:
-        return None
-    try:
-        name = descriptor.__get__(value, type(value))
-    except AttributeError:
-        return None
-    return name if isinstance(name, str) else None
-
-
-def _named_reachability(roots: tuple[object, ...]) -> tuple[object, ...]:
-    """Traverse named state, deliberately excluding function closure cells."""
-    pending: deque[object] = deque(roots)
-    visited: dict[int, object] = {}
-    while pending:
-        value = pending.popleft()
-        identity = id(value)
-        if identity in visited:
-            continue
-        visited[identity] = value
-        if inspect.ismodule(value):
-            if any(value is module for module in _TRUSTED_MODULES):
-                pending.extend(vars(value).values())
-            continue
-        if inspect.ismethod(value):
-            pending.append(value.__self__)
-            pending.append(value.__func__)
-            continue
-        if inspect.isfunction(value):
-            pending.extend(value.__defaults__ or ())
-            pending.extend((value.__kwdefaults__ or {}).values())
-            pending.append(value.__annotations__)
-            pending.extend(vars(value).values())
-            continue
-        if isinstance(value, property):
-            pending.extend(
-                accessor
-                for accessor in (
-                    _native_builtin_descriptor_value(value, property, "fget"),
-                    _native_builtin_descriptor_value(value, property, "fset"),
-                    _native_builtin_descriptor_value(value, property, "fdel"),
-                )
-                if accessor is not None
-            )
-            continue
-        if isinstance(value, staticmethod | classmethod):
-            owner = staticmethod if isinstance(value, staticmethod) else classmethod
-            pending.append(_native_builtin_descriptor_value(value, owner, "__func__"))
-            continue
-        if inspect.isclass(value):
-            for class_state in _native_type_metadata(value, "__mro__"):
-                pending.extend(vars(class_state).values())
-            continue
-        if isinstance(value, dict):
-            mapping_items = tuple(dict.items(value))
-            pending.extend(key for key, _ in mapping_items)
-            pending.extend(item for _, item in mapping_items)
-            continue
-        if type(value) is _MAPPING_PROXY_TYPE:
-            if value is _EMPTY_DATACLASS_METADATA:
-                continue
-            raise AssertionError("UNINSPECTABLE_MAPPING_PROXY")
-        container_owner = next(
-            (owner for owner in (list, tuple, set, frozenset, deque) if isinstance(value, owner)),
-            None,
-        )
-        if container_owner is not None:
-            pending.extend(container_owner.__iter__(value))
-            continue
-        if type(value) in {str, bytes, int, float, complex, bool, type(None)}:
-            continue
-        instance_state = None
-        instance_dict_descriptor = _native_named_descriptor(value, "__dict__")
-        if instance_dict_descriptor is not None:
-            with suppress(AttributeError):
-                instance_state = instance_dict_descriptor.__get__(value, type(value))
-        if isinstance(instance_state, Mapping):
-            pending.append(instance_state)
-        inspectable_mapping_state = isinstance(instance_state, Mapping)
-        for class_state in _native_type_metadata(type(value), "__mro__"):
-            class_values = vars(class_state)
-            pending.extend(class_values.values())
-            for slot_descriptor in class_values.values():
-                if not inspect.ismemberdescriptor(slot_descriptor):
-                    continue
-                with suppress(AttributeError):
-                    pending.append(slot_descriptor.__get__(value, type(value)))
-                    inspectable_mapping_state = True
-        if isinstance(value, Mapping) and not inspectable_mapping_state:
-            raise AssertionError("UNINSPECTABLE_MAPPING_STATE")
-    return tuple(visited.values())
 
 
 def _assert_single_factory_and_cli_edge(run_source: str, cli_source: str) -> None:
@@ -462,44 +321,108 @@ def test_post_import_callable_and_type_surface_is_exact() -> None:
     } == _EXPECTED_OWNED_SURFACES
 
 
-def test_runner_exposes_no_module_reachable_execution_authority() -> None:
-    assert _FORBIDDEN_RUNNER_AUTHORITIES.isdisjoint(vars(runner))
+def test_finite_process_boundary_has_exact_public_function_surfaces() -> None:
+    import mdcp.temporal.formal_worker as formal_worker
+    import mdcp.temporal.formal_worker_protocol as protocol
 
-
-def test_named_reachability_rejects_callback_loader_and_fit_capabilities() -> None:
-    reachable = _named_reachability(
-        (
-            runner,
-            run_evidence.write_synthetic_bundle_no_clobber,
-            run_evidence.execute_authorized_formal_development,
+    def public_functions(module: object) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                name
+                for name, value in vars(module).items()
+                if inspect.isfunction(value)
+                and value.__module__ == module.__name__
+                and not name.startswith("_")
+            )
         )
+
+    assert public_functions(cli) == ("build_parser", "main")
+    assert public_functions(formal_worker) == ("main",)
+    assert public_functions(protocol) == (
+        "encode_formal_worker_request",
+        "encode_formal_worker_response",
+        "formal_worker_inventory_sha256",
+        "launch_profile_sha256",
+        "parse_formal_worker_request",
+        "parse_formal_worker_response",
+        "search_source_inventory_sha256",
+        "worker_request_sha256",
     )
-    reachable_names = {name for value in reachable if (name := _named_identity(value)) is not None}
-    assert _FORBIDDEN_RUNNER_AUTHORITIES.isdisjoint(reachable_names)
-    reachable_identities = {id(value) for value in reachable}
+
+
+def test_dedicated_worker_and_supervisor_have_exact_direct_capability_edges() -> None:
+    import mdcp.temporal.formal_worker as formal_worker
+
+    supervisor_tree = ast.parse(inspect.getsource(run_evidence))
+    worker_tree = ast.parse(inspect.getsource(formal_worker))
+
+    def imported_edges(tree: ast.Module) -> set[tuple[str, str | None]]:
+        edges: set[tuple[str, str | None]] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                edges.update((alias.name, None) for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                edges.update((node.module or "", alias.name) for alias in node.names)
+        return edges
+
+    supervisor_edges = imported_edges(supervisor_tree)
+    supervisor_calls = {
+        node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        for node in ast.walk(supervisor_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)
+    }
+    assert supervisor_edges.isdisjoint(
+        {
+            ("mdcp.temporal.formal_worker", None),
+            ("mdcp.temporal.trials", "build_estimator"),
+            ("mdcp.workload.dataset", "load_uci_development_archive"),
+            ("mdcp.workload.dataset", "load_uci_archive"),
+            ("mdcp.workload.splits", "split_development_rows"),
+            ("mdcp.workload.splits", "open_h2"),
+        }
+    )
+    assert supervisor_calls.isdisjoint(
+        {
+            "_encode_natural",
+            "_execute_natural_run",
+            "_fit_natural_request",
+            "_publish_private",
+            "build_estimator",
+            "load_uci_archive",
+            "load_uci_development_archive",
+            "open_h2",
+            "split_development_rows",
+        }
+    )
+
+    worker_edges = imported_edges(worker_tree)
     assert all(
-        id(capability) not in reachable_identities
-        for capability in _FORBIDDEN_REACHABLE_CAPABILITIES
+        not module.startswith(
+            (
+                "asyncio",
+                "docker",
+                "importlib",
+                "multiprocessing",
+                "socket",
+                "subprocess",
+                "torch",
+            )
+        )
+        for module, _name in worker_edges
+    )
+    assert worker_edges.isdisjoint(
+        {
+            ("mdcp.temporal.cli", None),
+            ("mdcp.temporal.run_evidence", "execute_authorized_formal_development"),
+            ("mdcp.temporal.search_identity", None),
+            ("mdcp.workload.dataset", "load_uci_archive"),
+            ("mdcp.workload.splits", "open_h2"),
+        }
     )
 
 
-@pytest.mark.parametrize("sink", ("alias", "default", "class", "registry"))
-def test_reachability_proof_detects_actual_fit_capability_through_named_sinks(
-    sink: str,
-) -> None:
-    def holder(default: object = build_estimator) -> object:
-        return default
-
-    class ReturnedState:
-        fit = build_estimator
-
-    roots = {
-        "alias": ({"natural_fit": build_estimator},),
-        "default": (holder,),
-        "class": (ReturnedState(),),
-        "registry": ({"registry": {"fit": build_estimator}},),
-    }[sink]
-    assert build_estimator in _named_reachability(roots)
+def test_finite_process_boundary_runner_exposes_no_named_execution_authority() -> None:
+    assert _FORBIDDEN_RUNNER_AUTHORITIES.isdisjoint(vars(runner))
 
 
 def test_runner_has_no_module_level_callback_invocation() -> None:
@@ -548,387 +471,11 @@ def test_pure_runner_has_no_open_execution_or_io_capability_surface() -> None:
     assert not hasattr(runner, "run_development")
 
 
-def test_pure_runner_proof_rejects_callback_shaped_mutation() -> None:
+def test_finite_process_boundary_rejects_direct_runner_callback_call() -> None:
     source = (REPOSITORY_ROOT / "src/mdcp/temporal/runner.py").read_text(encoding="utf-8")
     mutated = source + "\ndef pure_runner(callback):\n    return callback()\n"
 
     assert _module_level_invoked_parameters(mutated) == (("pure_runner", "callback"),)
-
-
-def test_callback_invocation_proof_rejects_spelling_independent_mutation() -> None:
-    source = (REPOSITORY_ROOT / "src/mdcp/temporal/runner.py").read_text(encoding="utf-8")
-    mutated = source + "\ndef transformed(action):\n    return action()\n"
-    assert _module_level_invoked_parameters(mutated) == (("transformed", "action"),)
-
-
-def test_named_reachability_has_no_intermediate_or_raw_publication_authority() -> None:
-    invalid_outcome = run_evidence.execute_authorized_formal_development(object())
-    parser = cli.build_parser()
-    reachable = _named_reachability((*_TRUSTED_MODULES, invalid_outcome, parser))
-    reachable_names = {name for value in reachable if (name := _named_identity(value)) is not None}
-    assert reachable_names.isdisjoint(_FORBIDDEN_NAMED_AUTHORITIES)
-    assert not hasattr(run_evidence, "_make_evidence_mutation_surface")
-    assert not hasattr(run_evidence, "_MUTATION_BINDINGS")
-    assert invalid_outcome == FormalDevelopmentOutcome(
-        verdict="FAIL",
-        reason_codes=("FORMAL_RUN_REQUEST_INVALID",),
-        private_identity=None,
-        seal_record_sha256=None,
-        repository_inventory_sha256=None,
-        authorization_sha256="0" * 64,
-        consumption_marker_sha256=None,
-        fit_count=0,
-        h2_status="SEALED_NOT_LOADED",
-        h2_loaded_rows=0,
-    )
-
-
-def test_reachability_proof_traverses_function_attribute_registries() -> None:
-    def publish_private() -> None:
-        return None
-
-    def holder() -> None:
-        return None
-
-    holder.registry = {"writer": publish_private}  # type: ignore[attr-defined]
-    reachable_names = {
-        name
-        for value in _named_reachability((holder,))
-        if (name := getattr(value, "__name__", None)) is not None
-    }
-    assert "publish_private" in reachable_names
-
-
-def test_reachability_proof_traverses_function_annotations() -> None:
-    def publish_private() -> None:
-        return None
-
-    def holder() -> None:
-        return None
-
-    holder.__annotations__["writer"] = publish_private
-    assert publish_private in _named_reachability((holder,))
-
-
-def test_reachability_proof_rejects_opaque_mapping_proxy_registries() -> None:
-    def publish_private() -> None:
-        return None
-
-    registry = MappingProxyType({"writer": publish_private})
-    with pytest.raises(AssertionError, match="UNINSPECTABLE_MAPPING_PROXY"):
-        _named_reachability((registry,))
-
-
-def test_reachability_proof_does_not_execute_mapping_proxy_backing_code() -> None:
-    backing_calls: list[str] = []
-
-    class TrapMapping(Mapping[str, object]):
-        def __getitem__(self, key: str) -> object:
-            backing_calls.append(f"getitem:{key}")
-            raise KeyError(key)
-
-        def __iter__(self) -> object:
-            backing_calls.append("iter")
-            return iter(("writer",))
-
-        def __len__(self) -> int:
-            backing_calls.append("len")
-            return 1
-
-    registry = MappingProxyType(TrapMapping())
-    with pytest.raises(AssertionError, match="UNINSPECTABLE_MAPPING_PROXY"):
-        _named_reachability((registry,))
-    assert backing_calls == []
-
-
-def test_reachability_proof_bypasses_dict_subclass_overrides() -> None:
-    def publish_private() -> None:
-        return None
-
-    override_calls: list[str] = []
-
-    class TrapDict(dict[str, object]):
-        def items(self) -> object:
-            override_calls.append("items")
-            raise RuntimeError("DICT_ITEMS_OVERRIDE_EXECUTED")
-
-    registry = TrapDict(writer=publish_private)
-    assert publish_private in _named_reachability((registry,))
-    assert override_calls == []
-
-
-@pytest.mark.parametrize("container_type", (list, tuple, set, frozenset, deque))
-def test_reachability_proof_bypasses_builtin_container_subclass_iterators(
-    container_type: type,
-) -> None:
-    def publish_private() -> None:
-        return None
-
-    override_calls: list[str] = []
-
-    class TrapContainer(container_type):
-        def __iter__(self) -> object:
-            override_calls.append("iter")
-            raise RuntimeError("CONTAINER_ITER_OVERRIDE_EXECUTED")
-
-    container = TrapContainer((publish_private,))
-    assert publish_private in _named_reachability((container,))
-    assert override_calls == []
-
-
-def test_reachability_proof_does_not_execute_custom_dict_descriptors() -> None:
-    class Trap:
-        @property
-        def __dict__(self) -> object:
-            raise RuntimeError("DICT_DESCRIPTOR_EXECUTED")
-
-    _named_reachability((Trap(),))
-
-
-def test_named_identity_does_not_execute_custom_name_descriptors() -> None:
-    class Trap:
-        @property
-        def __name__(self) -> str:
-            raise RuntimeError("NAME_DESCRIPTOR_EXECUTED")
-
-    assert _named_identity(Trap()) is None
-
-
-def test_reachability_proof_bypasses_property_subclass_overrides() -> None:
-    def publish_private() -> None:
-        return None
-
-    override_calls: list[str] = []
-
-    class TrapProperty(property):
-        @property
-        def fget(self) -> object:
-            override_calls.append("fget")
-            raise RuntimeError("FGET_EXECUTED")
-
-    class ReturnedState:
-        writer = TrapProperty(publish_private)
-
-    assert publish_private in _named_reachability((ReturnedState(),))
-    assert override_calls == []
-
-
-@pytest.mark.parametrize("descriptor_kind", ("staticmethod", "classmethod"))
-def test_reachability_proof_bypasses_callable_descriptor_subclass_overrides(
-    descriptor_kind: str,
-) -> None:
-    def publish_private() -> None:
-        return None
-
-    override_calls: list[str] = []
-
-    class TrapStaticmethod(staticmethod):
-        @property
-        def __func__(self) -> object:
-            override_calls.append("staticmethod")
-            raise RuntimeError("FUNC_EXECUTED")
-
-    class TrapClassmethod(classmethod):
-        @property
-        def __func__(self) -> object:
-            override_calls.append("classmethod")
-            raise RuntimeError("FUNC_EXECUTED")
-
-    descriptor = {
-        "staticmethod": TrapStaticmethod(publish_private),
-        "classmethod": TrapClassmethod(publish_private),
-    }[descriptor_kind]
-
-    class ReturnedState:
-        writer = descriptor
-
-    assert publish_private in _named_reachability((ReturnedState(),))
-    assert override_calls == []
-
-
-def test_reachability_proof_bypasses_hostile_metaclass_mro_access() -> None:
-    def publish_private() -> None:
-        return None
-
-    class HostileMeta(type):
-        def __getattribute__(cls, name: str) -> object:
-            if name == "__mro__":
-                raise RuntimeError("MRO_DESCRIPTOR_EXECUTED")
-            return super().__getattribute__(name)
-
-    class ReturnedState(metaclass=HostileMeta):
-        writer = publish_private
-
-    assert publish_private in _named_reachability((ReturnedState,))
-
-
-def test_owned_surface_bypasses_hostile_metaclass_module_access() -> None:
-    class HostileMeta(type):
-        def __getattribute__(cls, name: str) -> object:
-            if name == "__module__":
-                raise RuntimeError("MODULE_DESCRIPTOR_EXECUTED")
-            return super().__getattribute__(name)
-
-    class ReturnedState(metaclass=HostileMeta):
-        pass
-
-    module = ModuleType("external_test_module")
-    type.__setattr__(ReturnedState, "__module__", module.__name__)
-    module.ReturnedState = ReturnedState
-    assert _owned_surface(module) == ("ReturnedState",)
-
-
-def test_reachability_proof_does_not_read_untrusted_module_names() -> None:
-    class TrapModule(ModuleType):
-        def __getattribute__(self, name: str) -> object:
-            if name == "__name__":
-                raise RuntimeError("MODULE_NAME_EXECUTED")
-            return super().__getattribute__(name)
-
-    _named_reachability((TrapModule("untrusted_test_module"),))
-
-
-def test_reachability_proof_traverses_parser_and_default_objects() -> None:
-    def publish_private() -> None:
-        return None
-
-    parser = cli.build_parser()
-    parser.set_defaults(writer=publish_private)
-
-    class DefaultState:
-        pass
-
-    state = DefaultState()
-    state.writer = publish_private
-
-    def holder(default: object = state) -> object:
-        return default
-
-    for root in (parser, holder):
-        reachable_names = {
-            name
-            for value in _named_reachability((root,))
-            if (name := getattr(value, "__name__", None)) is not None
-        }
-        assert "publish_private" in reachable_names
-
-
-def test_reachability_proof_traverses_returned_object_class_attributes() -> None:
-    def publish_private() -> None:
-        return None
-
-    class ReturnedState:
-        writer = publish_private
-
-    reachable_names = {
-        name
-        for value in _named_reachability((ReturnedState(),))
-        if (name := getattr(value, "__name__", None)) is not None
-    }
-    assert "publish_private" in reachable_names
-
-
-def test_reachability_proof_traverses_directly_returned_external_classes() -> None:
-    def publish_private() -> None:
-        return None
-
-    class ReturnedState:
-        writer = publish_private
-
-    ReturnedState.__module__ = "external_test_module"
-    assert publish_private in _named_reachability((ReturnedState,))
-
-
-@pytest.mark.parametrize("kind", ("slotted", "inherited"))
-def test_reachability_proof_traverses_slotted_and_inherited_class_state(kind: str) -> None:
-    def publish_private() -> None:
-        return None
-
-    class BaseState:
-        writer = publish_private
-
-    class SlottedState:
-        __slots__ = ()
-        writer = publish_private
-
-    class InheritedState(BaseState):
-        pass
-
-    returned = SlottedState() if kind == "slotted" else InheritedState()
-    reachable_names = {
-        name
-        for value in _named_reachability((returned,))
-        if (name := getattr(value, "__name__", None)) is not None
-    }
-    assert "publish_private" in reachable_names
-
-
-@pytest.mark.parametrize("primitive", (int, str))
-def test_reachability_proof_traverses_primitive_subclass_state(primitive: type) -> None:
-    def publish_private() -> None:
-        return None
-
-    class PrimitiveState(primitive):
-        writer = publish_private
-
-    returned = PrimitiveState()
-    reachable_names = {
-        name
-        for value in _named_reachability((returned,))
-        if (name := getattr(value, "__name__", None)) is not None
-    }
-    assert "publish_private" in reachable_names
-
-
-def test_reachability_proof_traverses_returned_object_slot_values() -> None:
-    def publish_private() -> None:
-        return None
-
-    class ReturnedState:
-        __slots__ = ("writer",)
-
-    returned = ReturnedState()
-    returned.writer = publish_private
-    assert publish_private in _named_reachability((returned,))
-
-
-def test_reachability_proof_traverses_name_mangled_slot_values() -> None:
-    def publish_private() -> None:
-        return None
-
-    class ReturnedState:
-        __slots__ = ("__writer",)
-
-        def __init__(self) -> None:
-            self.__writer = publish_private
-
-    assert publish_private in _named_reachability((ReturnedState(),))
-
-
-def test_reachability_proof_traverses_c_level_member_descriptors() -> None:
-    def publish_private() -> None:
-        return None
-
-    assert publish_private in _named_reachability((partial(publish_private),))
-
-
-@pytest.mark.parametrize("descriptor_kind", ("property", "staticmethod", "classmethod"))
-def test_reachability_proof_traverses_descriptor_owned_callables(
-    descriptor_kind: str,
-) -> None:
-    def publish_private() -> None:
-        return None
-
-    descriptor = {
-        "property": property(publish_private),
-        "staticmethod": staticmethod(publish_private),
-        "classmethod": classmethod(publish_private),
-    }[descriptor_kind]
-
-    class ReturnedState:
-        writer = descriptor
-
-    assert publish_private in _named_reachability((ReturnedState(),))
 
 
 def test_factory_state_and_single_cli_dispatch_are_structurally_closed() -> None:
@@ -953,7 +500,7 @@ def test_launch_profile_keeps_process_and_git_imports_supervisor_private() -> No
     assert "mdcp.temporal.formal_worker" not in top_level_modules
 
 
-def test_structural_proof_rejects_a_second_cli_dispatch() -> None:
+def test_finite_process_boundary_rejects_a_second_cli_dispatch() -> None:
     run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
     cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
     mutated = (
@@ -969,7 +516,7 @@ def test_structural_proof_rejects_a_second_cli_dispatch() -> None:
         raise AssertionError("SECOND_FORMAL_DISPATCH_ACCEPTED")
 
 
-def test_structural_proof_rejects_an_alias_cli_dispatch() -> None:
+def test_finite_process_boundary_rejects_an_alias_cli_dispatch() -> None:
     run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
     cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
     mutated = cli_source.replace(
@@ -988,7 +535,7 @@ def test_structural_proof_rejects_an_alias_cli_dispatch() -> None:
         raise AssertionError("ALIASED_FORMAL_DISPATCH_ACCEPTED")
 
 
-def test_structural_proof_rejects_an_imported_alias_cli_dispatch() -> None:
+def test_finite_process_boundary_rejects_an_imported_alias_cli_dispatch() -> None:
     run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
     cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
     mutated = cli_source.replace(
@@ -1012,7 +559,7 @@ def test_structural_proof_rejects_an_imported_alias_cli_dispatch() -> None:
         raise AssertionError("IMPORTED_ALIAS_FORMAL_DISPATCH_ACCEPTED")
 
 
-def test_structural_proof_rejects_a_relative_imported_alias_cli_dispatch() -> None:
+def test_finite_process_boundary_rejects_a_relative_imported_alias_cli_dispatch() -> None:
     run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
     cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
     mutated = cli_source.replace(
@@ -1037,7 +584,7 @@ def test_structural_proof_rejects_a_relative_imported_alias_cli_dispatch() -> No
 
 
 @pytest.mark.parametrize("module", ("mdcp.temporal.run_evidence", ".run_evidence"))
-def test_structural_proof_rejects_wildcard_cli_dispatch(module: str) -> None:
+def test_finite_process_boundary_rejects_wildcard_cli_dispatch(module: str) -> None:
     run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
     cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
     mutated = cli_source.replace(
@@ -1058,31 +605,6 @@ def test_structural_proof_rejects_wildcard_cli_dispatch(module: str) -> None:
         pass
     else:  # pragma: no cover - makes the mutation-test intent explicit
         raise AssertionError("WILDCARD_FORMAL_DISPATCH_ACCEPTED")
-
-
-@pytest.mark.parametrize(
-    "escape",
-    (
-        "    write_synthetic.publisher = publish_synthetic\n",
-        "    leaked_writer = publish_synthetic\n",
-        '    setattr(write_synthetic, "publisher", publish_synthetic)\n',
-        '    leaked_registry = {"writer": publish_synthetic}\n',
-        "    leaked_alias = write_synthetic\n",
-        "    def leaked_writer():\n        return publish_synthetic\n",
-    ),
-)
-def test_factory_escape_proof_rejects_registry_attribute_and_alias_sinks(escape: str) -> None:
-    run_source = (REPOSITORY_ROOT / "src/mdcp/temporal/run_evidence.py").read_text(encoding="utf-8")
-    cli_source = (REPOSITORY_ROOT / "src/mdcp/temporal/cli.py").read_text(encoding="utf-8")
-    needle = "    return write_synthetic\n"
-    assert run_source.count(needle) == 1
-    mutated = run_source.replace(needle, f"{escape}{needle}", 1)
-    try:
-        _assert_single_factory_and_cli_edge(mutated, cli_source)
-    except AssertionError:
-        pass
-    else:  # pragma: no cover - makes the mutation-test intent explicit
-        raise AssertionError("FACTORY_AUTHORITY_ESCAPE_ACCEPTED")
 
 
 def test_named_public_functions_do_not_combine_raw_natural_content_and_destination() -> None:

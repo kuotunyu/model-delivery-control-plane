@@ -108,11 +108,19 @@ def _task_five_wrong_digest_request(tmp_path: Path) -> tuple[protocol.FormalWork
     return request, consumption_root / f"{sha256_hex(authorization_raw)}.consumed.json"
 
 
-def test_worker_process_bootstrap_is_a_no_argument_import_safe_target() -> None:
+def test_dedicated_worker_direct_main_fails_before_marker_or_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     worker_path = REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py"
     assert worker_path.is_file()
     import mdcp.temporal.formal_worker as worker
 
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("direct worker call crossed the pre-authorization boundary")
+
+    monkeypatch.setattr(worker, "_create_durable_marker", forbidden)
+    monkeypatch.setattr(worker, "_hash_archive", forbidden)
+    monkeypatch.setattr(worker, "_execute_natural_run", forbidden)
     assert str(inspect.signature(worker.main)) == "() -> 'int'"
     assert worker.main() == 2
 
@@ -152,7 +160,7 @@ def test_worker_request_sha256_is_bound_into_terminal_seal_by_exact_worker_input
     assert {name: ast.unparse(keywords[name]) for name in expected} == expected
 
 
-def test_worker_process_missing_trusted_inputs_is_canonical_and_fail_closed() -> None:
+def test_dedicated_worker_exact_launch_reaches_preconsumption_verification() -> None:
     worker_path = REPOSITORY_ROOT / "src/mdcp/temporal/formal_worker.py"
     entries = tuple(
         protocol.FormalWorkerSourceEntry(
@@ -314,7 +322,7 @@ def _fix_round_one_worker_process(
         "wrong-script-target",
     ),
 )
-def test_fix_round_one_i3_nonexact_launch_profile_never_reaches_worker_protocol(
+def test_dedicated_worker_nonexact_launch_profile_never_reaches_protocol(
     tmp_path: Path,
     case_id: str,
 ) -> None:

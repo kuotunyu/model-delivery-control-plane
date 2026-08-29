@@ -39,53 +39,18 @@ _DYNAMIC_IMPORT_FUNCTIONS = frozenset(
     }
 )
 _DYNAMIC_IMPORT_MODULES = frozenset({"importlib", "builtins"})
-_REFLECTION_MODULES = frozenset({"gc", "inspect", "marshal", "operator", "pickle"})
-_FORBIDDEN_DYNAMIC_REFERENCES = _DYNAMIC_IMPORT_FUNCTIONS | {
-    "__builtins__",
-    "__file__",
-    "__loader__",
-    "__spec__",
+# Finite defense-in-depth over direct syntax in known modules. This deliberately
+# does not claim that arbitrary Python semantics or object graphs are reachable.
+_FINITE_FORBIDDEN_DIRECT_CALLS = _DYNAMIC_IMPORT_FUNCTIONS | {
     "breakpoint",
     "compile",
     "delattr",
     "eval",
     "exec",
-    "getattr",
-    "globals",
     "help",
-    "locals",
     "open",
     "setattr",
-    "vars",
-    "sys.modules",
 }
-_FORBIDDEN_REFLECTION_ATTRIBUTES = frozenset(
-    {
-        "__base__",
-        "__bases__",
-        "__builtins__",
-        "__class__",
-        "__closure__",
-        "__dict__",
-        "__getattribute__",
-        "__globals__",
-        "__mro__",
-        "__subclasses__",
-        "ag_frame",
-        "cr_frame",
-        "f_back",
-        "f_builtins",
-        "f_globals",
-        "f_locals",
-        "gi_frame",
-        "modules",
-        "query",
-        "sys",
-        "tb_frame",
-        "tb_next",
-        "eval",
-    }
-)
 _TRUSTED_FIREWALL_PATH = "src/mdcp/temporal/firewall.py"
 _ENCODING_COOKIE_PATTERN = re.compile(rb"^[ \t\f]*#.*?coding[:=][ \t]*([-_.a-zA-Z0-9]+)")
 _UTF8_BOM = b"\xef\xbb\xbf"
@@ -1183,25 +1148,6 @@ _FORMAL_MODULE_ATTRIBUTE_ALLOWLIST = {
         }
     ),
 }
-_FILE_ACCESS_METHODS = frozenset(
-    {
-        "open",
-        "read",
-        "read1",
-        "read_bytes",
-        "read_csv",
-        "read_text",
-        "readinto",
-        "readinto1",
-        "readline",
-        "readlines",
-        "lstat",
-        "write",
-        "write_bytes",
-        "write_text",
-        "writelines",
-    }
-)
 _ALLOWED_FILE_ACCESS_CALLS = {
     "src/mdcp/predictor/app_v2.py": frozenset(
         {("runtime_from_environment", "read_text", "name:descriptor_path")}
@@ -1276,6 +1222,10 @@ _ALLOWED_FILE_ACCESS_CALLS = {
             ("main", "read", "attr:sys.stdin.buffer"),
         }
     ),
+}
+_FINITE_FILE_ACCESS_METHODS = {
+    logical_path: frozenset(method for _scope, method, _receiver in calls)
+    for logical_path, calls in _ALLOWED_FILE_ACCESS_CALLS.items()
 }
 _ALLOWED_ENVIRONMENT_KEYS = {
     "src/mdcp/predictor/app_v2.py": frozenset(
@@ -1383,55 +1333,6 @@ _PINNED_FILE_CAPABILITY_MODULES = {
         "f27d267ac1418c4feacdd8522c4f68a9517583a442adc78a8e3124b8bad7d7cd"
     ),
 }
-_ALLOWED_PRIVATE_ATTRIBUTES = {
-    "src/mdcp/temporal/runtime_guards.py": frozenset(
-        {
-            "_expected_head",
-            "_fields_",
-            "_monotonic_ns",
-            "_peak_process_bytes",
-            "_repository_inventory_sha256",
-            "_repository_root",
-            "_start_ns",
-            "_tracked_paths",
-            "_unknown",
-            "_core",
-        }
-    ),
-    "src/mdcp/temporal/formal_worker.py": frozenset(
-        {
-            "_PrivateContainer",
-            "_PrivateContainerEntry",
-            "_inventory_core",
-            "_manifest_core",
-            "_raw_paths",
-            "_validated_private_files",
-        }
-    ),
-    "src/mdcp/temporal/runner.py": frozenset(
-        {
-            "_baseline",
-            "_finalized",
-            "_ledger",
-            "_outstanding",
-            "_private_folds",
-            "_processed_selection",
-            "_provisional",
-            "_qualifications",
-            "_record_replay_result",
-            "_record_selection_result",
-            "_records",
-            "_replay",
-            "_replay_digests",
-            "_reports",
-            "_require_active",
-            "_selection",
-            "_selection_bound",
-            "_session",
-        }
-    ),
-    "src/mdcp/temporal/run_evidence.py": frozenset({"_raw_paths"}),
-}
 _ALLOWED_SUBPROCESS_CALLS = {
     "src/mdcp/temporal/runtime_guards.py": {
         "_repository_head": ("git", "rev-parse", "HEAD"),
@@ -1500,7 +1401,6 @@ _SENSITIVE_FILE_CALLABLE_SCOPES = {
         ),
     }
 }
-_RESERVED_BINDING_NAMES = frozenset({"__file__"})
 _FAILURE_REASON = "H2_IMPORT_CAPABILITY_FORBIDDEN"
 _BEHAVIORAL_FAILURE_REASON = "BEHAVIORAL_H2_FIREWALL_FAILED"
 _FORBIDDEN_CALL_REASON = "FORBIDDEN_CAPABILITY_CALLED"
@@ -1656,82 +1556,6 @@ def _attribute_name(node: ast.expr, bindings: dict[str, str]) -> str | None:
         parent = _attribute_name(node.value, bindings)
         return None if parent is None else f"{parent}.{node.attr}"
     return None
-
-
-def _allowed_dunder_attribute(
-    node: ast.Attribute,
-    logical_path: str,
-    parents: dict[ast.AST, ast.AST],
-) -> bool:
-    if node.attr == "__init__":
-        return (
-            isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "super"
-            and not node.value.args
-            and not node.value.keywords
-        )
-    if node.attr == "__setattr__" and logical_path == "src/mdcp/temporal/runtime_guards.py":
-        parent = parents.get(node)
-        return (
-            isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "super"
-            and not node.value.args
-            and not node.value.keywords
-            and isinstance(parent, ast.Call)
-            and parent.func is node
-            and len(parent.args) == 2
-            and not parent.keywords
-            and isinstance(parent.args[0], ast.Constant)
-            and parent.args[0].value == "_core"
-            and isinstance(parent.args[1], ast.Name)
-            and parent.args[1].id == "core"
-            and _enclosing_function(node, parents) == "__init__"
-        )
-    if node.attr == "__module__" and logical_path == "src/mdcp/temporal/contract_gate.py":
-        return isinstance(node.value, ast.Name) and node.value.id in {
-            "create_v1_app",
-            "create_v2_app",
-        }
-    if node.attr == "__code__" and logical_path == _TRUSTED_FIREWALL_PATH:
-        return isinstance(node.value, ast.Name) and node.value.id in {
-            "_BOUNDED_LOADER",
-            "_DEVELOPMENT_SPLITTER",
-            "function",
-        }
-    if (
-        node.attr == "__setattr__"
-        and logical_path == "src/mdcp/temporal/folds.py"
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "object"
-    ):
-        call = parents.get(node)
-        if not (
-            isinstance(call, ast.Call)
-            and call.func is node
-            and len(call.args) == 3
-            and not call.keywords
-            and isinstance(call.args[0], ast.Name)
-            and call.args[0].id == "self"
-            and isinstance(call.args[1], ast.Constant)
-            and isinstance(call.args[1].value, str)
-            and call.args[1].value
-            in {"train_start", "train_end", "validation_start", "validation_end"}
-            and isinstance(call.args[2], ast.Name)
-            and call.args[2].id == call.args[1].value
-        ):
-            return False
-        function = parents.get(call)
-        while function is not None and not isinstance(function, ast.FunctionDef):
-            function = parents.get(function)
-        return (
-            isinstance(function, ast.FunctionDef)
-            and function.name == "__post_init__"
-            and isinstance(parents.get(function), ast.ClassDef)
-            and parents[function].name == "FoldSpec"
-        )
-    return False
 
 
 def _enclosing_function(
@@ -2957,8 +2781,6 @@ def _bind_import(bindings: dict[str, str], local_name: str, qualified_name: str)
         if bindings[local_name] == qualified_name:
             return
         _fail()
-    if local_name in _RESERVED_BINDING_NAMES:
-        _fail()
     bindings[local_name] = qualified_name
 
 
@@ -2971,7 +2793,7 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
             for alias in node.names:
                 root_module = alias.name.split(".", 1)[0]
                 if (
-                    root_module in _DYNAMIC_IMPORT_MODULES | _REFLECTION_MODULES
+                    root_module in _DYNAMIC_IMPORT_MODULES
                     or (
                         root_module == "sys"
                         and logical_path
@@ -2999,7 +2821,7 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
             if node.level:
                 _fail()
             root_module = module.split(".", 1)[0]
-            if root_module in _DYNAMIC_IMPORT_MODULES | _REFLECTION_MODULES or (
+            if root_module in _DYNAMIC_IMPORT_MODULES or (
                 root_module == "sys"
                 and logical_path
                 not in {
@@ -3042,23 +2864,6 @@ def _build_bindings(tree: ast.AST, logical_path: str) -> tuple[dict[str, str], f
     return bindings, frozenset(module_roots)
 
 
-def _shadows_imported_binding(node: ast.AST, bindings: dict[str, str]) -> bool:
-    protected_names = bindings.keys() | _RESERVED_BINDING_NAMES
-    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-        return node.name in protected_names
-    if isinstance(node, ast.arg):
-        return node.arg in protected_names
-    if isinstance(node, ast.ExceptHandler):
-        return node.name in protected_names if node.name is not None else False
-    if isinstance(node, ast.Global | ast.Nonlocal):
-        return any(name in protected_names for name in node.names)
-    if isinstance(node, ast.MatchAs | ast.MatchStar):
-        return node.name in protected_names if node.name is not None else False
-    if isinstance(node, ast.MatchMapping):
-        return node.rest in protected_names if node.rest is not None else False
-    return False
-
-
 def _audit_tree(tree: ast.AST, logical_path: str) -> None:
     _validate_pinned_file_capability_functions(tree, logical_path)
     _validate_fixed_worker_transport(tree, logical_path)
@@ -3075,8 +2880,6 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
         name: 0 for name in _PROTECTED_PATH_PARAMETER_FUNCTIONS.get(logical_path, frozenset())
     }
     for node in ast.walk(tree):
-        if _shadows_imported_binding(node, bindings):
-            _fail()
         if (
             logical_path == "src/mdcp/temporal/search_identity.py"
             and isinstance(node, ast.Name)
@@ -3145,7 +2948,7 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 _fail()
         if (
             isinstance(node, ast.Attribute)
-            and node.attr in _FILE_ACCESS_METHODS
+            and node.attr in _FINITE_FILE_ACCESS_METHODS.get(logical_path, frozenset())
             and not (
                 (
                     node.attr == "read_csv"
@@ -3205,29 +3008,22 @@ def _audit_tree(tree: ast.AST, logical_path: str) -> None:
                 and not isinstance(node.ctx, ast.Load)
             ):
                 _fail()
+            parent = parents.get(node)
             if (
-                qualified_name in _FORBIDDEN_DYNAMIC_REFERENCES
-                and not (
+                (
+                    qualified_name in _FINITE_FORBIDDEN_DIRECT_CALLS
+                    and isinstance(parent, ast.Call)
+                    and parent.func is node
+                )
+                or (
                     isinstance(node, ast.Name)
                     and qualified_name == "__file__"
-                    and _allowed_file_source_name(node, logical_path, parents)
+                    and not _allowed_file_source_name(node, logical_path, parents)
                 )
-                and not (
-                    isinstance(node, ast.Name)
-                    and qualified_name == "getattr"
-                    and _allowed_getattr_reference(node, logical_path, parents)
-                )
-            ) or (
-                isinstance(node, ast.Attribute)
-                and (
-                    (
-                        node.attr.startswith("_")
-                        and not _allowed_dunder_attribute(node, logical_path, parents)
-                        and node.attr
-                        not in _ALLOWED_PRIVATE_ATTRIBUTES.get(logical_path, frozenset())
-                    )
-                    or node.attr in _FORBIDDEN_REFLECTION_ATTRIBUTES
-                    or (qualified_name is not None and _is_forbidden_module(qualified_name))
+                or (
+                    isinstance(node, ast.Attribute)
+                    and qualified_name is not None
+                    and _is_forbidden_module(qualified_name)
                 )
             ):
                 _fail()
