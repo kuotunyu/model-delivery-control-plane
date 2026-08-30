@@ -586,6 +586,21 @@ def test_readme_heading_order_and_reviewer_setup_are_stable() -> None:
     assert "uv run --no-sync python scripts/verify-public-release.py" in quickstart
 
 
+def test_reviewer_demo_command_and_claim_ceiling_are_documented() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart = (REPOSITORY_ROOT / "docs/reviewer/quickstart.md").read_text(encoding="utf-8")
+    command = "uv run --no-sync python scripts/reviewer-demo.py --repository-root ."
+
+    for document in (readme, quickstart):
+        assert command in document
+        assert "MDCP_DEMO_PASS case=baseline" in document
+        assert "PUBLIC_RELEASE_SLICE_EVIDENCE_INVALID" in document
+        assert "PUBLIC_RELEASE_SLICE_INVENTORY_MISMATCH" in document
+        assert "repository" in document
+        assert "temporary" in document.casefold() or "暫存" in document
+    assert "MDCP_REVIEWER_DEMO_PASS != REMOTE_RELEASED != PRODUCTION_READY" in quickstart
+
+
 def test_evidence_taxonomy_and_license_qualifiers_are_explicit() -> None:
     guide = (REPOSITORY_ROOT / "docs/reviewer/release-evidence.md").read_text(encoding="utf-8")
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
