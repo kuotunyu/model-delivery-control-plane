@@ -94,6 +94,35 @@ jobs:
         run: uv run --no-sync pytest -p no:cacheprovider -q
       - name: Reject tracked-file mutation
         run: git diff --exit-code
+
+  linux_read_only_smoke:
+    name: Linux read-only smoke (not portability proof)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout complete evidence history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up locked Python and uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.11.18"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen --group ml
+      - name: Verify lock
+        run: uv lock --check
+      - name: Verify public evidence and deterministic demo
+        run: |
+          uv run --no-sync python scripts/verify-public-release.py --repository-root .
+          uv run --no-sync python scripts/reviewer-demo.py --repository-root .
+      - name: Run bounded Linux publication smoke
+        run: uv run --no-sync pytest -p no:cacheprovider -q tests/publication/test_public_release_surface.py tests/publication/test_release_workflow.py
+      - name: Reject tracked-file mutation
+        run: git diff --exit-code
 """
 )
 
@@ -235,8 +264,10 @@ def test_portfolio_workflow_is_read_only_and_bounded() -> None:
         workflow,
         re.MULTILINE,
     )
-    assert "runs-on: windows-2025" in workflow
-    assert "timeout-minutes: 30" in workflow
+    assert workflow.count("runs-on: windows-2025") == 1
+    assert workflow.count("runs-on: ubuntu-24.04") == 1
+    assert "name: Linux read-only smoke (not portability proof)" in workflow
+    assert re.findall(r"^    timeout-minutes: (\d+)$", workflow, re.MULTILINE) == ["30", "15"]
     assert "defaults:\n      run:\n        shell: pwsh" in workflow
     assert re.search(r"^    permissions:", workflow, re.MULTILINE) is None
     assert re.search(r"\b(?:contents|packages|id-token|attestations): write\b", workflow) is None
@@ -248,11 +279,15 @@ def test_portfolio_workflow_pins_setup_and_checks_out_complete_history() -> None
     reference_pairs = re.findall(
         r"^\s*uses: ([a-z0-9_.-]+/[a-z0-9_.-]+)@([0-9a-f]+)\s*$", workflow, re.MULTILINE
     )
-    references = dict(reference_pairs)
-
-    assert references == PORTFOLIO_ACTIONS
-    assert len(reference_pairs) == len(references)
-    assert all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in references.values())
+    assert reference_pairs == [
+        ("actions/checkout", PORTFOLIO_ACTIONS["actions/checkout"]),
+        ("astral-sh/setup-uv", PORTFOLIO_ACTIONS["astral-sh/setup-uv"]),
+        ("actions/checkout", PORTFOLIO_ACTIONS["actions/checkout"]),
+        ("astral-sh/setup-uv", PORTFOLIO_ACTIONS["astral-sh/setup-uv"]),
+    ]
+    assert all(re.fullmatch(r"[0-9a-f]{40}", sha) for _, sha in reference_pairs)
+    assert workflow.count("uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1") == 2
+    assert workflow.count("uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d") == 2
     assert re.search(
         r"uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
         r"        with:\n          fetch-depth: 0\n          persist-credentials: false",
@@ -285,6 +320,9 @@ def test_portfolio_workflow_runs_only_the_read_only_local_gate() -> None:
         "uv run --no-sync python scripts/verify-public-release.py --repository-root .",
         "uv run --no-sync python scripts/reviewer-demo.py --repository-root .",
         "uv run --no-sync pytest -p no:cacheprovider -q",
+        "uv run --no-sync pytest -p no:cacheprovider -q "
+        "tests/publication/test_public_release_surface.py "
+        "tests/publication/test_release_workflow.py",
         "git diff --exit-code",
     ):
         assert command in workflow
@@ -303,7 +341,7 @@ def test_portfolio_workflow_runs_only_the_read_only_local_gate() -> None:
         prohibited not in workflow
         for prohibited in ("release:", "tags:", "workflow_dispatch:", "schedule:")
     )
-    assert "ubuntu-24.04" not in workflow
+    assert "ubuntu-24.04" in workflow
     assert all(
         command not in workflow.casefold()
         for command in (
@@ -317,3 +355,23 @@ def test_portfolio_workflow_runs_only_the_read_only_local_gate() -> None:
     assert "secrets" not in workflow.casefold()
     assert "pytest -k" not in workflow
     assert "--ignore" not in workflow
+    _, linux = workflow.split("  linux_read_only_smoke:\n", maxsplit=1)
+    assert "Linux read-only smoke (not portability proof)" in linux
+    assert (
+        "uv run --no-sync pytest -p no:cacheprovider -q "
+        "tests/publication/test_public_release_surface.py "
+        "tests/publication/test_release_workflow.py"
+    ) in linux
+    for prohibited in (
+        "docker ",
+        "gh ",
+        "secrets",
+        "oidc",
+        "attestation",
+        "upload",
+        "packages",
+        "pytest -k",
+        "--ignore",
+        "uv run --no-sync pytest -p no:cacheprovider -q\n",
+    ):
+        assert prohibited not in linux.casefold()

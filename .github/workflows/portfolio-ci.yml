@@ -60,3 +60,32 @@ jobs:
         run: uv run --no-sync pytest -p no:cacheprovider -q
       - name: Reject tracked-file mutation
         run: git diff --exit-code
+
+  linux_read_only_smoke:
+    name: Linux read-only smoke (not portability proof)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout complete evidence history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up locked Python and uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.11.18"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen --group ml
+      - name: Verify lock
+        run: uv lock --check
+      - name: Verify public evidence and deterministic demo
+        run: |
+          uv run --no-sync python scripts/verify-public-release.py --repository-root .
+          uv run --no-sync python scripts/reviewer-demo.py --repository-root .
+      - name: Run bounded Linux publication smoke
+        run: uv run --no-sync pytest -p no:cacheprovider -q tests/publication/test_public_release_surface.py tests/publication/test_release_workflow.py
+      - name: Reject tracked-file mutation
+        run: git diff --exit-code
