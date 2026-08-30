@@ -590,60 +590,65 @@ def test_readme_heading_order_and_reviewer_setup_are_stable() -> None:
 def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     heading = "## 對應 ML／AI／CV／LLM 職務能力"
-    next_heading = "## 實際 implemented verification path"
+    h2_matches = list(re.finditer(r"^## [^\n]+$", readme, re.MULTILINE))
+    h2_headings = [match.group(0) for match in h2_matches]
+    role_heading_indexes = [
+        index for index, candidate in enumerate(h2_headings) if candidate == heading
+    ]
 
-    assert readme.count(heading) == 1
-    assert readme.index("## 目前完成度") < readme.index(heading)
-    assert readme.index(heading) < readme.index(next_heading)
-    section = readme[readme.index(heading) : readme.index(next_heading)]
+    assert len(role_heading_indexes) == 1
+    role_heading_index = role_heading_indexes[0]
+    assert h2_headings[role_heading_index - 1] == "## 目前完成度"
+    assert h2_headings[role_heading_index + 1] == "## 實際 implemented verification path"
+    section = readme[
+        h2_matches[role_heading_index].end() : h2_matches[role_heading_index + 1].start()
+    ]
     expected_rows = (
         (
-            "ML Engineer",
-            (
-                "src/mdcp/contracts/workload.py",
-                "src/mdcp/contracts/serving_identity_v2.py",
-                "tests/contract/workload/test_serving_identity_v2.py",
-            ),
-            "已實作的具體 workload 是 temporal regression",
+            "| ML Engineer | [workload contract](src/mdcp/contracts/workload.py)、"
+            "[v2 serving identity](src/mdcp/contracts/serving_identity_v2.py)、"
+            "[contract tests](tests/contract/workload/test_serving_identity_v2.py) "
+            "| 已實作的具體 workload 是 temporal regression |"
         ),
         (
-            "AI Engineer",
-            (
-                "src/mdcp/validator/service.py",
-                "src/mdcp/verify/bundle.py",
-                "evidence/public/portfolio/local-release-readiness.json",
-            ),
-            "local verification 不等於 remote release 或 production evidence",
+            "| AI Engineer | [offline validator](src/mdcp/validator/service.py)、"
+            "[bundle verification](src/mdcp/verify/bundle.py)、"
+            "[local readiness](evidence/public/portfolio/local-release-readiness.json) "
+            "| local verification 不等於 remote release 或 production evidence |"
         ),
         (
-            "Computer Vision / LLM Engineer",
-            (
-                "src/mdcp/contracts/serving_identity_v2.py",
-                "docs/reviewer/release-evidence.md",
-            ),
-            "不宣稱已實作 CV 或 LLM workload",
+            "| Computer Vision / LLM Engineer | "
+            "[content-addressed serving identity](src/mdcp/contracts/serving_identity_v2.py)、"
+            "[release evidence taxonomy](docs/reviewer/release-evidence.md) "
+            "| engineering pattern 可轉用；不宣稱已實作 CV 或 LLM workload |"
         ),
         (
-            "MLOps / reliability / security",
-            (
-                "src/mdcp/temporal/formal_worker.py",
-                "src/mdcp/temporal/firewall.py",
-                "src/mdcp/temporal/runtime_guards.py",
-            ),
-            "control/router/canary/rollback/recovery 仍是 Designed only",
+            "| MLOps / reliability / security | "
+            "[dedicated formal worker](src/mdcp/temporal/formal_worker.py)、"
+            "[static firewall](src/mdcp/temporal/firewall.py)、"
+            "[runtime guards](src/mdcp/temporal/runtime_guards.py) "
+            "| control/router/canary/rollback/recovery 仍是 Designed only |"
         ),
     )
-
-    for role, targets, boundary in expected_rows:
-        row = next(line for line in section.splitlines() if line.startswith(f"| {role} |"))
-        for target in targets:
-            assert f"]({target})" in row
-        assert boundary in row
-
-    assert re.findall(r"\]\(([^)]+)\)", section) == [
-        target for _, targets, _ in expected_rows for target in targets
+    assert [line for line in section.splitlines() if line.startswith("| ")] == [
+        "| 目標職務／能力 | 可直接檢查的 evidence | 誠實邊界 |",
+        *expected_rows,
     ]
-    assert len(set(re.findall(r"\]\(([^)]+)\)", section))) == 10
+    link_targets = re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", section)
+    assert link_targets == [
+        "src/mdcp/contracts/workload.py",
+        "src/mdcp/contracts/serving_identity_v2.py",
+        "tests/contract/workload/test_serving_identity_v2.py",
+        "src/mdcp/validator/service.py",
+        "src/mdcp/verify/bundle.py",
+        "evidence/public/portfolio/local-release-readiness.json",
+        "src/mdcp/contracts/serving_identity_v2.py",
+        "docs/reviewer/release-evidence.md",
+        "src/mdcp/temporal/formal_worker.py",
+        "src/mdcp/temporal/firewall.py",
+        "src/mdcp/temporal/runtime_guards.py",
+    ]
+    assert len(set(link_targets)) == 10
 
 
 def test_reviewer_demo_command_and_claim_ceiling_are_documented() -> None:
