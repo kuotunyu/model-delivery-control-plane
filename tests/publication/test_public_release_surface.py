@@ -1354,7 +1354,7 @@ def _identity_lf_paths(verifier: object) -> tuple[str, ...]:
     return tuple(sorted(paths.difference(CRLF_IDENTITY_PATHS), key=str.encode))
 
 
-def _identity_snapshot(root: Path) -> dict[str, str]:
+def _identity_snapshot(root: Path, *, include_golden_manifest: bool) -> dict[str, str]:
     from mdcp.common.digests import sha256_hex
     from mdcp.contracts.release import serving_inventory_digest, serving_inventory_from_root
     from mdcp.contracts.serving_identity_v2 import V2_SERVING_PATHS, build_v2_serving_inventory
@@ -1364,7 +1364,6 @@ def _identity_snapshot(root: Path) -> dict[str, str]:
         formal_worker_inventory_sha256,
         search_source_inventory_sha256,
     )
-    from mdcp.temporal.golden_vectors import verify_golden_vector_manifest
     from mdcp.temporal.search_identity import build_search_source_inventory
     from mdcp.workload.reviewer_fixtures import verify_reviewer_fixtures
 
@@ -1376,14 +1375,11 @@ def _identity_snapshot(root: Path) -> dict[str, str]:
         for logical_path in FORMAL_WORKER_SOURCE_PATHS
     )
     reviewer = verify_reviewer_fixtures(root / "tests/fixtures/artifacts")
-    return {
+    snapshot = {
         "v1": serving_inventory_digest(serving_inventory_from_root(root)),
         "v2": build_v2_serving_inventory(root, V2_SERVING_PATHS).inventory_sha256,
         "search_source": search_source_inventory_sha256(build_search_source_inventory(root)),
         "formal_worker": formal_worker_inventory_sha256(worker_entries),
-        "golden_manifest": verify_golden_vector_manifest(
-            root / "tests/fixtures/temporal/adapter-golden-vectors.json"
-        ).manifest_sha256,
         "wave0_report": sha256_hex(
             (root / "evidence/public/feasibility/wave0-report.json").read_bytes()
         ),
@@ -1393,6 +1389,13 @@ def _identity_snapshot(root: Path) -> dict[str, str]:
         "stable_descriptor": reviewer.descriptor_digests["stable"],
         "candidate_descriptor": reviewer.descriptor_digests["candidate"],
     }
+    if include_golden_manifest:
+        from mdcp.temporal.golden_vectors import verify_golden_vector_manifest
+
+        snapshot["golden_manifest"] = verify_golden_vector_manifest(
+            root / "tests/fixtures/temporal/adapter-golden-vectors.json"
+        ).manifest_sha256
+    return snapshot
 
 
 def test_repository_mixed_eol_profile_survives_all_autocrlf_modes() -> None:
@@ -1478,8 +1481,23 @@ def test_repository_mixed_eol_profile_survives_all_autocrlf_modes() -> None:
                     "utf-8", errors="strict"
                 )
                 assert attributes == f"{logical_path}: text: unset"
-            snapshot = _identity_snapshot(checkout)
-            assert snapshot == FROZEN_IDENTITY_SNAPSHOT
+            expected_snapshot = dict(FROZEN_IDENTITY_SNAPSHOT)
+            if os.name == "nt":
+                snapshot = _identity_snapshot(checkout, include_golden_manifest=True)
+            else:
+                from mdcp.temporal.golden_vectors import (
+                    GoldenVectorManifestError,
+                    verify_golden_vector_manifest,
+                )
+
+                with pytest.raises(GoldenVectorManifestError) as error:
+                    verify_golden_vector_manifest(
+                        checkout / "tests/fixtures/temporal/adapter-golden-vectors.json"
+                    )
+                assert error.value.reason_code == "GOLDEN_VECTOR_MANIFEST_INVALID"
+                expected_snapshot.pop("golden_manifest")
+                snapshot = _identity_snapshot(checkout, include_golden_manifest=False)
+            assert snapshot == expected_snapshot
             observed_profiles.append(
                 tuple((checkout / path).read_bytes() for path in (*CRLF_IDENTITY_PATHS, *lf_paths))
             )
