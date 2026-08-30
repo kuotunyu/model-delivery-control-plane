@@ -31,6 +31,58 @@ PUBLIC_DOCUMENTS = (
 )
 
 
+def _visible_markdown_lines(markdown: str) -> tuple[str, ...]:
+    visible: list[str] = []
+    fence_marker: str | None = None
+    in_comment = False
+    for line in markdown.splitlines():
+        if fence_marker is not None:
+            fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+            if (
+                fence is not None
+                and fence.group(1)[0] == fence_marker[0]
+                and len(fence.group(1)) >= len(fence_marker)
+                and fence.group(2).strip() == ""
+            ):
+                fence_marker = None
+            continue
+
+        parts: list[str] = []
+        remaining = line
+        while remaining:
+            if in_comment:
+                end = remaining.find("-->")
+                if end < 0:
+                    remaining = ""
+                    break
+                remaining = remaining[end + 3 :]
+                in_comment = False
+            else:
+                start = remaining.find("<!--")
+                if start < 0:
+                    parts.append(remaining)
+                    remaining = ""
+                else:
+                    parts.append(remaining[:start])
+                    remaining = remaining[start + 4 :]
+                    in_comment = True
+        fragment = "".join(parts)
+        assert not re.match(
+            r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])[^>]*>|"
+            r"^ {0,3}<\?|^ {0,3}<![A-Z]|^ {0,3}<!\[CDATA\[",
+            fragment,
+            re.IGNORECASE,
+        ), "raw HTML block starter is not allowed on the public surface"
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,}).*$", fragment)
+        if fence is not None:
+            fence_marker = fence.group(1)
+            continue
+        visible.append(fragment)
+    assert fence_marker is None, "unterminated Markdown fence"
+    assert not in_comment, "unterminated HTML comment"
+    return tuple(visible)
+
+
 def _load_verifier():
     assert VERIFIER_PATH.is_file(), "public release verifier is missing"
     spec = importlib.util.spec_from_file_location("mdcp_public_release_verifier", VERIFIER_PATH)
@@ -587,22 +639,17 @@ def test_readme_heading_order_and_reviewer_setup_are_stable() -> None:
     assert "uv run --no-sync python scripts/verify-public-release.py" in quickstart
 
 
-def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims() -> None:
-    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+def _assert_readme_role_evidence_contract(readme: str) -> None:
+    lines = _visible_markdown_lines(readme)
     heading = "## 對應 ML／AI／CV／LLM 職務能力"
-    h2_matches = list(re.finditer(r"^## [^\n]+$", readme, re.MULTILINE))
-    h2_headings = [match.group(0) for match in h2_matches]
-    role_heading_indexes = [
-        index for index, candidate in enumerate(h2_headings) if candidate == heading
-    ]
-
-    assert len(role_heading_indexes) == 1
-    role_heading_index = role_heading_indexes[0]
+    h2_indexes = [index for index, line in enumerate(lines) if line.startswith("## ")]
+    h2_headings = [lines[index] for index in h2_indexes]
+    assert h2_headings.count(heading) == 1
+    role_heading_index = h2_headings.index(heading)
+    assert 0 < role_heading_index < len(h2_headings) - 1
     assert h2_headings[role_heading_index - 1] == "## 目前完成度"
     assert h2_headings[role_heading_index + 1] == "## 實際 implemented verification path"
-    section = readme[
-        h2_matches[role_heading_index].end() : h2_matches[role_heading_index + 1].start()
-    ]
+    section = lines[h2_indexes[role_heading_index] : h2_indexes[role_heading_index + 1]]
     expected_rows = (
         (
             "| ML Engineer | [workload contract](src/mdcp/contracts/workload.py)、"
@@ -630,11 +677,18 @@ def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims(
             "| control/router/canary/rollback/recovery 仍是 Designed only |"
         ),
     )
-    assert [line for line in section.splitlines() if line.startswith("| ")] == [
+    assert section == (
+        heading,
+        "",
+        "以下對照的是這個 repository 可直接驗證的 engineering evidence；CV／LLM 欄位表示",
+        "delivery-control patterns 的可轉用性，不是已完成對應 workload。",
+        "",
         "| 目標職務／能力 | 可直接檢查的 evidence | 誠實邊界 |",
+        "|---|---|---|",
         *expected_rows,
-    ]
-    link_targets = re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", section)
+        "",
+    )
+    link_targets = re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", "\n".join(section))
     assert link_targets == [
         "src/mdcp/contracts/workload.py",
         "src/mdcp/contracts/serving_identity_v2.py",
@@ -649,6 +703,49 @@ def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims(
         "src/mdcp/temporal/runtime_guards.py",
     ]
     assert len(set(link_targets)) == 10
+
+
+def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims() -> None:
+    _assert_readme_role_evidence_contract(
+        (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    )
+
+
+def test_role_evidence_contract_rejects_non_rendered_or_structurally_changed_sections() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    heading = "## 對應 ML／AI／CV／LLM 職務能力"
+    role_end = "## 實際 implemented verification path"
+    role_table_end = (
+        "| MLOps / reliability / security | "
+        "[dedicated formal worker](src/mdcp/temporal/formal_worker.py)、"
+        "[static firewall](src/mdcp/temporal/firewall.py)、"
+        "[runtime guards](src/mdcp/temporal/runtime_guards.py) "
+        "| control/router/canary/rollback/recovery 仍是 Designed only |"
+    )
+    mutations = (
+        readme.replace(heading, "### 對應 ML／AI／CV／LLM 職務能力", 1),
+        readme.replace(heading, f"{heading}\n\n## Intervening heading", 1),
+        readme.replace(role_table_end, f"{role_table_end}\n|ML Engineer|duplicate...|", 1),
+        readme.replace(heading, f"```markdown\n{heading}", 1).replace(
+            role_table_end, f"{role_table_end}\n```", 1
+        ),
+        readme.replace(heading, f"<!-- ```\n{heading}", 1).replace(
+            role_table_end, f"{role_table_end}\n-->", 1
+        ),
+        readme.replace("[local readiness]", "![local readiness]", 1),
+        readme.replace(heading, f"```markdown\n{heading}", 1)
+        .replace(
+            "delivery-control patterns 的可轉用性，不是已完成對應 workload。",
+            "delivery-control patterns 的可轉用性，不是已完成對應 workload。\n```not-a-close",
+            1,
+        )
+        .replace(role_table_end, f"{role_table_end}\n```", 1),
+        readme.replace(heading, f"<pre>\n{heading}", 1).replace(role_end, f"{role_end}\n</pre>", 1),
+    )
+
+    for mutated_readme in mutations:
+        with pytest.raises(AssertionError):
+            _assert_readme_role_evidence_contract(mutated_readme)
 
 
 def test_reviewer_demo_command_and_claim_ceiling_are_documented() -> None:
