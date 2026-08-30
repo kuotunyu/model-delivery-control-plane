@@ -516,3 +516,99 @@ PUBLIC_GITHUB_PORTFOLIO_READY
 / REMOTE_RELEASED
 / PRODUCTION_READY
 ```
+
+---
+
+## First-Run Golden-Contract Corrective Addendum
+
+Portfolio CI run `33334963036` for first-push commit
+`c31337bae7a6b6a988984368821337158392c94f` is preserved. Its Linux job passed checkout, locked
+setup, lock verification, public verifier, and deterministic demo, then reported `95 passed,
+1 failed`. The sole failure was the known Windows CPython/libm golden-vector contract returning
+`GOLDEN_VECTOR_MANIFEST_INVALID` inside the mixed-EOL identity snapshot.
+
+### Corrective Task A: Encode the platform contract without excluding tests
+
+**Files:**
+
+- Modify: `tests/publication/test_public_release_surface.py`
+- Modify: this plan and its design spec
+
+**Interfaces:**
+
+- Consumes: the unchanged Windows-frozen golden-vector verifier and the exact failed Linux log.
+- Produces: unchanged Windows full-snapshot coverage plus explicit non-Windows fail-closed coverage,
+  while the workflow continues to run both complete publication modules.
+
+- [ ] **Step 1: Preserve RED evidence**
+
+Authenticate job `99320108312` from run `33334963036` and retain its exact failure stack:
+`_identity_snapshot -> verify_golden_vector_manifest -> GoldenVectorManifestError`, reason
+`GOLDEN_VECTOR_MANIFEST_INVALID`. Do not rerun or dispatch the failed commit.
+
+- [ ] **Step 2: Separate the platform-neutral snapshot from the golden call**
+
+Change the test-only helper signature to:
+
+```python
+def _identity_snapshot(root: Path, *, include_golden_manifest: bool) -> dict[str, str]:
+```
+
+Build the existing v1, v2, search-source, formal-worker, wave0, wave1, stable-descriptor, and
+candidate-descriptor values unconditionally. Add `golden_manifest` only when
+`include_golden_manifest` is true.
+
+- [ ] **Step 3: Assert both platform outcomes inside every EOL checkout**
+
+Use this exact branch in the existing three-mode loop:
+
+```python
+expected_snapshot = dict(FROZEN_IDENTITY_SNAPSHOT)
+if os.name == "nt":
+    snapshot = _identity_snapshot(checkout, include_golden_manifest=True)
+else:
+    from mdcp.temporal.golden_vectors import (
+        GoldenVectorManifestError,
+        verify_golden_vector_manifest,
+    )
+
+    with pytest.raises(GoldenVectorManifestError) as error:
+        verify_golden_vector_manifest(
+            checkout / "tests/fixtures/temporal/adapter-golden-vectors.json"
+        )
+    assert error.value.reason_code == "GOLDEN_VECTOR_MANIFEST_INVALID"
+    expected_snapshot.pop("golden_manifest")
+    snapshot = _identity_snapshot(checkout, include_golden_manifest=False)
+assert snapshot == expected_snapshot
+```
+
+Initialize a fresh `expected_snapshot` inside each loop iteration. Keep the existing profile and
+snapshot equality assertions. Do not change the production verifier, fixture, frozen digest,
+workflow selector, or expected Linux command.
+
+- [ ] **Step 4: Verify locally and independently review**
+
+Run the exact mixed-EOL test, both complete publication modules, verifier, demo, fast path, focused
+gate, static/format checks, complete suite, frozen anchors, path audit, and independent review with
+Critical `0` and Important `0`. The local Windows run must continue to include and pass the golden
+manifest value.
+
+### Corrective Task B: Use only the remaining authorized push
+
+- [ ] **Step 1: Record the first failed run truthfully**
+
+Update the three recruiter documents and their exact tests to retain run `33334963036` as failed
+bounded-smoke history and state that the corrective is pending. Regenerate canonical readiness.
+
+- [ ] **Step 2: Non-force push exactly once**
+
+Require remote `main` to equal `c31337bae7a6b6a988984368821337158392c94f`, then use the second and
+final authorized non-force push. Poll only the automatically created exact run.
+
+- [ ] **Step 3: Authenticate without fabricating checked-in success**
+
+Require Windows `verify` and `Linux read-only smoke (not portability proof)` both `success`, remote
+and local HEAD equality, unchanged negative release state, frozen anchors, and a clean tracked tree.
+Record the successful second run in ignored custody. Do not create a third commit or push to write
+that run URL into public files; doing so requires new authorization because the two-push budget is
+exhausted.

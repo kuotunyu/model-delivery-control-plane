@@ -188,3 +188,31 @@ PUBLIC_GITHUB_PORTFOLIO_READY
 / REMOTE_RELEASED
 / PRODUCTION_READY
 ```
+
+## 9. Observed first-run golden-contract corrective
+
+The first pushed candidate `c31337bae7a6b6a988984368821337158392c94f` created Portfolio CI run
+`33334963036`. Its Linux job completed `failure` after `95 passed, 1 failed`; checkout, locked setup,
+lock verification, public verifier, and deterministic demo all passed. The single failing test was
+`test_repository_mixed_eol_profile_survives_all_autocrlf_modes`, whose `_identity_snapshot()` called
+the Windows-frozen temporal golden-vector verifier on Ubuntu and received the documented fixed
+reason `GOLDEN_VECTOR_MANIFEST_INVALID`.
+
+This is the sixth inherited platform contract already identified by the Windows-native CI design,
+not public-surface byte drift and not permission, setup, verifier, or demo failure. The corrective
+keeps both complete publication modules in the Linux command. It does not use deselection, skip,
+xfail, `pytest -k`, `--ignore`, tolerance changes, or production-code changes.
+
+The mixed-EOL test instead makes the platform contract explicit:
+
+- Windows continues to verify the complete frozen identity snapshot, including the golden manifest;
+- non-Windows must receive `GOLDEN_VECTOR_MANIFEST_INVALID` from the unchanged golden verifier;
+- non-Windows still recomputes and compares every other frozen identity and every LF/CRLF/binary
+  materialization across `core.autocrlf=true`, `false`, and `input`;
+- all three profiles must remain byte-identical and identity-identical within that platform branch.
+
+Thus the Linux job proves fail-closed handling of the known Windows-only golden vector rather than
+pretending it is portable. The failed run remains preserved. Because the approved budget permits
+only two pushes, the second push is reserved for this corrective. If it succeeds, its exact run is
+external closure evidence but cannot be written into a third commit without new authorization; no
+self-referential or predicted run identifier may be fabricated.
