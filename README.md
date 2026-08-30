@@ -54,10 +54,13 @@ flowchart LR
 
 | Surface | Status | 可主張範圍 |
 |---|---|---|
-| Portfolio CI | Private push executed; Ubuntu run recorded failure | failure 不是 success、release 或 portability evidence；Windows corrective awaits verification |
+| Portfolio CI | Private；兩筆 failed staging runs 已保留 | replacement mixed-EOL corrective 尚未通過 remote CI |
 | Release CI | Manual design surface only | 未 dispatch；不是 release evidence |
 
-Private push executed; Ubuntu run recorded failure; Windows corrective awaits verification.
+repository remains Private; portfolio_ci_passed: false
+Ubuntu failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512
+Windows mixed-EOL failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641
+The replacement mixed-EOL corrective has not passed remote CI yet.
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。
@@ -99,7 +102,7 @@ pwsh ./scripts/reviewer-fast-path.ps1
 - Historical public index：[evidence-index.json](evidence/public/v02/search/evidence-index.json)
 - Evidence taxonomy 與可主張範圍：[Release evidence guide](docs/reviewer/release-evidence.md)
 - Security assumptions 與攻擊面：[Threat model](docs/threat-model.md)
-- Portfolio CI（Private push executed；Ubuntu run recorded failure；Windows corrective awaits verification）：[portfolio-ci.yml](.github/workflows/portfolio-ci.yml)
+- Portfolio CI（repository remains Private；兩筆 failed runs 已保留；replacement corrective 尚未通過）：[portfolio-ci.yml](.github/workflows/portfolio-ci.yml)
 - Release CI（manual design surface，未 dispatch）：[release-ci.yml](.github/workflows/release-ci.yml)
 
 Technical formal closure 是 immutable historical commit
@@ -123,10 +126,10 @@ PowerShell 7 與 GitHub Actions。historical technical closure 的完整測量�
 
 ## Claim ceiling
 
-- Private push 已執行；Ubuntu run 已記錄 failure。failure 不是 success、release 或 portability evidence；Windows corrective awaits verification。
+- repository remains Private; portfolio_ci_passed: false。Ubuntu 與 Windows mixed-EOL failed runs 均已保留；replacement corrective 尚未通過 remote CI。
 - WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 - 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。
-- Release CI 是 manual design surface，未 dispatch；未執行 remote release，也沒有 push、tag、GitHub Release 或 GHCR publication evidence。
+- Release CI 是 manual design surface，未 dispatch；未執行 remote release，也沒有 tag、GitHub Release 或 GHCR publication evidence。
 - 不宣稱 Kubernetes production readiness。
 - 不宣稱 production HA、multi-region 或 disaster recovery。
 - 沒有 real production incident evidence。

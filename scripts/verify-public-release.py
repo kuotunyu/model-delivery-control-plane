@@ -108,7 +108,7 @@ class PublicSurfaceEntry(ClosedModel):
 
 
 class TechnicalClosureVerification(ClosedModel):
-    full_suite_passed: Literal[1546]
+    full_suite_passed: Literal[1625]
     full_suite_skipped: Literal[7]
     review_critical: Literal[0]
     review_important: Literal[0]
@@ -129,9 +129,9 @@ class ClaimExecution(ClosedModel):
 
 
 class LocalReleaseReadiness(ClosedModel):
-    schema_version: Literal["mdcp.local-release-readiness.v1.1"]
+    schema_version: Literal["mdcp.local-release-readiness.v1.2"]
     canonicalization_version: Literal["RFC8785"]
-    evidence_class: Literal["github_private_staging_corrective_readiness"]
+    evidence_class: Literal["github_private_staging_eol_corrective_readiness"]
     publication_status: Literal["public"]
     formal_closure_commit: Literal["b1bb0d80cd40e6f39372c0a45892500cc9530712"]
     formal_closure_parent: Literal["407f68b63c06a17ef54d5ec17722ef1f801b1689"]
@@ -160,7 +160,7 @@ class LocalReleaseReadiness(ClosedModel):
     h2_loaded_rows: Literal[0]
     technical_closure_verification: TechnicalClosureVerification
     reviewer_entrypoint: Literal["scripts/reviewer-fast-path.ps1"]
-    claim_ceiling: Literal["mdcp.private-staging-corrective-claim-ceiling.v1"]
+    claim_ceiling: Literal["mdcp.private-staging-eol-corrective-claim-ceiling.v1"]
     claim_execution: ClaimExecution
 
     @model_validator(mode="after")

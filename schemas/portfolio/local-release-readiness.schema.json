@@ -99,7 +99,7 @@
       "additionalProperties": false,
       "properties": {
         "full_suite_passed": {
-          "const": 1546,
+          "const": 1625,
           "title": "Full Suite Passed",
           "type": "integer"
         },
@@ -138,7 +138,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "mdcp.local-release-readiness.v1.1",
+      "const": "mdcp.local-release-readiness.v1.2",
       "title": "Schema Version",
       "type": "string"
     },
@@ -148,7 +148,7 @@
       "type": "string"
     },
     "evidence_class": {
-      "const": "github_private_staging_corrective_readiness",
+      "const": "github_private_staging_eol_corrective_readiness",
       "title": "Evidence Class",
       "type": "string"
     },
@@ -253,7 +253,7 @@
       "type": "string"
     },
     "claim_ceiling": {
-      "const": "mdcp.private-staging-corrective-claim-ceiling.v1",
+      "const": "mdcp.private-staging-eol-corrective-claim-ceiling.v1",
       "title": "Claim Ceiling",
       "type": "string"
     },

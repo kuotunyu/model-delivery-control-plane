@@ -28,7 +28,13 @@ Deterministic fixtures、golden vectors 與 contract tests 可重現 validator�
 ### 4. Private failed-staging Portfolio CI evidence
 
 [portfolio-ci.yml](../../.github/workflows/portfolio-ci.yml) 的 Private push 已執行，Ubuntu run 已記錄
-failure。failure 不是 success、release 或 portability evidence；Windows corrective awaits verification。
+failure，Windows-native run 也因 mixed-EOL materialization failure 結束。Corrective base 的 local gate
+是 `1625 passed, 7 skipped`，不會把 remote failure 改寫成 success。
+
+repository remains Private; portfolio_ci_passed: false
+Ubuntu failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512
+Windows mixed-EOL failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641
+The replacement mixed-EOL corrective has not passed remote CI yet.
 
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
@@ -45,8 +51,8 @@ Not executed remotely，因此不能被引用為 completed GitHub/GHCR release e
 
 ### 6. 不存在的 evidence
 
-未授權或未執行的 action 不建立假證據：沒有 remote release、push、tag、GitHub Release、GHCR
-publication、production deployment、real incident、H2 execution、CV workload 或 LLM workload
+未授權或未執行的 action 不建立假證據：沒有 remote release、tag、GitHub Release 或 GHCR
+publication evidence，也沒有 production deployment、real incident、H2 execution、CV workload 或 LLM workload
 result。H2 維持 `SEALED_NOT_LOADED`，loaded rows `0`。
 
 ## Machine-verifiable bindings

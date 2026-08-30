@@ -3,7 +3,10 @@
 這條 reviewer path 讓你先在低摩擦、CPU-only 的條件下驗證 repository 的核心 claims，再決定是否
 進一步閱讀完整 architecture 與 test suite。
 
-Private push executed; Ubuntu run recorded failure; failure is not success, release, or portability evidence; Windows corrective awaits verification.
+repository remains Private; portfolio_ci_passed: false
+Ubuntu failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512
+Windows mixed-EOL failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641
+The replacement mixed-EOL corrective has not passed remote CI yet.
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false；因此兩者都不表示

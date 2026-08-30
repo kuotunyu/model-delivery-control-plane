@@ -1,4 +1,21 @@
+* text=auto eol=lf
 tests/fixtures/supply-chain/** -text
+docs/superpowers/plans/2026-08-23-mdcp-wave-0-foundation-feasibility.md text eol=crlf
+docs/superpowers/plans/2026-08-23-mdcp-wave-1-workload-identity.md text eol=crlf
+docs/superpowers/plans/2026-08-23-mdcp-wave-2-validator-supply-chain.md text eol=crlf
+docs/superpowers/plans/2026-08-23-mdcp-wave-3-control-routing-shadow.md text eol=crlf
+docs/superpowers/plans/2026-08-23-mdcp-wave-4-windows-policy.md text eol=crlf
+docs/superpowers/plans/2026-08-23-mdcp-wave-5-canary-recovery.md text eol=crlf
+docs/superpowers/plans/2026-08-23-mdcp-wave-6-observability-reviewer.md text eol=crlf
+docs/superpowers/plans/2026-08-23-mdcp-wave-7-release-closure.md text eol=crlf
+docs/superpowers/plans/2026-08-23-model-delivery-control-plane-plan-index.md text eol=crlf
+docs/superpowers/specs/2026-08-23-model-delivery-control-plane-design.md text eol=crlf
+evidence/public/feasibility/wave0-report.json text eol=crlf
+src/mdcp/temporal/firewall.py text eol=crlf
+src/mdcp/temporal/runner.py text eol=crlf
+src/mdcp/temporal/search_identity.py text eol=crlf
+tests/fixtures/artifacts/candidate/artifact-descriptor.json text eol=crlf
+tests/fixtures/artifacts/stable/artifact-descriptor.json text eol=crlf
 .github/workflows/portfolio-ci.yml text eol=lf
 /LICENSE text eol=lf
 /README.md text eol=lf

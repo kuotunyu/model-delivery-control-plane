@@ -7,6 +7,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,35 @@ PUBLIC_DOCUMENTS = (
     "docs/reviewer/quickstart.md",
     "docs/reviewer/release-evidence.md",
 )
+CRLF_IDENTITY_PATHS = (
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-0-foundation-feasibility.md",
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-1-workload-identity.md",
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-2-validator-supply-chain.md",
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-3-control-routing-shadow.md",
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-4-windows-policy.md",
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-5-canary-recovery.md",
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-6-observability-reviewer.md",
+    "docs/superpowers/plans/2026-08-23-mdcp-wave-7-release-closure.md",
+    "docs/superpowers/plans/2026-08-23-model-delivery-control-plane-plan-index.md",
+    "docs/superpowers/specs/2026-08-23-model-delivery-control-plane-design.md",
+    "evidence/public/feasibility/wave0-report.json",
+    "src/mdcp/temporal/firewall.py",
+    "src/mdcp/temporal/runner.py",
+    "src/mdcp/temporal/search_identity.py",
+    "tests/fixtures/artifacts/candidate/artifact-descriptor.json",
+    "tests/fixtures/artifacts/stable/artifact-descriptor.json",
+)
+FROZEN_IDENTITY_SNAPSHOT = {
+    "v1": "d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209",
+    "v2": "198610d3cfcb48bf713b414a1d11073c2ac2e438f4a4dd99fc8dd907789152ea",
+    "search_source": "cf2880259d9e82eae2291bb51fb041be0bf5f24a77f750565e8fe0227c1b539b",
+    "formal_worker": "ebac7f1b61024e532f6cba9c3eb4cded12ad1972fb5a5a660a40c9bfd16a43d3",
+    "golden_manifest": "ddeb4c7d52223589828b927ce744f53c5ca6981ce303b853230976fb88dc9eae",
+    "wave0_report": "900f038e34b92cdf14e32042ea8aa44910c4c35758ec2335300f64ba4f621194",
+    "wave1_freeze": "f64004507703c342a0e116b6867185cdabee1a16870ed52f4d3ca16e0719dad7",
+    "stable_descriptor": "92dac42877c500ad60bb982768bb5477077c5755b165ddbbe8a97af3b20e0522",
+    "candidate_descriptor": "f5cd7a452deae4d2b90c90b875f65f7b538ee1593aed27a4358cadb6ec53b80b",
+}
 ROLE_EVIDENCE_NEXT_HEADING = "## 實際 implemented verification path"
 APPROVED_ROLE_EVIDENCE_PREFIX_SHA256 = (
     "73bfde57f04c6ff87cd44e09ac6bb95f861cc8b1dc800fd275688d69ef46a71a"
@@ -165,10 +196,10 @@ def test_reviewer_demo_has_lf_attributes_in_git() -> None:
         "nested/scripts/reviewer-demo.py",
     ).decode("utf-8", errors="strict")
     assert lookalikes.splitlines() == [
-        "scripts/reviewer-demo-sibling.py: text: unspecified",
-        "scripts/reviewer-demo-sibling.py: eol: unspecified",
-        "nested/scripts/reviewer-demo.py: text: unspecified",
-        "nested/scripts/reviewer-demo.py: eol: unspecified",
+        "scripts/reviewer-demo-sibling.py: text: auto",
+        "scripts/reviewer-demo-sibling.py: eol: lf",
+        "nested/scripts/reviewer-demo.py: text: auto",
+        "nested/scripts/reviewer-demo.py: eol: lf",
     ]
 
 
@@ -993,18 +1024,60 @@ def test_readiness_evidence_is_canonical_public_and_binds_surface() -> None:
         REPOSITORY_ROOT
     )
     assert public_evidence_violations(readiness.model_dump(mode="json")) == ()
-    assert readiness.schema_version == "mdcp.local-release-readiness.v1.1"
-    assert readiness.evidence_class == "github_private_staging_corrective_readiness"
-    assert readiness.portfolio_ci_commit == "1b44a3e001d6522b6409bae24e07740bf053186d"
+    assert readiness.schema_version == "mdcp.local-release-readiness.v1.2"
+    assert readiness.evidence_class == "github_private_staging_eol_corrective_readiness"
+    assert readiness.portfolio_ci_commit == "13b922849f89691ab2d98d89d8750bee40309f32"
     assert readiness.portfolio_ci_run_url == (
-        "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512"
+        "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641"
     )
     assert readiness.portfolio_ci_conclusion == "failure"
+    assert readiness.claim_ceiling == "mdcp.private-staging-eol-corrective-claim-ceiling.v1"
+    assert readiness.technical_closure_verification.full_suite_passed == 1625
+    assert readiness.technical_closure_verification.full_suite_skipped == 7
+    assert readiness.technical_closure_verification.review_critical == 0
+    assert readiness.technical_closure_verification.review_important == 0
+    assert readiness.technical_closure_verification.review_minor == 0
     assert readiness.claim_execution.remote_release_executed is False
     assert readiness.claim_execution.push_executed is True
     assert readiness.claim_execution.portfolio_ci_executed is True
     assert readiness.claim_execution.portfolio_ci_passed is False
+    assert readiness.claim_execution.production_deployed is False
+    assert readiness.claim_execution.kubernetes_production_ready is False
     assert readiness.claim_execution.h2_executed is False
+    assert readiness.claim_execution.cv_workload_implemented is False
+    assert readiness.claim_execution.llm_workload_implemented is False
+
+
+def test_private_staging_docs_preserve_both_failed_run_anchors() -> None:
+    ubuntu = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512"
+    windows = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641"
+    for logical_path in (
+        "README.md",
+        "docs/reviewer/quickstart.md",
+        "docs/reviewer/release-evidence.md",
+    ):
+        text = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+        assert ubuntu in text
+        assert windows in text
+        assert "repository remains Private" in text
+        assert "portfolio_ci_passed: false" in text
+        assert "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE" in text
+
+
+def test_public_claim_ceiling_distinguishes_private_ci_push_from_publication() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    guide = (REPOSITORY_ROOT / "docs/reviewer/release-evidence.md").read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+    normalized_guide = " ".join(guide.split())
+
+    assert "Private push 已執行" in normalized_guide
+    assert "未執行 remote release" in normalized_readme
+    assert (
+        "沒有 remote release、tag、GitHub Release 或 GHCR publication evidence" in normalized_guide
+    )
+    for document in (normalized_readme, normalized_guide):
+        assert "沒有 push" not in document
+        assert "remote release、push" not in document
 
 
 def test_current_repository_public_release_slice_passes() -> None:
@@ -1090,6 +1163,11 @@ def test_public_surface_rejects_wrong_file_digest(
         "false_portfolio_ci_executed",
         "true_portfolio_ci_passed",
         "affirmative_release",
+        "affirmative_production",
+        "affirmative_kubernetes",
+        "affirmative_h2",
+        "affirmative_cv",
+        "affirmative_llm",
         "wrong_h2_state",
     ),
 )
@@ -1126,6 +1204,18 @@ def test_readiness_mutations_fail_with_the_evidence_reason_code(
         document["claim_execution"]["portfolio_ci_passed"] = True
     elif mutation == "affirmative_release":
         document["claim_execution"]["remote_release_executed"] = True
+    elif mutation == "affirmative_production":
+        document["claim_execution"]["production_deployed"] = True
+    elif mutation == "affirmative_kubernetes":
+        document["claim_execution"]["kubernetes_production_ready"] = True
+    elif mutation == "affirmative_h2":
+        document["claim_execution"]["h2_executed"] = True
+        document["h2_status"] = "LOADED"
+        document["h2_loaded_rows"] = 1
+    elif mutation == "affirmative_cv":
+        document["claim_execution"]["cv_workload_implemented"] = True
+    elif mutation == "affirmative_llm":
+        document["claim_execution"]["llm_workload_implemented"] = True
     elif mutation == "wrong_h2_state":
         document["h2_status"] = "LOADED"
         document["h2_loaded_rows"] = 1
@@ -1185,65 +1275,174 @@ def test_broken_or_escaping_relative_link_uses_the_fixed_link_reason_code(
     assert error.value.reason_code == "PUBLIC_RELEASE_SLICE_LINK_INVALID"
 
 
-def test_public_surface_bytes_survive_a_fresh_autocrlf_checkout(tmp_path: Path) -> None:
-    verifier = _load_verifier()
-    source_repository = tmp_path / "source"
-    source_repository.mkdir()
-    _run_git(source_repository, "init", "--quiet")
+def _lf_bytes(raw: bytes) -> bytes:
+    normalized = raw.replace(b"\r\n", b"\n")
+    assert b"\r" not in normalized
+    return normalized
 
-    tracked_paths = (".gitattributes", *verifier.PUBLIC_SURFACE_PATHS)
-    for logical_path in tracked_paths:
-        source = REPOSITORY_ROOT / logical_path
-        target = source_repository / logical_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read_bytes())
-    _run_git(source_repository, "add", "--", *tracked_paths)
-    _run_git(
-        source_repository,
-        "-c",
-        "user.name=Public Release Test",
-        "-c",
-        "user.email=public-release@example.invalid",
-        "commit",
-        "--quiet",
-        "-m",
-        "public surface fixture",
+
+def _crlf_bytes(raw: bytes) -> bytes:
+    return _lf_bytes(raw).replace(b"\n", b"\r\n")
+
+
+def _remove_readonly(operation: Callable[[str], object], path: str, _error: BaseException) -> None:
+    os.chmod(path, 0o700)
+    operation(path)
+
+
+def _identity_lf_paths(verifier: object) -> tuple[str, ...]:
+    from mdcp.contracts.release import SERVING_PATHS
+    from mdcp.contracts.serving_identity_v2 import V2_SERVING_PATHS
+    from mdcp.temporal.formal_worker_protocol import (
+        FORMAL_WORKER_SOURCE_PATHS,
+        SEARCH_SOURCE_PATHS,
     )
-    nested_attributes = _run_git(
-        source_repository,
-        "check-attr",
-        "text",
-        "eol",
-        "--",
-        "nested/LICENSE",
-        "nested/README.md",
-    ).decode("utf-8")
-    assert nested_attributes.splitlines() == [
-        "nested/LICENSE: text: unspecified",
-        "nested/LICENSE: eol: unspecified",
-        "nested/README.md: text: unspecified",
-        "nested/README.md: eol: unspecified",
-    ]
 
-    checkout = tmp_path / "autocrlf-checkout"
-    subprocess.run(
-        (
-            "git",
-            "-c",
-            "core.autocrlf=true",
-            "clone",
-            "--quiet",
-            "--no-hardlinks",
-            str(source_repository),
-            str(checkout),
+    paths = {
+        ".gitattributes",
+        "evidence/public/wave1/workload-identity-report.json",
+        "tests/fixtures/workload/freeze-manifest.json",
+        *SERVING_PATHS,
+        *V2_SERVING_PATHS,
+        *SEARCH_SOURCE_PATHS,
+        *FORMAL_WORKER_SOURCE_PATHS,
+        *verifier.PUBLIC_SURFACE_PATHS,
+    }
+    return tuple(sorted(paths.difference(CRLF_IDENTITY_PATHS), key=str.encode))
+
+
+def _identity_snapshot(root: Path) -> dict[str, str]:
+    from mdcp.common.digests import sha256_hex
+    from mdcp.contracts.release import serving_inventory_digest, serving_inventory_from_root
+    from mdcp.contracts.serving_identity_v2 import V2_SERVING_PATHS, build_v2_serving_inventory
+    from mdcp.temporal.formal_worker_protocol import (
+        FORMAL_WORKER_SOURCE_PATHS,
+        FormalWorkerSourceEntry,
+        formal_worker_inventory_sha256,
+        search_source_inventory_sha256,
+    )
+    from mdcp.temporal.golden_vectors import verify_golden_vector_manifest
+    from mdcp.temporal.search_identity import build_search_source_inventory
+    from mdcp.workload.reviewer_fixtures import verify_reviewer_fixtures
+
+    worker_entries = tuple(
+        FormalWorkerSourceEntry(
+            logical_path=logical_path,
+            sha256=hashlib.sha256((root / logical_path).read_bytes()).hexdigest(),
+        )
+        for logical_path in FORMAL_WORKER_SOURCE_PATHS
+    )
+    reviewer = verify_reviewer_fixtures(root / "tests/fixtures/artifacts")
+    return {
+        "v1": serving_inventory_digest(serving_inventory_from_root(root)),
+        "v2": build_v2_serving_inventory(root, V2_SERVING_PATHS).inventory_sha256,
+        "search_source": search_source_inventory_sha256(build_search_source_inventory(root)),
+        "formal_worker": formal_worker_inventory_sha256(worker_entries),
+        "golden_manifest": verify_golden_vector_manifest(
+            root / "tests/fixtures/temporal/adapter-golden-vectors.json"
+        ).manifest_sha256,
+        "wave0_report": sha256_hex(
+            (root / "evidence/public/feasibility/wave0-report.json").read_bytes()
         ),
-        check=True,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        timeout=20,
-    )
+        "wave1_freeze": sha256_hex(
+            (root / "tests/fixtures/workload/freeze-manifest.json").read_bytes()
+        ),
+        "stable_descriptor": reviewer.descriptor_digests["stable"],
+        "candidate_descriptor": reviewer.descriptor_digests["candidate"],
+    }
 
-    for logical_path in verifier.PUBLIC_SURFACE_PATHS:
-        expected = (source_repository / logical_path).read_bytes()
-        assert b"\r\n" not in expected
-        assert (checkout / logical_path).read_bytes() == expected
+
+def test_repository_mixed_eol_profile_survives_all_autocrlf_modes() -> None:
+    verifier = _load_verifier()
+    temporary_root = Path(tempfile.mkdtemp(prefix="mdcp-eol-"))
+    try:
+        source_repository = temporary_root / "source"
+        source_repository.mkdir()
+        _run_git(source_repository, "init", "--quiet")
+        tracked_raw = _run_git(REPOSITORY_ROOT, "ls-files", "-z")
+        tracked_paths = tuple(
+            item.decode("utf-8", errors="strict") for item in tracked_raw.split(b"\0") if item
+        )
+        for logical_path in tracked_paths:
+            target = source_repository / logical_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPOSITORY_ROOT / logical_path, target)
+        _run_git(source_repository, "add", "--all")
+        _run_git(
+            source_repository,
+            "-c",
+            "user.name=Mixed EOL Test",
+            "-c",
+            "user.email=mixed-eol@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "mixed EOL fixture",
+        )
+
+        binary_paths = tuple(
+            path for path in tracked_paths if path.startswith("tests/fixtures/supply-chain/")
+        )
+        lf_paths = _identity_lf_paths(verifier)
+        observed_profiles = []
+        observed_snapshots = []
+        for mode in ("true", "false", "input"):
+            checkout = temporary_root / f"checkout-{mode}"
+            subprocess.run(
+                (
+                    "git",
+                    "-c",
+                    f"core.autocrlf={mode}",
+                    "clone",
+                    "--quiet",
+                    "--no-hardlinks",
+                    str(source_repository),
+                    str(checkout),
+                ),
+                check=True,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=30,
+            )
+            for logical_path in CRLF_IDENTITY_PATHS:
+                assert (checkout / logical_path).read_bytes() == _crlf_bytes(
+                    (REPOSITORY_ROOT / logical_path).read_bytes()
+                )
+                attributes = _run_git(
+                    checkout, "check-attr", "text", "eol", "--", logical_path
+                ).decode("utf-8", errors="strict")
+                assert attributes.splitlines() == [
+                    f"{logical_path}: text: set",
+                    f"{logical_path}: eol: crlf",
+                ]
+            for logical_path in lf_paths:
+                assert (checkout / logical_path).read_bytes() == _lf_bytes(
+                    (REPOSITORY_ROOT / logical_path).read_bytes()
+                )
+            for logical_path in verifier.PUBLIC_SURFACE_PATHS:
+                attributes = _run_git(
+                    checkout, "check-attr", "text", "eol", "--", logical_path
+                ).decode("utf-8", errors="strict")
+                assert attributes.splitlines() == [
+                    f"{logical_path}: text: set",
+                    f"{logical_path}: eol: lf",
+                ]
+            for logical_path in binary_paths:
+                assert (checkout / logical_path).read_bytes() == (
+                    REPOSITORY_ROOT / logical_path
+                ).read_bytes()
+                attributes = _run_git(checkout, "check-attr", "text", "--", logical_path).decode(
+                    "utf-8", errors="strict"
+                )
+                assert attributes == f"{logical_path}: text: unset"
+            snapshot = _identity_snapshot(checkout)
+            assert snapshot == FROZEN_IDENTITY_SNAPSHOT
+            observed_profiles.append(
+                tuple((checkout / path).read_bytes() for path in (*CRLF_IDENTITY_PATHS, *lf_paths))
+            )
+            observed_snapshots.append(snapshot)
+
+        assert observed_profiles[0] == observed_profiles[1] == observed_profiles[2]
+        assert observed_snapshots[0] == observed_snapshots[1] == observed_snapshots[2]
+    finally:
+        shutil.rmtree(temporary_root, onexc=_remove_readonly)
