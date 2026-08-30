@@ -19,7 +19,7 @@
           "type": "boolean"
         },
         "portfolio_ci_passed": {
-          "const": false,
+          "const": true,
           "title": "Portfolio Ci Passed",
           "type": "boolean"
         },
@@ -138,7 +138,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "mdcp.local-release-readiness.v1.2",
+      "const": "mdcp.local-release-readiness.v2",
       "title": "Schema Version",
       "type": "string"
     },
@@ -148,7 +148,7 @@
       "type": "string"
     },
     "evidence_class": {
-      "const": "github_private_staging_eol_corrective_readiness",
+      "const": "github_portfolio_publication_readiness",
       "title": "Evidence Class",
       "type": "string"
     },
@@ -218,7 +218,7 @@
       "type": "string"
     },
     "portfolio_ci_conclusion": {
-      "const": "failure",
+      "const": "success",
       "title": "Portfolio Ci Conclusion",
       "type": "string"
     },
@@ -253,7 +253,7 @@
       "type": "string"
     },
     "claim_ceiling": {
-      "const": "mdcp.private-staging-eol-corrective-claim-ceiling.v1",
+      "const": "mdcp.github-portfolio-claim-ceiling.v2",
       "title": "Claim Ceiling",
       "type": "string"
     },

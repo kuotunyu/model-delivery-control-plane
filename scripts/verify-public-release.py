@@ -19,6 +19,10 @@ FORMAL_CLOSURE_PARENT = "407f68b63c06a17ef54d5ec17722ef1f801b1689"
 CORRECTION_COMMIT = "bfe517819ec2163d700519fc427dbe8bb8071258"
 SEARCH_RECEIPT_SHA256 = "5c0dc214281af3191ecfef0bd95e4d0ff99e3cc6c710d894a1f0b4a3465b7d63"
 SEARCH_INDEX_SHA256 = "2f630aa428fb539efb24904fd308f83fdf9458a46df6aa0cb7099a28ece4b205"
+PORTFOLIO_CI_COMMIT = "8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1"
+PORTFOLIO_CI_RUN_URL = (
+    "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462"
+)
 READINESS_PATH = "evidence/public/portfolio/local-release-readiness.json"
 SCHEMA_PATH = "schemas/portfolio/local-release-readiness.schema.json"
 PUBLIC_SURFACE_PATHS = (
@@ -119,7 +123,7 @@ class ClaimExecution(ClosedModel):
     remote_release_executed: Literal[False]
     push_executed: Literal[True]
     portfolio_ci_executed: Literal[True]
-    portfolio_ci_passed: Literal[False]
+    portfolio_ci_passed: Literal[True]
     tag_created: Literal[False]
     production_deployed: Literal[False]
     kubernetes_production_ready: Literal[False]
@@ -129,9 +133,9 @@ class ClaimExecution(ClosedModel):
 
 
 class LocalReleaseReadiness(ClosedModel):
-    schema_version: Literal["mdcp.local-release-readiness.v1.2"]
+    schema_version: Literal["mdcp.local-release-readiness.v2"]
     canonicalization_version: Literal["RFC8785"]
-    evidence_class: Literal["github_private_staging_eol_corrective_readiness"]
+    evidence_class: Literal["github_portfolio_publication_readiness"]
     publication_status: Literal["public"]
     formal_closure_commit: Literal["b1bb0d80cd40e6f39372c0a45892500cc9530712"]
     formal_closure_parent: Literal["407f68b63c06a17ef54d5ec17722ef1f801b1689"]
@@ -153,15 +157,24 @@ class LocalReleaseReadiness(ClosedModel):
     ]
     portfolio_ci_commit: CommitSha
     portfolio_ci_run_url: PortfolioCiRunUrl
-    portfolio_ci_conclusion: Literal["failure"]
+    portfolio_ci_conclusion: Literal["success"]
     public_surface_entries: tuple[PublicSurfaceEntry, ...]
     public_surface_inventory_sha256: Sha256
     h2_status: Literal["SEALED_NOT_LOADED"]
     h2_loaded_rows: Literal[0]
     technical_closure_verification: TechnicalClosureVerification
     reviewer_entrypoint: Literal["scripts/reviewer-fast-path.ps1"]
-    claim_ceiling: Literal["mdcp.private-staging-eol-corrective-claim-ceiling.v1"]
+    claim_ceiling: Literal["mdcp.github-portfolio-claim-ceiling.v2"]
     claim_execution: ClaimExecution
+
+    @model_validator(mode="after")
+    def exact_portfolio_ci_anchors(self) -> LocalReleaseReadiness:
+        if (
+            self.portfolio_ci_commit != PORTFOLIO_CI_COMMIT
+            or self.portfolio_ci_run_url != PORTFOLIO_CI_RUN_URL
+        ):
+            raise ValueError("PUBLIC_RELEASE_SLICE_PORTFOLIO_CI_ANCHOR_INVALID")
+        return self
 
     @model_validator(mode="after")
     def exact_public_surface(self) -> LocalReleaseReadiness:

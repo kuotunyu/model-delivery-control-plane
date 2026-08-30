@@ -25,16 +25,18 @@ reviewer entrypoint 與所有未執行 action 的 explicit `false` booleans。�
 Deterministic fixtures、golden vectors 與 contract tests 可重現 validator、identity、temporal protocol
 與 security behavior。Synthetic/local PASS 是 engineering evidence，不是 production traffic evidence。
 
-### 4. Private failed-staging Portfolio CI evidence
+### 4. Private Windows-native Portfolio CI evidence
 
 [portfolio-ci.yml](../../.github/workflows/portfolio-ci.yml) 的 Private push 已執行，Ubuntu run 已記錄
-failure，Windows-native run 也因 mixed-EOL materialization failure 結束。Corrective base 的 local gate
-是 `1625 passed, 7 skipped`，不會把 remote failure 改寫成 success。
+failure，第一個 Windows-native run 也因 mixed-EOL materialization failure 結束。後續
+repository-native EOL corrective 的 exact Windows Portfolio CI run 已完成並通過；歷史 failure 仍保留，
+不會被改寫成 success。
 
-repository remains Private; portfolio_ci_passed: false
-Ubuntu failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512
-Windows mixed-EOL failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641
-The replacement mixed-EOL corrective has not passed remote CI yet.
+repository remains Private; portfolio_ci_passed: true
+Successful mixed-EOL corrective commit: 8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1
+Successful Windows Portfolio CI run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462
+Historical Ubuntu failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512
+Historical Windows mixed-EOL failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641
 
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
@@ -62,7 +64,7 @@ result。H2 維持 `SEALED_NOT_LOADED`，loaded rows `0`。
 - [Local readiness evidence](../../evidence/public/portfolio/local-release-readiness.json)
 - [Reviewer fast path](../../scripts/reviewer-fast-path.ps1)
 - [Read-only verifier](../../scripts/verify-public-release.py)
-- [Private-failed-staging Portfolio CI corrective](../../.github/workflows/portfolio-ci.yml)
+- [Private Windows-native Portfolio CI](../../.github/workflows/portfolio-ci.yml)
 - [Manual Release CI design surface](../../.github/workflows/release-ci.yml)
 
 verifier 會要求 formal closure 是目前 publication branch 的 ancestor，但不要求 current HEAD 等於

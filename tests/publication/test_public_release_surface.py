@@ -153,6 +153,10 @@ def test_verifier_exposes_only_the_closed_public_contract() -> None:
     assert verifier.READINESS_PATH not in verifier.PUBLIC_SURFACE_PATHS
     assert verifier.FORMAL_CLOSURE_COMMIT == "b1bb0d80cd40e6f39372c0a45892500cc9530712"
     assert verifier.FORMAL_CLOSURE_PARENT == "407f68b63c06a17ef54d5ec17722ef1f801b1689"
+    assert verifier.PORTFOLIO_CI_COMMIT == "8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1"
+    assert verifier.PORTFOLIO_CI_RUN_URL == (
+        "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462"
+    )
 
 
 def test_portfolio_workflow_has_an_exact_lf_attribute() -> None:
@@ -780,7 +784,7 @@ def test_evidence_taxonomy_and_license_qualifiers_are_explicit() -> None:
 
     for evidence_class in (
         "Historical formal closure evidence",
-        "Private failed-staging Portfolio CI evidence",
+        "Private Windows-native Portfolio CI evidence",
         "Synthetic fixture evidence",
         "Designed remote release-CI evidence",
         "不存在的 evidence",
@@ -1024,14 +1028,14 @@ def test_readiness_evidence_is_canonical_public_and_binds_surface() -> None:
         REPOSITORY_ROOT
     )
     assert public_evidence_violations(readiness.model_dump(mode="json")) == ()
-    assert readiness.schema_version == "mdcp.local-release-readiness.v1.2"
-    assert readiness.evidence_class == "github_private_staging_eol_corrective_readiness"
-    assert readiness.portfolio_ci_commit == "13b922849f89691ab2d98d89d8750bee40309f32"
+    assert readiness.schema_version == "mdcp.local-release-readiness.v2"
+    assert readiness.evidence_class == "github_portfolio_publication_readiness"
+    assert readiness.portfolio_ci_commit == "8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1"
     assert readiness.portfolio_ci_run_url == (
-        "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641"
+        "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462"
     )
-    assert readiness.portfolio_ci_conclusion == "failure"
-    assert readiness.claim_ceiling == "mdcp.private-staging-eol-corrective-claim-ceiling.v1"
+    assert readiness.portfolio_ci_conclusion == "success"
+    assert readiness.claim_ceiling == "mdcp.github-portfolio-claim-ceiling.v2"
     assert readiness.technical_closure_verification.full_suite_passed == 1625
     assert readiness.technical_closure_verification.full_suite_skipped == 7
     assert readiness.technical_closure_verification.review_critical == 0
@@ -1040,7 +1044,7 @@ def test_readiness_evidence_is_canonical_public_and_binds_surface() -> None:
     assert readiness.claim_execution.remote_release_executed is False
     assert readiness.claim_execution.push_executed is True
     assert readiness.claim_execution.portfolio_ci_executed is True
-    assert readiness.claim_execution.portfolio_ci_passed is False
+    assert readiness.claim_execution.portfolio_ci_passed is True
     assert readiness.claim_execution.production_deployed is False
     assert readiness.claim_execution.kubernetes_production_ready is False
     assert readiness.claim_execution.h2_executed is False
@@ -1048,20 +1052,29 @@ def test_readiness_evidence_is_canonical_public_and_binds_surface() -> None:
     assert readiness.claim_execution.llm_workload_implemented is False
 
 
-def test_private_staging_docs_preserve_both_failed_run_anchors() -> None:
+def test_final_readiness_docs_bind_success_and_preserve_failed_history() -> None:
     ubuntu = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512"
     windows = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641"
+    success = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462"
     for logical_path in (
         "README.md",
         "docs/reviewer/quickstart.md",
         "docs/reviewer/release-evidence.md",
     ):
         text = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
-        assert ubuntu in text
-        assert windows in text
+        assert success in text
         assert "repository remains Private" in text
-        assert "portfolio_ci_passed: false" in text
+        assert "portfolio_ci_passed: true" in text
         assert "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE" in text
+    for logical_path in ("README.md", "docs/reviewer/quickstart.md"):
+        text = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+        assert ubuntu not in text
+        assert windows not in text
+    evidence_guide = (REPOSITORY_ROOT / "docs/reviewer/release-evidence.md").read_text(
+        encoding="utf-8"
+    )
+    assert ubuntu in evidence_guide
+    assert windows in evidence_guide
 
 
 def test_public_claim_ceiling_distinguishes_private_ci_push_from_publication() -> None:
@@ -1156,12 +1169,14 @@ def test_public_surface_rejects_wrong_file_digest(
         "noncanonical",
         "unknown_field",
         "short_commit",
+        "alternate_commit",
         "alternate_repository_url",
         "alternate_scheme_url",
-        "success_conclusion",
+        "alternate_run_url",
+        "failure_conclusion",
         "false_push_executed",
         "false_portfolio_ci_executed",
-        "true_portfolio_ci_passed",
+        "false_portfolio_ci_passed",
         "affirmative_release",
         "affirmative_production",
         "affirmative_kubernetes",
@@ -1186,6 +1201,8 @@ def test_readiness_mutations_fail_with_the_evidence_reason_code(
         document["private_extension"] = False
     elif mutation == "short_commit":
         document["portfolio_ci_commit"] = "1b44a3e"
+    elif mutation == "alternate_commit":
+        document["portfolio_ci_commit"] = "7bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1"
     elif mutation == "alternate_repository_url":
         document["portfolio_ci_run_url"] = (
             "https://github.com/another-owner/model-delivery-control-plane/actions/runs/33311024512"
@@ -1194,14 +1211,18 @@ def test_readiness_mutations_fail_with_the_evidence_reason_code(
         document["portfolio_ci_run_url"] = (
             "http://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512"
         )
-    elif mutation == "success_conclusion":
-        document["portfolio_ci_conclusion"] = "success"
+    elif mutation == "alternate_run_url":
+        document["portfolio_ci_run_url"] = (
+            "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212463"
+        )
+    elif mutation == "failure_conclusion":
+        document["portfolio_ci_conclusion"] = "failure"
     elif mutation == "false_push_executed":
         document["claim_execution"]["push_executed"] = False
     elif mutation == "false_portfolio_ci_executed":
         document["claim_execution"]["portfolio_ci_executed"] = False
-    elif mutation == "true_portfolio_ci_passed":
-        document["claim_execution"]["portfolio_ci_passed"] = True
+    elif mutation == "false_portfolio_ci_passed":
+        document["claim_execution"]["portfolio_ci_passed"] = False
     elif mutation == "affirmative_release":
         document["claim_execution"]["remote_release_executed"] = True
     elif mutation == "affirmative_production":
