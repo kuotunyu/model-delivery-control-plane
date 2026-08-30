@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -29,58 +29,36 @@ PUBLIC_DOCUMENTS = (
     "docs/reviewer/quickstart.md",
     "docs/reviewer/release-evidence.md",
 )
-
-
-def _visible_markdown_lines(markdown: str) -> tuple[str, ...]:
-    visible: list[str] = []
-    fence_marker: str | None = None
-    in_comment = False
-    for line in markdown.splitlines():
-        if fence_marker is not None:
-            fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-            if (
-                fence is not None
-                and fence.group(1)[0] == fence_marker[0]
-                and len(fence.group(1)) >= len(fence_marker)
-                and fence.group(2).strip() == ""
-            ):
-                fence_marker = None
-            continue
-
-        parts: list[str] = []
-        remaining = line
-        while remaining:
-            if in_comment:
-                end = remaining.find("-->")
-                if end < 0:
-                    remaining = ""
-                    break
-                remaining = remaining[end + 3 :]
-                in_comment = False
-            else:
-                start = remaining.find("<!--")
-                if start < 0:
-                    parts.append(remaining)
-                    remaining = ""
-                else:
-                    parts.append(remaining[:start])
-                    remaining = remaining[start + 4 :]
-                    in_comment = True
-        fragment = "".join(parts)
-        assert not re.match(
-            r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])[^>]*>|"
-            r"^ {0,3}<\?|^ {0,3}<![A-Z]|^ {0,3}<!\[CDATA\[",
-            fragment,
-            re.IGNORECASE,
-        ), "raw HTML block starter is not allowed on the public surface"
-        fence = re.match(r"^ {0,3}(`{3,}|~{3,}).*$", fragment)
-        if fence is not None:
-            fence_marker = fence.group(1)
-            continue
-        visible.append(fragment)
-    assert fence_marker is None, "unterminated Markdown fence"
-    assert not in_comment, "unterminated HTML comment"
-    return tuple(visible)
+ROLE_EVIDENCE_NEXT_HEADING = "## 實際 implemented verification path"
+APPROVED_ROLE_EVIDENCE_PREFIX_SHA256 = (
+    "73bfde57f04c6ff87cd44e09ac6bb95f861cc8b1dc800fd275688d69ef46a71a"
+)
+APPROVED_ROLE_EVIDENCE_SECTION = (
+    "## 對應 ML／AI／CV／LLM 職務能力\n"
+    "\n"
+    "以下對照的是這個 repository 可直接驗證的 engineering evidence；CV／LLM 欄位表示\n"
+    "delivery-control patterns 的可轉用性，不是已完成對應 workload。\n"
+    "\n"
+    "| 目標職務／能力 | 可直接檢查的 evidence | 誠實邊界 |\n"
+    "|---|---|---|\n"
+    "| ML Engineer | [workload contract](src/mdcp/contracts/workload.py)、"
+    "[v2 serving identity](src/mdcp/contracts/serving_identity_v2.py)、"
+    "[contract tests](tests/contract/workload/test_serving_identity_v2.py) "
+    "| 已實作的具體 workload 是 temporal regression |\n"
+    "| AI Engineer | [offline validator](src/mdcp/validator/service.py)、"
+    "[bundle verification](src/mdcp/verify/bundle.py)、"
+    "[local readiness](evidence/public/portfolio/local-release-readiness.json) "
+    "| local verification 不等於 remote release 或 production evidence |\n"
+    "| Computer Vision / LLM Engineer | "
+    "[content-addressed serving identity](src/mdcp/contracts/serving_identity_v2.py)、"
+    "[release evidence taxonomy](docs/reviewer/release-evidence.md) "
+    "| engineering pattern 可轉用；不宣稱已實作 CV 或 LLM workload |\n"
+    "| MLOps / reliability / security | "
+    "[dedicated formal worker](src/mdcp/temporal/formal_worker.py)、"
+    "[static firewall](src/mdcp/temporal/firewall.py)、"
+    "[runtime guards](src/mdcp/temporal/runtime_guards.py) "
+    "| control/router/canary/rollback/recovery 仍是 Designed only |"
+)
 
 
 def _load_verifier():
@@ -640,69 +618,13 @@ def test_readme_heading_order_and_reviewer_setup_are_stable() -> None:
 
 
 def _assert_readme_role_evidence_contract(readme: str) -> None:
-    lines = _visible_markdown_lines(readme)
-    heading = "## 對應 ML／AI／CV／LLM 職務能力"
-    h2_indexes = [index for index, line in enumerate(lines) if line.startswith("## ")]
-    h2_headings = [lines[index] for index in h2_indexes]
-    assert h2_headings.count(heading) == 1
-    role_heading_index = h2_headings.index(heading)
-    assert 0 < role_heading_index < len(h2_headings) - 1
-    assert h2_headings[role_heading_index - 1] == "## 目前完成度"
-    assert h2_headings[role_heading_index + 1] == "## 實際 implemented verification path"
-    section = lines[h2_indexes[role_heading_index] : h2_indexes[role_heading_index + 1]]
-    expected_rows = (
-        (
-            "| ML Engineer | [workload contract](src/mdcp/contracts/workload.py)、"
-            "[v2 serving identity](src/mdcp/contracts/serving_identity_v2.py)、"
-            "[contract tests](tests/contract/workload/test_serving_identity_v2.py) "
-            "| 已實作的具體 workload 是 temporal regression |"
-        ),
-        (
-            "| AI Engineer | [offline validator](src/mdcp/validator/service.py)、"
-            "[bundle verification](src/mdcp/verify/bundle.py)、"
-            "[local readiness](evidence/public/portfolio/local-release-readiness.json) "
-            "| local verification 不等於 remote release 或 production evidence |"
-        ),
-        (
-            "| Computer Vision / LLM Engineer | "
-            "[content-addressed serving identity](src/mdcp/contracts/serving_identity_v2.py)、"
-            "[release evidence taxonomy](docs/reviewer/release-evidence.md) "
-            "| engineering pattern 可轉用；不宣稱已實作 CV 或 LLM workload |"
-        ),
-        (
-            "| MLOps / reliability / security | "
-            "[dedicated formal worker](src/mdcp/temporal/formal_worker.py)、"
-            "[static firewall](src/mdcp/temporal/firewall.py)、"
-            "[runtime guards](src/mdcp/temporal/runtime_guards.py) "
-            "| control/router/canary/rollback/recovery 仍是 Designed only |"
-        ),
-    )
-    assert section == (
-        heading,
-        "",
-        "以下對照的是這個 repository 可直接驗證的 engineering evidence；CV／LLM 欄位表示",
-        "delivery-control patterns 的可轉用性，不是已完成對應 workload。",
-        "",
-        "| 目標職務／能力 | 可直接檢查的 evidence | 誠實邊界 |",
-        "|---|---|---|",
-        *expected_rows,
-        "",
-    )
-    link_targets = re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", "\n".join(section))
-    assert link_targets == [
-        "src/mdcp/contracts/workload.py",
-        "src/mdcp/contracts/serving_identity_v2.py",
-        "tests/contract/workload/test_serving_identity_v2.py",
-        "src/mdcp/validator/service.py",
-        "src/mdcp/verify/bundle.py",
-        "evidence/public/portfolio/local-release-readiness.json",
-        "src/mdcp/contracts/serving_identity_v2.py",
-        "docs/reviewer/release-evidence.md",
-        "src/mdcp/temporal/formal_worker.py",
-        "src/mdcp/temporal/firewall.py",
-        "src/mdcp/temporal/runtime_guards.py",
-    ]
-    assert len(set(link_targets)) == 10
+    assert readme.count(APPROVED_ROLE_EVIDENCE_SECTION) == 1
+    assert readme.count(ROLE_EVIDENCE_NEXT_HEADING) == 1
+    prefix, separator, _remainder = readme.partition(ROLE_EVIDENCE_NEXT_HEADING)
+    assert separator == ROLE_EVIDENCE_NEXT_HEADING
+    assert prefix.endswith(f"{APPROVED_ROLE_EVIDENCE_SECTION}\n\n")
+    approved_prefix = f"{prefix}{separator}".encode()
+    assert hashlib.sha256(approved_prefix).hexdigest() == (APPROVED_ROLE_EVIDENCE_PREFIX_SHA256)
 
 
 def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims() -> None:
@@ -711,7 +633,27 @@ def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims(
     )
 
 
-def test_role_evidence_contract_rejects_non_rendered_or_structurally_changed_sections() -> None:
+@pytest.mark.parametrize(
+    "mutation_name",
+    (
+        "demoted_h3",
+        "intervening_h2",
+        "duplicate_role_row",
+        "fenced_section",
+        "commented_section",
+        "image_instead_of_link",
+        "fake_fence_close",
+        "raw_html_wrapper",
+        "interposed_fence_between_table_header_and_delimiter",
+        "nbsp_fake_fence_close",
+        "comment_spliced_inside_link_destination_opener",
+        "comment_prefix_before_h2",
+        "incomplete_pre_raw_block",
+    ),
+)
+def test_role_evidence_contract_rejects_unapproved_public_copy_mutations(
+    mutation_name: str,
+) -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     heading = "## 對應 ML／AI／CV／LLM 職務能力"
     role_end = "## 實際 implemented verification path"
@@ -722,30 +664,47 @@ def test_role_evidence_contract_rejects_non_rendered_or_structurally_changed_sec
         "[runtime guards](src/mdcp/temporal/runtime_guards.py) "
         "| control/router/canary/rollback/recovery 仍是 Designed only |"
     )
-    mutations = (
-        readme.replace(heading, "### 對應 ML／AI／CV／LLM 職務能力", 1),
-        readme.replace(heading, f"{heading}\n\n## Intervening heading", 1),
-        readme.replace(role_table_end, f"{role_table_end}\n|ML Engineer|duplicate...|", 1),
-        readme.replace(heading, f"```markdown\n{heading}", 1).replace(
+    table_header = "| 目標職務／能力 | 可直接檢查的 evidence | 誠實邊界 |"
+    mutations = {
+        "demoted_h3": readme.replace(heading, "### 對應 ML／AI／CV／LLM 職務能力", 1),
+        "intervening_h2": readme.replace(heading, f"{heading}\n\n## Intervening heading", 1),
+        "duplicate_role_row": readme.replace(
+            role_table_end, f"{role_table_end}\n|ML Engineer|duplicate...|", 1
+        ),
+        "fenced_section": readme.replace(heading, f"```markdown\n{heading}", 1).replace(
             role_table_end, f"{role_table_end}\n```", 1
         ),
-        readme.replace(heading, f"<!-- ```\n{heading}", 1).replace(
+        "commented_section": readme.replace(heading, f"<!-- ```\n{heading}", 1).replace(
             role_table_end, f"{role_table_end}\n-->", 1
         ),
-        readme.replace("[local readiness]", "![local readiness]", 1),
-        readme.replace(heading, f"```markdown\n{heading}", 1)
+        "image_instead_of_link": readme.replace("[local readiness]", "![local readiness]", 1),
+        "fake_fence_close": readme.replace(heading, f"```markdown\n{heading}", 1)
         .replace(
             "delivery-control patterns 的可轉用性，不是已完成對應 workload。",
             "delivery-control patterns 的可轉用性，不是已完成對應 workload。\n```not-a-close",
             1,
         )
         .replace(role_table_end, f"{role_table_end}\n```", 1),
-        readme.replace(heading, f"<pre>\n{heading}", 1).replace(role_end, f"{role_end}\n</pre>", 1),
-    )
+        "raw_html_wrapper": readme.replace(heading, f"<pre>\n{heading}", 1).replace(
+            role_end, f"{role_end}\n</pre>", 1
+        ),
+        "interposed_fence_between_table_header_and_delimiter": readme.replace(
+            table_header, f"{table_header}\n```\n```", 1
+        ),
+        "nbsp_fake_fence_close": readme.replace(
+            heading, f"```markdown\n```\N{NO-BREAK SPACE}\n{heading}", 1
+        ).replace(role_table_end, f"{role_table_end}\n```\n```", 1),
+        "comment_spliced_inside_link_destination_opener": readme.replace(
+            "[local readiness](", "[local readiness]<!-- splice -->(", 1
+        ),
+        "comment_prefix_before_h2": readme.replace(heading, f"<!-- prefix -->{heading}", 1),
+        "incomplete_pre_raw_block": readme.replace(heading, f"<pre\n{heading}", 1),
+    }
+    mutated_readme = mutations[mutation_name]
+    assert mutated_readme != readme, f"mutation did not change README: {mutation_name}"
 
-    for mutated_readme in mutations:
-        with pytest.raises(AssertionError):
-            _assert_readme_role_evidence_contract(mutated_readme)
+    with pytest.raises(AssertionError):
+        _assert_readme_role_evidence_contract(mutated_readme)
 
 
 def test_reviewer_demo_command_and_claim_ceiling_are_documented() -> None:
