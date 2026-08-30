@@ -68,8 +68,9 @@ push, or run context.
 - `tests/publication/test_public_release_surface.py`: replace the obsolete Private-state contract
   with exact current-state and historical-context assertions.
 - `evidence/public/portfolio/local-release-readiness.json`: regenerate the public-surface entries and
-  aggregate digest after the three documents reach final bytes; record the fresh local full-suite
-  result in `technical_closure_verification`.
+  aggregate digest after the three documents reach final bytes. Preserve the closed historical
+  `technical_closure_verification` record at `1625 passed, 7 skipped`; report the fresh corrective
+  suite result in the task review and closure evidence instead of rewriting history.
 
 ### 4.2 Process paths
 
@@ -100,9 +101,9 @@ is introduced.
 4. The readiness document receives those entries and their RFC 8785 aggregate digest. Its existing
    v2 schema, evidence class, successful Windows commit/run anchor, and negative claim fields remain
    unchanged.
-5. The full suite is run. The observed passed/skipped counts replace the historical counts in
-   `technical_closure_verification`, and the publication tests plus full suite are rerun against the
-   final readiness bytes.
+5. The publication tests and full suite are run against the final readiness bytes. Their observed
+   counts are captured in the corrective review/closure report; they do not replace the readiness
+   document's closed historical measurement.
 6. Local review proves Critical `0` and Important `0`, then all local commits are sent with one
    non-force push to `main`.
 7. One exact Portfolio CI run for the pushed HEAD must finish `completed/success` before closure.
