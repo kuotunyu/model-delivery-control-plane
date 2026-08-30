@@ -62,6 +62,10 @@ Windows-native success commit: 8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1
 Windows-native success run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462
 The mixed-EOL corrective passed Windows-native remote Portfolio CI during Private staging.
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
+Linux read-only smoke (not portability proof)
+Linux smoke is configured; successful remote evidence is not yet claimed.
+LINUX_READ_ONLY_SMOKE_PASS != CROSS_PLATFORM_PORTABLE
+Windows full suite remains the authoritative gate.
 Release CI: manual design surface only; not dispatched and not evidence of a release.
 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。
 

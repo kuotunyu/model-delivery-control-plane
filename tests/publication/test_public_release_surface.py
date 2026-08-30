@@ -1081,6 +1081,21 @@ def test_final_readiness_docs_bind_public_state_and_preserve_failed_history() ->
     assert "during Private staging" in evidence_guide
 
 
+def test_linux_read_only_smoke_is_bounded_and_pending_remote_evidence() -> None:
+    for logical_path in (
+        "README.md",
+        "docs/reviewer/quickstart.md",
+        "docs/reviewer/release-evidence.md",
+    ):
+        text = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
+        assert "Linux read-only smoke (not portability proof)" in text
+        assert "Linux smoke is configured; successful remote evidence is not yet claimed." in text
+        assert "LINUX_READ_ONLY_SMOKE_PASS != CROSS_PLATFORM_PORTABLE" in text
+        assert "Windows full suite remains the authoritative gate." in text
+        assert "Linux read-only smoke success commit:" not in text
+        assert "Linux read-only smoke success run:" not in text
+
+
 def test_public_claim_ceiling_distinguishes_private_ci_push_from_publication() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     guide = (REPOSITORY_ROOT / "docs/reviewer/release-evidence.md").read_text(encoding="utf-8")

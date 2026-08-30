@@ -41,6 +41,10 @@ Historical Ubuntu failed run: https://github.com/kuotunyu/model-delivery-control
 Historical Windows mixed-EOL failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641
 
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
+Linux read-only smoke (not portability proof)
+Linux smoke is configured; successful remote evidence is not yet claimed.
+LINUX_READ_ONLY_SMOKE_PASS != CROSS_PLATFORM_PORTABLE
+Windows full suite remains the authoritative gate.
 Release CI: manual design surface only; not dispatched and not evidence of a release.
 
 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。因此它不是
