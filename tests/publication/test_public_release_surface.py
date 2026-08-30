@@ -232,6 +232,15 @@ def test_reviewer_demo_sanitizes_malformed_arguments_without_partial_pass() -> N
     assert b"private" not in completed.stderr
 
 
+@pytest.mark.parametrize("argument", ("-h", "--help"))
+def test_reviewer_demo_sanitizes_help_flags_without_partial_output(argument: str) -> None:
+    completed = _run_demo_cli(argument)
+
+    assert completed.returncode == 1
+    assert completed.stdout == b""
+    assert completed.stderr == (b"MDCP_REVIEWER_DEMO_FAIL reason=MDCP_REVIEWER_DEMO_INTERNAL\n")
+
+
 def test_reviewer_demo_state_guard_overrides_buffered_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

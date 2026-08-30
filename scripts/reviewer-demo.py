@@ -155,7 +155,7 @@ def _write_error(reason: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
-        parser = ClosedArgumentParser()
+        parser = ClosedArgumentParser(add_help=False)
         parser.add_argument("--repository-root", type=Path, default=Path.cwd())
         arguments = parser.parse_args(argv)
         lines = run_demo(arguments.repository_root)
