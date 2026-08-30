@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "release-ci.yml"
+PORTFOLIO_WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "portfolio-ci.yml"
 LOCK_PATH = REPOSITORY_ROOT / "constraints" / "github-actions.lock"
 LOCAL_SCRIPT_PATH = REPOSITORY_ROOT / "scripts" / "release-ci-local.ps1"
 EXPECTED_STAGES = ["build_push", "supply_chain", "final_manifest", "validate", "seal"]
@@ -15,6 +16,65 @@ REQUIRED_ACTIONS = {
     "actions/attest-build-provenance",
     "actions/upload-artifact",
 }
+PORTFOLIO_ACTIONS = {
+    "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
+    "astral-sh/setup-uv": "20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+}
+EXPECTED_PORTFOLIO_WORKFLOW = (
+    """\
+name: Portfolio CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout complete evidence history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up locked Python and uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.11.18"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen --group ml
+      - name: Verify lock and static checks
+        run: |
+          uv lock --check
+          uv run --no-sync ruff check src/mdcp tests scripts
+          uv run --no-sync ruff format --check scripts/verify-public-release.py """
+    "tests/publication/test_public_release_surface.py "
+    "tests/publication/test_release_workflow.py"
+    """
+      - name: Verify public evidence and deterministic demo
+        run: |
+          uv run --no-sync python scripts/verify-public-release.py --repository-root .
+          uv run --no-sync python scripts/reviewer-demo.py --repository-root .
+      - name: Run complete test suite
+        run: uv run --no-sync pytest -p no:cacheprovider -q
+      - name: Reject tracked-file mutation
+        run: git diff --exit-code
+"""
+)
 
 
 def _lock() -> dict[str, str]:
@@ -25,6 +85,10 @@ def _lock() -> dict[str, str]:
         name, sha_and_comment = line.split("=", 1)
         entries[name] = sha_and_comment.split("#", 1)[0].strip()
     return entries
+
+
+def _portfolio_workflow() -> str:
+    return PORTFOLIO_WORKFLOW_PATH.read_text(encoding="utf-8")
 
 
 def test_release_workflow_is_manual_least_privilege_and_repository_bound() -> None:
@@ -118,3 +182,96 @@ def test_task_2_7_recorded_remote_evidence_is_not_fabricated() -> None:
     recorded = REPOSITORY_ROOT / "tests" / "fixtures" / "supply-chain" / "recorded-release-ci"
 
     assert not recorded.exists()
+
+
+def test_portfolio_workflow_rejects_any_added_authority_or_command() -> None:
+    assert _portfolio_workflow() == EXPECTED_PORTFOLIO_WORKFLOW
+
+
+def test_portfolio_workflow_has_only_main_push_and_pull_request_triggers() -> None:
+    workflow = _portfolio_workflow()
+
+    assert workflow.startswith("name: Portfolio CI\n")
+    assert re.search(
+        r"^on:\n  push:\n    branches:\n      - main\n"
+        r"  pull_request:\n    branches:\n      - main\n$",
+        workflow,
+        re.MULTILINE,
+    )
+    assert all(
+        trigger not in workflow
+        for trigger in ("workflow_dispatch", "schedule:", "tags:", "release:")
+    )
+
+
+def test_portfolio_workflow_is_read_only_and_bounded() -> None:
+    workflow = _portfolio_workflow()
+
+    assert "permissions:\n  contents: read\n\nconcurrency:" in workflow
+    assert re.search(
+        r"^concurrency:\n  group: portfolio-ci-\$\{\{ github\.workflow \}\}-"
+        r"\$\{\{ github\.ref \}\}\n  cancel-in-progress: true$",
+        workflow,
+        re.MULTILINE,
+    )
+    assert "runs-on: ubuntu-24.04" in workflow
+    assert "timeout-minutes: 30" in workflow
+    assert re.search(r"^    permissions:", workflow, re.MULTILINE) is None
+    assert re.search(r"\b(?:contents|packages|id-token|attestations): write\b", workflow) is None
+
+
+def test_portfolio_workflow_pins_setup_and_checks_out_complete_history() -> None:
+    workflow = _portfolio_workflow()
+    reference_pairs = re.findall(
+        r"^\s*uses: ([a-z0-9_.-]+/[a-z0-9_.-]+)@([0-9a-f]+)\s*$", workflow, re.MULTILINE
+    )
+    references = dict(reference_pairs)
+
+    assert references == PORTFOLIO_ACTIONS
+    assert len(reference_pairs) == len(references)
+    assert all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in references.values())
+    assert re.search(
+        r"uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n"
+        r"        with:\n          fetch-depth: 0\n          persist-credentials: false",
+        workflow,
+    )
+    assert re.search(
+        r"uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d\n"
+        r'        with:\n          version: "0\.11\.18"\n'
+        r'          python-version: "3\.12"\n          enable-cache: false',
+        workflow,
+    )
+
+
+def test_portfolio_workflow_runs_only_the_read_only_local_gate() -> None:
+    workflow = _portfolio_workflow()
+
+    for command in (
+        "uv sync --frozen --group ml",
+        "uv lock --check",
+        "uv run --no-sync ruff check src/mdcp tests scripts",
+        "uv run --no-sync ruff format --check scripts/verify-public-release.py "
+        "tests/publication/test_public_release_surface.py "
+        "tests/publication/test_release_workflow.py",
+        "uv run --no-sync python scripts/verify-public-release.py --repository-root .",
+        "uv run --no-sync python scripts/reviewer-demo.py --repository-root .",
+        "uv run --no-sync pytest -p no:cacheprovider -q",
+        "git diff --exit-code",
+    ):
+        assert command in workflow
+    assert all(
+        prohibited not in workflow.casefold()
+        for prohibited in (
+            "secrets",
+            "docker",
+            "ghcr",
+            "oidc",
+            "attestation",
+            "upload",
+            "packages",
+        )
+    )
+    assert all(
+        prohibited not in workflow
+        for prohibited in ("release:", "tags:", "workflow_dispatch:", "schedule:")
+    )

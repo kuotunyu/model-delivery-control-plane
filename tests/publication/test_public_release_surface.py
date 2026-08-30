@@ -105,6 +105,7 @@ def test_verifier_exposes_only_the_closed_public_contract() -> None:
     verifier = _load_verifier()
 
     assert verifier.PUBLIC_SURFACE_PATHS == (
+        ".github/workflows/portfolio-ci.yml",
         "LICENSE",
         "README.md",
         "docs/architecture.md",
@@ -121,6 +122,22 @@ def test_verifier_exposes_only_the_closed_public_contract() -> None:
     assert verifier.READINESS_PATH not in verifier.PUBLIC_SURFACE_PATHS
     assert verifier.FORMAL_CLOSURE_COMMIT == "b1bb0d80cd40e6f39372c0a45892500cc9530712"
     assert verifier.FORMAL_CLOSURE_PARENT == "407f68b63c06a17ef54d5ec17722ef1f801b1689"
+
+
+def test_portfolio_workflow_has_an_exact_lf_attribute() -> None:
+    attributes = _run_git(
+        REPOSITORY_ROOT,
+        "check-attr",
+        "text",
+        "eol",
+        "--",
+        ".github/workflows/portfolio-ci.yml",
+    ).decode("utf-8", errors="strict")
+
+    assert attributes.splitlines() == [
+        ".github/workflows/portfolio-ci.yml: text: set",
+        ".github/workflows/portfolio-ci.yml: eol: lf",
+    ]
 
 
 def test_reviewer_demo_has_lf_attributes_in_git() -> None:

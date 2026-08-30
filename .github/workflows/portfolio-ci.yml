@@ -1,0 +1,48 @@
+name: Portfolio CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout complete evidence history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up locked Python and uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.11.18"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen --group ml
+      - name: Verify lock and static checks
+        run: |
+          uv lock --check
+          uv run --no-sync ruff check src/mdcp tests scripts
+          uv run --no-sync ruff format --check scripts/verify-public-release.py tests/publication/test_public_release_surface.py tests/publication/test_release_workflow.py
+      - name: Verify public evidence and deterministic demo
+        run: |
+          uv run --no-sync python scripts/verify-public-release.py --repository-root .
+          uv run --no-sync python scripts/reviewer-demo.py --repository-root .
+      - name: Run complete test suite
+        run: uv run --no-sync pytest -p no:cacheprovider -q
+      - name: Reject tracked-file mutation
+        run: git diff --exit-code

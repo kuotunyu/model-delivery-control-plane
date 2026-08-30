@@ -3,29 +3,9 @@
     "ClaimExecution": {
       "additionalProperties": false,
       "properties": {
-        "cv_workload_implemented": {
+        "remote_release_executed": {
           "const": false,
-          "title": "Cv Workload Implemented",
-          "type": "boolean"
-        },
-        "h2_executed": {
-          "const": false,
-          "title": "H2 Executed",
-          "type": "boolean"
-        },
-        "kubernetes_production_ready": {
-          "const": false,
-          "title": "Kubernetes Production Ready",
-          "type": "boolean"
-        },
-        "llm_workload_implemented": {
-          "const": false,
-          "title": "Llm Workload Implemented",
-          "type": "boolean"
-        },
-        "production_deployed": {
-          "const": false,
-          "title": "Production Deployed",
+          "title": "Remote Release Executed",
           "type": "boolean"
         },
         "push_executed": {
@@ -33,14 +13,34 @@
           "title": "Push Executed",
           "type": "boolean"
         },
-        "remote_release_executed": {
-          "const": false,
-          "title": "Remote Release Executed",
-          "type": "boolean"
-        },
         "tag_created": {
           "const": false,
           "title": "Tag Created",
+          "type": "boolean"
+        },
+        "production_deployed": {
+          "const": false,
+          "title": "Production Deployed",
+          "type": "boolean"
+        },
+        "kubernetes_production_ready": {
+          "const": false,
+          "title": "Kubernetes Production Ready",
+          "type": "boolean"
+        },
+        "h2_executed": {
+          "const": false,
+          "title": "H2 Executed",
+          "type": "boolean"
+        },
+        "cv_workload_implemented": {
+          "const": false,
+          "title": "Cv Workload Implemented",
+          "type": "boolean"
+        },
+        "llm_workload_implemented": {
+          "const": false,
+          "title": "Llm Workload Implemented",
           "type": "boolean"
         }
       },
@@ -60,14 +60,14 @@
     "PublicSurfaceEntry": {
       "additionalProperties": false,
       "properties": {
+        "logical_path": {
+          "title": "Logical Path",
+          "type": "string"
+        },
         "byte_size": {
           "minimum": 0,
           "title": "Byte Size",
           "type": "integer"
-        },
-        "logical_path": {
-          "title": "Logical Path",
-          "type": "string"
         },
         "sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -125,27 +125,24 @@
   },
   "additionalProperties": false,
   "properties": {
+    "schema_version": {
+      "const": "mdcp.local-release-readiness.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
     "canonicalization_version": {
       "const": "RFC8785",
       "title": "Canonicalization Version",
       "type": "string"
     },
-    "claim_ceiling": {
-      "const": "mdcp.local-portfolio-claim-ceiling.v1",
-      "title": "Claim Ceiling",
-      "type": "string"
-    },
-    "claim_execution": {
-      "$ref": "#/$defs/ClaimExecution"
-    },
-    "correction_commit": {
-      "const": "bfe517819ec2163d700519fc427dbe8bb8071258",
-      "title": "Correction Commit",
-      "type": "string"
-    },
     "evidence_class": {
       "const": "local_portfolio_release_readiness",
       "title": "Evidence Class",
+      "type": "string"
+    },
+    "publication_status": {
+      "const": "public",
+      "title": "Publication Status",
       "type": "string"
     },
     "formal_closure_commit": {
@@ -158,19 +155,44 @@
       "title": "Formal Closure Parent",
       "type": "string"
     },
+    "correction_commit": {
+      "const": "bfe517819ec2163d700519fc427dbe8bb8071258",
+      "title": "Correction Commit",
+      "type": "string"
+    },
+    "search_receipt_sha256": {
+      "const": "5c0dc214281af3191ecfef0bd95e4d0ff99e3cc6c710d894a1f0b4a3465b7d63",
+      "title": "Search Receipt Sha256",
+      "type": "string"
+    },
+    "search_index_sha256": {
+      "const": "2f630aa428fb539efb24904fd308f83fdf9458a46df6aa0cb7099a28ece4b205",
+      "title": "Search Index Sha256",
+      "type": "string"
+    },
+    "source_inventory_sha256": {
+      "const": "cf2880259d9e82eae2291bb51fb041be0bf5f24a77f750565e8fe0227c1b539b",
+      "title": "Source Inventory Sha256",
+      "type": "string"
+    },
     "formal_worker_inventory_sha256": {
       "const": "ebac7f1b61024e532f6cba9c3eb4cded12ad1972fb5a5a660a40c9bfd16a43d3",
       "title": "Formal Worker Inventory Sha256",
       "type": "string"
     },
-    "h2_loaded_rows": {
-      "const": 0,
-      "title": "H2 Loaded Rows",
-      "type": "integer"
+    "v1_serving_identity": {
+      "const": "d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209",
+      "title": "V1 Serving Identity",
+      "type": "string"
     },
-    "h2_status": {
-      "const": "SEALED_NOT_LOADED",
-      "title": "H2 Status",
+    "v2_serving_identity": {
+      "const": "198610d3cfcb48bf713b414a1d11073c2ac2e438f4a4dd99fc8dd907789152ea",
+      "title": "V2 Serving Identity",
+      "type": "string"
+    },
+    "static_firewall_sha256": {
+      "const": "e443596f27911614a5387975c424554d4dd9906b56d8bc330b2887bc113a5de1",
+      "title": "Static Firewall Sha256",
       "type": "string"
     },
     "public_surface_entries": {
@@ -185,53 +207,31 @@
       "title": "Public Surface Inventory Sha256",
       "type": "string"
     },
-    "publication_status": {
-      "const": "public",
-      "title": "Publication Status",
+    "h2_status": {
+      "const": "SEALED_NOT_LOADED",
+      "title": "H2 Status",
       "type": "string"
+    },
+    "h2_loaded_rows": {
+      "const": 0,
+      "title": "H2 Loaded Rows",
+      "type": "integer"
+    },
+    "technical_closure_verification": {
+      "$ref": "#/$defs/TechnicalClosureVerification"
     },
     "reviewer_entrypoint": {
       "const": "scripts/reviewer-fast-path.ps1",
       "title": "Reviewer Entrypoint",
       "type": "string"
     },
-    "schema_version": {
-      "const": "mdcp.local-release-readiness.v1",
-      "title": "Schema Version",
+    "claim_ceiling": {
+      "const": "mdcp.local-portfolio-claim-ceiling.v1",
+      "title": "Claim Ceiling",
       "type": "string"
     },
-    "search_index_sha256": {
-      "const": "2f630aa428fb539efb24904fd308f83fdf9458a46df6aa0cb7099a28ece4b205",
-      "title": "Search Index Sha256",
-      "type": "string"
-    },
-    "search_receipt_sha256": {
-      "const": "5c0dc214281af3191ecfef0bd95e4d0ff99e3cc6c710d894a1f0b4a3465b7d63",
-      "title": "Search Receipt Sha256",
-      "type": "string"
-    },
-    "source_inventory_sha256": {
-      "const": "cf2880259d9e82eae2291bb51fb041be0bf5f24a77f750565e8fe0227c1b539b",
-      "title": "Source Inventory Sha256",
-      "type": "string"
-    },
-    "static_firewall_sha256": {
-      "const": "e443596f27911614a5387975c424554d4dd9906b56d8bc330b2887bc113a5de1",
-      "title": "Static Firewall Sha256",
-      "type": "string"
-    },
-    "technical_closure_verification": {
-      "$ref": "#/$defs/TechnicalClosureVerification"
-    },
-    "v1_serving_identity": {
-      "const": "d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209",
-      "title": "V1 Serving Identity",
-      "type": "string"
-    },
-    "v2_serving_identity": {
-      "const": "198610d3cfcb48bf713b414a1d11073c2ac2e438f4a4dd99fc8dd907789152ea",
-      "title": "V2 Serving Identity",
-      "type": "string"
+    "claim_execution": {
+      "$ref": "#/$defs/ClaimExecution"
     }
   },
   "required": [

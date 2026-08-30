@@ -3,6 +3,11 @@
 這條 reviewer path 讓你先在低摩擦、CPU-only 的條件下驗證 repository 的核心 claims，再決定是否
 進一步閱讀完整 architecture 與 test suite。
 
+Portfolio CI: configured, read-only verification; no remote execution recorded yet.
+Release CI: manual design surface only; not dispatched and not evidence of a release.
+兩者都不表示 remote release、GHCR/package publication、tag、GitHub Release、production deployment、
+Kubernetes readiness、H2 execution、CV workload 或 LLM workload 已發生。
+
 ## 前置條件
 
 - Python `3.12`
@@ -85,7 +90,8 @@ Technical closure 的 historical measurement 是 `1546 passed, 7 skipped in 681.
 - [Actual-vs-designed architecture](../architecture.md)
 - [Release evidence taxonomy](release-evidence.md)
 - [Threat model](../threat-model.md)
-- [Checked-in release workflow](../../.github/workflows/release-ci.yml)
+- [Configured read-only Portfolio CI](../../.github/workflows/portfolio-ci.yml)
+- [Manual Release CI design surface](../../.github/workflows/release-ci.yml)
 
 Docker、validator internals 與 workflow source 可以作為 optional deep inspection；這不是要求 reviewer
 執行 remote workflow，也不表示 repository 已完成 remote release、production deployment，並且

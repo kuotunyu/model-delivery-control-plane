@@ -22,6 +22,7 @@ SEARCH_INDEX_SHA256 = "2f630aa428fb539efb24904fd308f83fdf9458a46df6aa0cb7099a28e
 READINESS_PATH = "evidence/public/portfolio/local-release-readiness.json"
 SCHEMA_PATH = "schemas/portfolio/local-release-readiness.schema.json"
 PUBLIC_SURFACE_PATHS = (
+    ".github/workflows/portfolio-ci.yml",
     "LICENSE",
     "README.md",
     "docs/architecture.md",

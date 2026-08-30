@@ -3,7 +3,7 @@
 MDCP 不宣稱「某個檢查通過」就代表系統已經 release／production-ready。這份 taxonomy 說明每類
 evidence 能支持什麼，也說明哪些 action 沒有發生。
 
-## 五類 evidence
+## 六類 evidence
 
 ### 1. Historical formal closure evidence
 
@@ -25,13 +25,24 @@ reviewer entrypoint 與所有未執行 action 的 explicit `false` booleans。�
 Deterministic fixtures、golden vectors 與 contract tests 可重現 validator、identity、temporal protocol
 與 security behavior。Synthetic/local PASS 是 engineering evidence，不是 production traffic evidence。
 
-### 4. Designed remote release-CI evidence
+### 4. Configured Portfolio CI evidence
+
+[portfolio-ci.yml](../../.github/workflows/portfolio-ci.yml) 是 configured、read-only verification
+workflow，只有 `main` push 與 pull request trigger，且尚未記錄 remote execution。
+
+Portfolio CI: configured, read-only verification; no remote execution recorded yet.
+Release CI: manual design surface only; not dispatched and not evidence of a release.
+
+因此它不是 remote release、GHCR/package publication、tag、GitHub Release、production deployment、
+Kubernetes readiness、H2 execution、CV workload 或 LLM workload 的 evidence。
+
+### 5. Designed remote release-CI evidence
 
 [release-ci.yml](../../.github/workflows/release-ci.yml) 展示 manual dispatch、least privilege、
 digest-pinned actions、formal candidate preflight 與 supply-chain stages。它在這個 slice 中是
 Not executed remotely，因此不能被引用為 completed GitHub/GHCR release evidence。
 
-### 5. 不存在的 evidence
+### 6. 不存在的 evidence
 
 未授權或未執行的 action 不建立假證據：沒有 remote release、push、tag、GitHub Release、GHCR
 publication、production deployment、real incident、H2 execution、CV workload 或 LLM workload
@@ -44,6 +55,8 @@ result。H2 維持 `SEALED_NOT_LOADED`，loaded rows `0`。
 - [Local readiness evidence](../../evidence/public/portfolio/local-release-readiness.json)
 - [Reviewer fast path](../../scripts/reviewer-fast-path.ps1)
 - [Read-only verifier](../../scripts/verify-public-release.py)
+- [Configured read-only Portfolio CI](../../.github/workflows/portfolio-ci.yml)
+- [Manual Release CI design surface](../../.github/workflows/release-ci.yml)
 
 verifier 會要求 formal closure 是目前 publication branch 的 ancestor，但不要求 current HEAD 等於
 closure。這保留 historical freeze 語意，也允許後續純 publication commits。

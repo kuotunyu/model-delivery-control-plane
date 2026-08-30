@@ -50,6 +50,16 @@ flowchart LR
 完整的 actual-vs-designed 說明與 component matrix 請見
 [Architecture](docs/architecture.md)。
 
+## Portfolio CI 與 Release CI 的 authority boundary
+
+| Surface | Status | 可主張範圍 |
+|---|---|---|
+| Portfolio CI | Configured, read-only verification | 尚未記錄 remote execution；不是 release 或 production evidence |
+| Release CI | Manual design surface only | 未 dispatch；不是 release evidence |
+
+Portfolio CI: configured, read-only verification; no remote execution recorded yet.
+Release CI: manual design surface only; not dispatched and not evidence of a release.
+
 ## Reviewer fast path
 
 初次建立 dependency environment（若本機沒有 cached packages，這一步可能使用 network）：
@@ -87,7 +97,8 @@ pwsh ./scripts/reviewer-fast-path.ps1
 - Historical public index：[evidence-index.json](evidence/public/v02/search/evidence-index.json)
 - Evidence taxonomy 與可主張範圍：[Release evidence guide](docs/reviewer/release-evidence.md)
 - Security assumptions 與攻擊面：[Threat model](docs/threat-model.md)
-- Remote workflow 僅供檢視：[release-ci.yml](.github/workflows/release-ci.yml)
+- Portfolio CI（configured、read-only，尚無 remote execution record）：[portfolio-ci.yml](.github/workflows/portfolio-ci.yml)
+- Release CI（manual design surface，未 dispatch）：[release-ci.yml](.github/workflows/release-ci.yml)
 
 Technical formal closure 是 immutable historical commit
 `b1bb0d80cd40e6f39372c0a45892500cc9530712`；後續 publication-only commits 是它的 descendants，
@@ -110,7 +121,8 @@ PowerShell 7 與 GitHub Actions。historical technical closure 的完整測量�
 
 ## Claim ceiling
 
-- 未執行 remote release，也沒有 push、tag、GitHub Release 或 GHCR publication evidence。
+- Portfolio CI 只有 configured 的 read-only verification；尚未記錄 remote execution，並非 release evidence。
+- Release CI 是 manual design surface，未 dispatch；未執行 remote release，也沒有 push、tag、GitHub Release 或 GHCR publication evidence。
 - 不宣稱 Kubernetes production readiness。
 - 不宣稱 production HA、multi-region 或 disaster recovery。
 - 沒有 real production incident evidence。

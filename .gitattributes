@@ -1,4 +1,5 @@
 tests/fixtures/supply-chain/** -text
+.github/workflows/portfolio-ci.yml text eol=lf
 /LICENSE text eol=lf
 /README.md text eol=lf
 docs/architecture.md text eol=lf
