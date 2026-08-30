@@ -5,5 +5,6 @@ docs/architecture.md text eol=lf
 docs/reviewer/quickstart.md text eol=lf
 docs/reviewer/release-evidence.md text eol=lf
 schemas/portfolio/local-release-readiness.schema.json text eol=lf
+scripts/reviewer-demo.py text eol=lf
 scripts/reviewer-fast-path.ps1 text eol=lf
 scripts/verify-public-release.py text eol=lf

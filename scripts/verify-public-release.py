@@ -28,6 +28,7 @@ PUBLIC_SURFACE_PATHS = (
     "docs/reviewer/quickstart.md",
     "docs/reviewer/release-evidence.md",
     "schemas/portfolio/local-release-readiness.schema.json",
+    "scripts/reviewer-demo.py",
     "scripts/reviewer-fast-path.ps1",
     "scripts/verify-public-release.py",
 )

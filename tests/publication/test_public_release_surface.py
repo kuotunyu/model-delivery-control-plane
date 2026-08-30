@@ -14,6 +14,13 @@ from mdcp.temporal.evidence import public_evidence_violations
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VERIFIER_PATH = REPOSITORY_ROOT / "scripts" / "verify-public-release.py"
+DEMO_PATH = REPOSITORY_ROOT / "scripts" / "reviewer-demo.py"
+DEMO_SUCCESS_LINES = (
+    "MDCP_DEMO_PASS case=baseline",
+    "MDCP_DEMO_REJECT case=remote_release_claim reason=PUBLIC_RELEASE_SLICE_EVIDENCE_INVALID",
+    "MDCP_DEMO_REJECT case=public_surface_tamper reason=PUBLIC_RELEASE_SLICE_INVENTORY_MISMATCH",
+    "MDCP_REVIEWER_DEMO_PASS cases=3 repository_mutations=0",
+)
 PUBLIC_DOCUMENTS = (
     "LICENSE",
     "README.md",
@@ -33,15 +40,274 @@ def _load_verifier():
     return module
 
 
+def _load_demo():
+    assert DEMO_PATH.is_file(), "reviewer demo is missing"
+    spec = importlib.util.spec_from_file_location("mdcp_reviewer_demo", DEMO_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_demo_cli(*arguments: str) -> subprocess.CompletedProcess[bytes]:
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return subprocess.run(
+        (
+            sys.executable,
+            str(DEMO_PATH),
+            "--repository-root",
+            str(REPOSITORY_ROOT),
+            *arguments,
+        ),
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=120,
+        env=environment,
+    )
+
+
 def test_verifier_exposes_only_the_closed_public_contract() -> None:
     verifier = _load_verifier()
 
+    assert verifier.PUBLIC_SURFACE_PATHS == (
+        "LICENSE",
+        "README.md",
+        "docs/architecture.md",
+        "docs/reviewer/quickstart.md",
+        "docs/reviewer/release-evidence.md",
+        "schemas/portfolio/local-release-readiness.schema.json",
+        "scripts/reviewer-demo.py",
+        "scripts/reviewer-fast-path.ps1",
+        "scripts/verify-public-release.py",
+    )
     assert tuple(sorted(verifier.PUBLIC_SURFACE_PATHS, key=str.encode)) == (
         verifier.PUBLIC_SURFACE_PATHS
     )
-    assert len(verifier.PUBLIC_SURFACE_PATHS) == 8
+    assert verifier.READINESS_PATH not in verifier.PUBLIC_SURFACE_PATHS
     assert verifier.FORMAL_CLOSURE_COMMIT == "b1bb0d80cd40e6f39372c0a45892500cc9530712"
     assert verifier.FORMAL_CLOSURE_PARENT == "407f68b63c06a17ef54d5ec17722ef1f801b1689"
+
+
+def test_reviewer_demo_has_lf_attributes_in_git() -> None:
+    attributes = _run_git(
+        REPOSITORY_ROOT,
+        "check-attr",
+        "text",
+        "eol",
+        "--",
+        "scripts/reviewer-demo.py",
+    ).decode("utf-8", errors="strict")
+
+    assert attributes.splitlines() == [
+        "scripts/reviewer-demo.py: text: set",
+        "scripts/reviewer-demo.py: eol: lf",
+    ]
+
+    lookalikes = _run_git(
+        REPOSITORY_ROOT,
+        "check-attr",
+        "text",
+        "eol",
+        "--",
+        "scripts/reviewer-demo-sibling.py",
+        "nested/scripts/reviewer-demo.py",
+    ).decode("utf-8", errors="strict")
+    assert lookalikes.splitlines() == [
+        "scripts/reviewer-demo-sibling.py: text: unspecified",
+        "scripts/reviewer-demo-sibling.py: eol: unspecified",
+        "nested/scripts/reviewer-demo.py: text: unspecified",
+        "nested/scripts/reviewer-demo.py: eol: unspecified",
+    ]
+
+
+def test_reviewer_demo_disables_bytecode_writes_from_verifier_load(tmp_path: Path) -> None:
+    demo_path = tmp_path / "reviewer-demo.py"
+    verifier_path = tmp_path / "verify-public-release.py"
+    shutil.copyfile(DEMO_PATH, demo_path)
+    shutil.copyfile(VERIFIER_PATH, verifier_path)
+    environment = os.environ.copy()
+    environment.pop("PYTHONDONTWRITEBYTECODE", None)
+    environment.pop("PYTHONPYCACHEPREFIX", None)
+    before_repository = _run_git(
+        REPOSITORY_ROOT, "status", "--porcelain=v1", "--untracked-files=all"
+    )
+    before_temporary_state = tuple(
+        sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+    )
+
+    completed = subprocess.run(
+        (
+            sys.executable,
+            str(demo_path),
+            "--repository-root",
+            str(REPOSITORY_ROOT),
+        ),
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=120,
+        env=environment,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.decode("utf-8", errors="strict").splitlines() == list(
+        DEMO_SUCCESS_LINES
+    )
+    assert completed.stderr == b""
+    assert _run_git(REPOSITORY_ROOT, "status", "--porcelain=v1", "--untracked-files=all") == (
+        before_repository
+    )
+    assert tuple(sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))) == (
+        before_temporary_state
+    )
+
+
+def test_reviewer_demo_emits_only_the_exact_buffered_success_terminals() -> None:
+    before = _run_git(REPOSITORY_ROOT, "status", "--porcelain=v1", "--untracked-files=all")
+
+    completed = _run_demo_cli()
+
+    after = _run_git(REPOSITORY_ROOT, "status", "--porcelain=v1", "--untracked-files=all")
+    assert completed.returncode == 0
+    assert completed.stdout.decode("utf-8", errors="strict").splitlines() == list(
+        DEMO_SUCCESS_LINES
+    )
+    assert completed.stderr == b""
+    assert after == before
+
+
+def test_reviewer_demo_removes_its_temporary_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    demo = _load_demo()
+    original = demo.tempfile.TemporaryDirectory
+    temporary_paths: list[Path] = []
+
+    def tracked_temporary_directory(*args: object, **kwargs: object):
+        directory = original(*args, **kwargs)
+        temporary_paths.append(Path(directory.name))
+        return directory
+
+    monkeypatch.setattr(demo.tempfile, "TemporaryDirectory", tracked_temporary_directory)
+
+    assert demo.run_demo(REPOSITORY_ROOT) == DEMO_SUCCESS_LINES
+    assert len(temporary_paths) == 1
+    assert all(not path.exists() for path in temporary_paths)
+
+
+def test_reviewer_demo_rejection_contract_rejects_pass_wrong_reason_and_exception() -> None:
+    demo = _load_demo()
+    verifier = demo._load_verifier()
+
+    with pytest.raises(demo.DemoFailure) as unexpected_pass:
+        demo._expect_rejection(verifier, lambda: None, "EXPECTED")
+    assert unexpected_pass.value.reason == "MDCP_REVIEWER_DEMO_CASE_INVALID"
+
+    def wrong_reason() -> None:
+        raise verifier.PublicReleaseError("WRONG")
+
+    with pytest.raises(demo.DemoFailure) as mismatch:
+        demo._expect_rejection(verifier, wrong_reason, "EXPECTED")
+    assert mismatch.value.reason == "MDCP_REVIEWER_DEMO_CASE_INVALID"
+
+    def unexpected_exception() -> None:
+        raise RuntimeError("C:/private/raw-exception")
+
+    with pytest.raises(demo.DemoFailure) as internal:
+        demo._expect_rejection(verifier, unexpected_exception, "EXPECTED")
+    assert internal.value.reason == "MDCP_REVIEWER_DEMO_INTERNAL"
+
+
+def test_reviewer_demo_sanitizes_malformed_arguments_without_partial_pass() -> None:
+    completed = _run_demo_cli("--private-token", "C:/private/secret")
+
+    assert completed.returncode == 1
+    assert completed.stdout == b""
+    assert completed.stderr == (b"MDCP_REVIEWER_DEMO_FAIL reason=MDCP_REVIEWER_DEMO_INTERNAL\n")
+    assert b"private" not in completed.stderr
+
+
+def test_reviewer_demo_state_guard_overrides_buffered_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    demo = _load_demo()
+    states = iter((b"", b"?? changed.txt\n"))
+    monkeypatch.setattr(demo, "_repository_state", lambda *_args: next(states))
+    monkeypatch.setattr(demo, "_run_cases", lambda *_args: DEMO_SUCCESS_LINES)
+
+    with pytest.raises(demo.DemoFailure) as error:
+        demo.run_demo(REPOSITORY_ROOT)
+
+    assert error.value.reason == "MDCP_REVIEWER_DEMO_STATE_CHANGED"
+
+
+@pytest.mark.parametrize(
+    ("behavior", "expected_reason"),
+    (
+        ("baseline", "MDCP_REVIEWER_DEMO_BASELINE_INVALID"),
+        ("case", "MDCP_REVIEWER_DEMO_CASE_INVALID"),
+        ("internal", "MDCP_REVIEWER_DEMO_INTERNAL"),
+    ),
+)
+def test_reviewer_demo_cli_buffers_all_case_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    behavior: str,
+    expected_reason: str,
+) -> None:
+    demo = _load_demo()
+    monkeypatch.setattr(demo, "_repository_state", lambda *_args: b"")
+
+    def fail_cases(*_args: object) -> tuple[str, ...]:
+        if behavior == "baseline":
+            raise demo.DemoFailure(demo.BASELINE_INVALID)
+        if behavior == "case":
+            raise demo.DemoFailure(demo.CASE_INVALID)
+        raise RuntimeError("C:/private/raw-exception")
+
+    monkeypatch.setattr(demo, "_run_cases", fail_cases)
+
+    assert demo.main(("--repository-root", str(REPOSITORY_ROOT))) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"MDCP_REVIEWER_DEMO_FAIL reason={expected_reason}\n"
+    assert "private" not in captured.err
+
+
+def test_reviewer_demo_uses_real_baseline_parser_and_temporary_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    demo = _load_demo()
+    verifier = demo._load_verifier()
+    verify_calls: list[Path] = []
+    parse_calls = 0
+    real_verify = verifier.verify_public_release
+    real_parse = verifier.parse_readiness_bytes
+
+    def tracked_verify(root: Path):
+        verify_calls.append(root)
+        return real_verify(root)
+
+    def tracked_parse(raw: bytes):
+        nonlocal parse_calls
+        parse_calls += 1
+        return real_parse(raw)
+
+    monkeypatch.setattr(verifier, "verify_public_release", tracked_verify)
+    monkeypatch.setattr(verifier, "parse_readiness_bytes", tracked_parse)
+    monkeypatch.setattr(demo, "_load_verifier", lambda: verifier)
+
+    assert demo.run_demo(REPOSITORY_ROOT) == DEMO_SUCCESS_LINES
+    assert parse_calls == 3
+    assert len(verify_calls) == 2
+    assert verify_calls[0] == REPOSITORY_ROOT
+    assert verify_calls[1] != REPOSITORY_ROOT
+    assert not verify_calls[1].exists()
 
 
 @pytest.mark.parametrize(
