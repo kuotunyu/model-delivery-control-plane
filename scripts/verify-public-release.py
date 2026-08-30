@@ -79,6 +79,16 @@ CORRECTION_PATHS = (
 _MARKDOWN_LINK_TARGET = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+CommitSha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
+PortfolioCiRunUrl = Annotated[
+    str,
+    StringConstraints(
+        pattern=(
+            r"^https://github\.com/kuotunyu/model-delivery-control-plane/"
+            r"actions/runs/[1-9][0-9]*$"
+        )
+    ),
+]
 
 
 class PublicReleaseError(ValueError):
@@ -107,7 +117,9 @@ class TechnicalClosureVerification(ClosedModel):
 
 class ClaimExecution(ClosedModel):
     remote_release_executed: Literal[False]
-    push_executed: Literal[False]
+    push_executed: Literal[True]
+    portfolio_ci_executed: Literal[True]
+    portfolio_ci_passed: Literal[False]
     tag_created: Literal[False]
     production_deployed: Literal[False]
     kubernetes_production_ready: Literal[False]
@@ -117,9 +129,9 @@ class ClaimExecution(ClosedModel):
 
 
 class LocalReleaseReadiness(ClosedModel):
-    schema_version: Literal["mdcp.local-release-readiness.v1"]
+    schema_version: Literal["mdcp.local-release-readiness.v1.1"]
     canonicalization_version: Literal["RFC8785"]
-    evidence_class: Literal["local_portfolio_release_readiness"]
+    evidence_class: Literal["github_private_staging_corrective_readiness"]
     publication_status: Literal["public"]
     formal_closure_commit: Literal["b1bb0d80cd40e6f39372c0a45892500cc9530712"]
     formal_closure_parent: Literal["407f68b63c06a17ef54d5ec17722ef1f801b1689"]
@@ -139,13 +151,16 @@ class LocalReleaseReadiness(ClosedModel):
     static_firewall_sha256: Literal[
         "e443596f27911614a5387975c424554d4dd9906b56d8bc330b2887bc113a5de1"
     ]
+    portfolio_ci_commit: CommitSha
+    portfolio_ci_run_url: PortfolioCiRunUrl
+    portfolio_ci_conclusion: Literal["failure"]
     public_surface_entries: tuple[PublicSurfaceEntry, ...]
     public_surface_inventory_sha256: Sha256
     h2_status: Literal["SEALED_NOT_LOADED"]
     h2_loaded_rows: Literal[0]
     technical_closure_verification: TechnicalClosureVerification
     reviewer_entrypoint: Literal["scripts/reviewer-fast-path.ps1"]
-    claim_ceiling: Literal["mdcp.local-portfolio-claim-ceiling.v1"]
+    claim_ceiling: Literal["mdcp.private-staging-corrective-claim-ceiling.v1"]
     claim_execution: ClaimExecution
 
     @model_validator(mode="after")

@@ -2,11 +2,9 @@ name: Portfolio CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -17,11 +15,18 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-24.04
+    runs-on: windows-2025
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
     steps:
+      - name: Configure Windows checkout policy
+        run: |
+          git config --global core.autocrlf true
+          git config --global core.fileMode false
       - name: Checkout complete evidence history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -31,6 +36,15 @@ jobs:
           version: "0.11.18"
           python-version: "3.12"
           enable-cache: false
+      - name: Install checksum-pinned Docker Compose config renderer
+        run: |
+          $pluginDirectory = Join-Path $env:USERPROFILE ".docker\cli-plugins"
+          New-Item -ItemType Directory -Force -Path $pluginDirectory | Out-Null
+          $composePath = Join-Path $pluginDirectory "docker-compose.exe"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/docker/compose/releases/download/v5.5.0/docker-compose-windows-x86_64.exe" -OutFile $composePath
+          $actualSha256 = (Get-FileHash -LiteralPath $composePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne "51e1e61195f3616896265487ed64551095f3bd27ac7fbd5758d3538c3bfa1b19") { throw "DOCKER_COMPOSE_SHA256_MISMATCH" }
+          if ((docker compose version --short).Trim() -ne "5.5.0") { throw "DOCKER_COMPOSE_VERSION_MISMATCH" }
       - name: Install locked dependencies
         run: uv sync --frozen --group ml
       - name: Verify lock and static checks

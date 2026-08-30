@@ -3,10 +3,12 @@
 這條 reviewer path 讓你先在低摩擦、CPU-only 的條件下驗證 repository 的核心 claims，再決定是否
 進一步閱讀完整 architecture 與 test suite。
 
-Portfolio CI: configured, read-only verification; no remote execution recorded yet.
+Private push executed; Ubuntu run recorded failure; failure is not success, release, or portability evidence; Windows corrective awaits verification.
+WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
-兩者都不表示 remote release、GHCR/package publication、tag、GitHub Release、production deployment、
-Kubernetes readiness、H2 execution、CV workload 或 LLM workload 已發生。
+所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false；因此兩者都不表示
+remote release、GHCR/package publication、tag、GitHub Release、production deployment、Kubernetes readiness、
+H2 execution、CV workload 或 LLM workload 已發生。
 
 ## 前置條件
 
@@ -47,7 +49,7 @@ MDCP_REVIEWER_DEMO_PASS cases=3 repository_mutations=0
 evidence，不是 remote release 或 production evidence。
 
 ```text
-MDCP_REVIEWER_DEMO_PASS != REMOTE_RELEASED != PRODUCTION_READY
+WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 ```
 
 ## Level 1：Fast path（建議先跑）
@@ -90,7 +92,7 @@ Technical closure 的 historical measurement 是 `1546 passed, 7 skipped in 681.
 - [Actual-vs-designed architecture](../architecture.md)
 - [Release evidence taxonomy](release-evidence.md)
 - [Threat model](../threat-model.md)
-- [Configured read-only Portfolio CI](../../.github/workflows/portfolio-ci.yml)
+- [Private-failed-staging Portfolio CI corrective](../../.github/workflows/portfolio-ci.yml)
 - [Manual Release CI design surface](../../.github/workflows/release-ci.yml)
 
 Docker、validator internals 與 workflow source 可以作為 optional deep inspection；這不是要求 reviewer

@@ -54,11 +54,13 @@ flowchart LR
 
 | Surface | Status | 可主張範圍 |
 |---|---|---|
-| Portfolio CI | Configured, read-only verification | 尚未記錄 remote execution；不是 release 或 production evidence |
+| Portfolio CI | Private push executed; Ubuntu run recorded failure | failure 不是 success、release 或 portability evidence；Windows corrective awaits verification |
 | Release CI | Manual design surface only | 未 dispatch；不是 release evidence |
 
-Portfolio CI: configured, read-only verification; no remote execution recorded yet.
+Private push executed; Ubuntu run recorded failure; Windows corrective awaits verification.
+WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
+所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。
 
 ## Reviewer fast path
 
@@ -97,7 +99,7 @@ pwsh ./scripts/reviewer-fast-path.ps1
 - Historical public index：[evidence-index.json](evidence/public/v02/search/evidence-index.json)
 - Evidence taxonomy 與可主張範圍：[Release evidence guide](docs/reviewer/release-evidence.md)
 - Security assumptions 與攻擊面：[Threat model](docs/threat-model.md)
-- Portfolio CI（configured、read-only，尚無 remote execution record）：[portfolio-ci.yml](.github/workflows/portfolio-ci.yml)
+- Portfolio CI（Private push executed；Ubuntu run recorded failure；Windows corrective awaits verification）：[portfolio-ci.yml](.github/workflows/portfolio-ci.yml)
 - Release CI（manual design surface，未 dispatch）：[release-ci.yml](.github/workflows/release-ci.yml)
 
 Technical formal closure 是 immutable historical commit
@@ -121,7 +123,9 @@ PowerShell 7 與 GitHub Actions。historical technical closure 的完整測量�
 
 ## Claim ceiling
 
-- Portfolio CI 只有 configured 的 read-only verification；尚未記錄 remote execution，並非 release evidence。
+- Private push 已執行；Ubuntu run 已記錄 failure。failure 不是 success、release 或 portability evidence；Windows corrective awaits verification。
+- WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
+- 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。
 - Release CI 是 manual design surface，未 dispatch；未執行 remote release，也沒有 push、tag、GitHub Release 或 GHCR publication evidence。
 - 不宣稱 Kubernetes production readiness。
 - 不宣稱 production HA、multi-region 或 disaster recovery。

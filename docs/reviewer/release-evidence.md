@@ -25,16 +25,17 @@ reviewer entrypoint 與所有未執行 action 的 explicit `false` booleans。�
 Deterministic fixtures、golden vectors 與 contract tests 可重現 validator、identity、temporal protocol
 與 security behavior。Synthetic/local PASS 是 engineering evidence，不是 production traffic evidence。
 
-### 4. Configured Portfolio CI evidence
+### 4. Private failed-staging Portfolio CI evidence
 
-[portfolio-ci.yml](../../.github/workflows/portfolio-ci.yml) 是 configured、read-only verification
-workflow，只有 `main` push 與 pull request trigger，且尚未記錄 remote execution。
+[portfolio-ci.yml](../../.github/workflows/portfolio-ci.yml) 的 Private push 已執行，Ubuntu run 已記錄
+failure。failure 不是 success、release 或 portability evidence；Windows corrective awaits verification。
 
-Portfolio CI: configured, read-only verification; no remote execution recorded yet.
+WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
 
-因此它不是 remote release、GHCR/package publication、tag、GitHub Release、production deployment、
-Kubernetes readiness、H2 execution、CV workload 或 LLM workload 的 evidence。
+所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。因此它不是
+remote release、GHCR/package publication、tag、GitHub Release、production deployment、Kubernetes readiness、
+H2 execution、CV workload 或 LLM workload 的 evidence。
 
 ### 5. Designed remote release-CI evidence
 
@@ -55,7 +56,7 @@ result。H2 維持 `SEALED_NOT_LOADED`，loaded rows `0`。
 - [Local readiness evidence](../../evidence/public/portfolio/local-release-readiness.json)
 - [Reviewer fast path](../../scripts/reviewer-fast-path.ps1)
 - [Read-only verifier](../../scripts/verify-public-release.py)
-- [Configured read-only Portfolio CI](../../.github/workflows/portfolio-ci.yml)
+- [Private-failed-staging Portfolio CI corrective](../../.github/workflows/portfolio-ci.yml)
 - [Manual Release CI design surface](../../.github/workflows/release-ci.yml)
 
 verifier 會要求 formal closure 是目前 publication branch 的 ancestor，但不要求 current HEAD 等於
@@ -64,7 +65,7 @@ closure。這保留 historical freeze 語意，也允許後續純 publication co
 ## Claim ceiling
 
 ```text
-LOCAL_PORTFOLIO_RELEASE_READY != REMOTE_RELEASED != PRODUCTION_READY
+WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 ```
 
 因此 local PASS 只表示 repository 的 public slice 在當下 checkout 可重現且證據一致；它不宣稱

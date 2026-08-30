@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import re
@@ -17,20 +19,23 @@ REQUIRED_ACTIONS = {
     "actions/upload-artifact",
 }
 PORTFOLIO_ACTIONS = {
-    "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
+    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
     "astral-sh/setup-uv": "20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
 }
+COMPOSE_VERSION = "5.5.0"
+COMPOSE_SHA256 = "51e1e61195f3616896265487ed64551095f3bd27ac7fbd5758d3538c3bfa1b19"
+COMPOSE_URL = (
+    "https://github.com/docker/compose/releases/download/v5.5.0/docker-compose-windows-x86_64.exe"
+)
 EXPECTED_PORTFOLIO_WORKFLOW = (
     """\
 name: Portfolio CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -41,11 +46,18 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-24.04
+    runs-on: windows-2025
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
     steps:
+      - name: Configure Windows checkout policy
+        run: |
+          git config --global core.autocrlf true
+          git config --global core.fileMode false
       - name: Checkout complete evidence history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -55,6 +67,15 @@ jobs:
           version: "0.11.18"
           python-version: "3.12"
           enable-cache: false
+      - name: Install checksum-pinned Docker Compose config renderer
+        run: |
+          $pluginDirectory = Join-Path $env:USERPROFILE ".docker\\cli-plugins"
+          New-Item -ItemType Directory -Force -Path $pluginDirectory | Out-Null
+          $composePath = Join-Path $pluginDirectory "docker-compose.exe"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/docker/compose/releases/download/v5.5.0/docker-compose-windows-x86_64.exe" -OutFile $composePath
+          $actualSha256 = (Get-FileHash -LiteralPath $composePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne "51e1e61195f3616896265487ed64551095f3bd27ac7fbd5758d3538c3bfa1b19") { throw "DOCKER_COMPOSE_SHA256_MISMATCH" }
+          if ((docker compose version --short).Trim() -ne "5.5.0") { throw "DOCKER_COMPOSE_VERSION_MISMATCH" }
       - name: Install locked dependencies
         run: uv sync --frozen --group ml
       - name: Verify lock and static checks
@@ -193,8 +214,8 @@ def test_portfolio_workflow_has_only_main_push_and_pull_request_triggers() -> No
 
     assert workflow.startswith("name: Portfolio CI\n")
     assert re.search(
-        r"^on:\n  push:\n    branches:\n      - main\n"
-        r"  pull_request:\n    branches:\n      - main\n$",
+        r"^on:\n  push:\n    branches: \[main\]\n"
+        r"  pull_request:\n    branches: \[main\]\n$",
         workflow,
         re.MULTILINE,
     )
@@ -214,10 +235,12 @@ def test_portfolio_workflow_is_read_only_and_bounded() -> None:
         workflow,
         re.MULTILINE,
     )
-    assert "runs-on: ubuntu-24.04" in workflow
+    assert "runs-on: windows-2025" in workflow
     assert "timeout-minutes: 30" in workflow
+    assert "defaults:\n      run:\n        shell: pwsh" in workflow
     assert re.search(r"^    permissions:", workflow, re.MULTILINE) is None
     assert re.search(r"\b(?:contents|packages|id-token|attestations): write\b", workflow) is None
+    assert "permissions:\n  id-token: write" not in workflow
 
 
 def test_portfolio_workflow_pins_setup_and_checks_out_complete_history() -> None:
@@ -231,7 +254,7 @@ def test_portfolio_workflow_pins_setup_and_checks_out_complete_history() -> None
     assert len(reference_pairs) == len(references)
     assert all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in references.values())
     assert re.search(
-        r"uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n"
+        r"uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
         r"        with:\n          fetch-depth: 0\n          persist-credentials: false",
         workflow,
     )
@@ -241,6 +264,12 @@ def test_portfolio_workflow_pins_setup_and_checks_out_complete_history() -> None
         r'          python-version: "3\.12"\n          enable-cache: false',
         workflow,
     )
+    assert "git config --global core.autocrlf true" in workflow
+    assert "git config --global core.fileMode false" in workflow
+    assert COMPOSE_URL in workflow
+    assert COMPOSE_SHA256 in workflow
+    assert f'ne "{COMPOSE_VERSION}"' in workflow
+    assert 'Join-Path $env:USERPROFILE ".docker\\cli-plugins"' in workflow
 
 
 def test_portfolio_workflow_runs_only_the_read_only_local_gate() -> None:
@@ -263,7 +292,6 @@ def test_portfolio_workflow_runs_only_the_read_only_local_gate() -> None:
         prohibited not in workflow.casefold()
         for prohibited in (
             "secrets",
-            "docker",
             "ghcr",
             "oidc",
             "attestation",
@@ -275,3 +303,17 @@ def test_portfolio_workflow_runs_only_the_read_only_local_gate() -> None:
         prohibited not in workflow
         for prohibited in ("release:", "tags:", "workflow_dispatch:", "schedule:")
     )
+    assert "ubuntu-24.04" not in workflow
+    assert all(
+        command not in workflow.casefold()
+        for command in (
+            "docker login",
+            "docker pull",
+            "docker build",
+            "docker run",
+            "docker compose up",
+        )
+    )
+    assert "secrets" not in workflow.casefold()
+    assert "pytest -k" not in workflow
+    assert "--ignore" not in workflow

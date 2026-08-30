@@ -736,7 +736,10 @@ def test_reviewer_demo_command_and_claim_ceiling_are_documented() -> None:
         assert "PUBLIC_RELEASE_SLICE_INVENTORY_MISMATCH" in document
         assert "repository" in document
         assert "temporary" in document.casefold() or "暫存" in document
-    assert "MDCP_REVIEWER_DEMO_PASS != REMOTE_RELEASED != PRODUCTION_READY" in quickstart
+    assert (
+        "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE "
+        "!= REMOTE_RELEASED != PRODUCTION_READY"
+    ) in quickstart
 
 
 def test_evidence_taxonomy_and_license_qualifiers_are_explicit() -> None:
@@ -746,13 +749,16 @@ def test_evidence_taxonomy_and_license_qualifiers_are_explicit() -> None:
 
     for evidence_class in (
         "Historical formal closure evidence",
-        "Local portfolio readiness evidence",
+        "Private failed-staging Portfolio CI evidence",
         "Synthetic fixture evidence",
         "Designed remote release-CI evidence",
         "不存在的 evidence",
     ):
         assert evidence_class in guide
-    assert "LOCAL_PORTFOLIO_RELEASE_READY != REMOTE_RELEASED != PRODUCTION_READY" in guide
+    assert (
+        "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE "
+        "!= REMOTE_RELEASED != PRODUCTION_READY"
+    ) in guide
     assert "reported historical closure-review measurement" in guide
     assert "not authenticated by the closure commit" in guide
     assert license_text.startswith("MIT License\n\nCopyright (c) 2026 kuotunyu\n")
@@ -987,7 +993,17 @@ def test_readiness_evidence_is_canonical_public_and_binds_surface() -> None:
         REPOSITORY_ROOT
     )
     assert public_evidence_violations(readiness.model_dump(mode="json")) == ()
+    assert readiness.schema_version == "mdcp.local-release-readiness.v1.1"
+    assert readiness.evidence_class == "github_private_staging_corrective_readiness"
+    assert readiness.portfolio_ci_commit == "1b44a3e001d6522b6409bae24e07740bf053186d"
+    assert readiness.portfolio_ci_run_url == (
+        "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512"
+    )
+    assert readiness.portfolio_ci_conclusion == "failure"
     assert readiness.claim_execution.remote_release_executed is False
+    assert readiness.claim_execution.push_executed is True
+    assert readiness.claim_execution.portfolio_ci_executed is True
+    assert readiness.claim_execution.portfolio_ci_passed is False
     assert readiness.claim_execution.h2_executed is False
 
 
@@ -1063,7 +1079,19 @@ def test_public_surface_rejects_wrong_file_digest(
 
 @pytest.mark.parametrize(
     "mutation",
-    ("noncanonical", "unknown_field", "true_execution_claim", "wrong_h2_state"),
+    (
+        "noncanonical",
+        "unknown_field",
+        "short_commit",
+        "alternate_repository_url",
+        "alternate_scheme_url",
+        "success_conclusion",
+        "false_push_executed",
+        "false_portfolio_ci_executed",
+        "true_portfolio_ci_passed",
+        "affirmative_release",
+        "wrong_h2_state",
+    ),
 )
 def test_readiness_mutations_fail_with_the_evidence_reason_code(
     tmp_path: Path,
@@ -1078,7 +1106,25 @@ def test_readiness_mutations_fail_with_the_evidence_reason_code(
 
     if mutation == "unknown_field":
         document["private_extension"] = False
-    elif mutation == "true_execution_claim":
+    elif mutation == "short_commit":
+        document["portfolio_ci_commit"] = "1b44a3e"
+    elif mutation == "alternate_repository_url":
+        document["portfolio_ci_run_url"] = (
+            "https://github.com/another-owner/model-delivery-control-plane/actions/runs/33311024512"
+        )
+    elif mutation == "alternate_scheme_url":
+        document["portfolio_ci_run_url"] = (
+            "http://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512"
+        )
+    elif mutation == "success_conclusion":
+        document["portfolio_ci_conclusion"] = "success"
+    elif mutation == "false_push_executed":
+        document["claim_execution"]["push_executed"] = False
+    elif mutation == "false_portfolio_ci_executed":
+        document["claim_execution"]["portfolio_ci_executed"] = False
+    elif mutation == "true_portfolio_ci_passed":
+        document["claim_execution"]["portfolio_ci_passed"] = True
+    elif mutation == "affirmative_release":
         document["claim_execution"]["remote_release_executed"] = True
     elif mutation == "wrong_h2_state":
         document["h2_status"] = "LOADED"

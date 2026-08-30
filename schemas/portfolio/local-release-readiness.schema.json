@@ -9,8 +9,18 @@
           "type": "boolean"
         },
         "push_executed": {
-          "const": false,
+          "const": true,
           "title": "Push Executed",
+          "type": "boolean"
+        },
+        "portfolio_ci_executed": {
+          "const": true,
+          "title": "Portfolio Ci Executed",
+          "type": "boolean"
+        },
+        "portfolio_ci_passed": {
+          "const": false,
+          "title": "Portfolio Ci Passed",
           "type": "boolean"
         },
         "tag_created": {
@@ -47,6 +57,8 @@
       "required": [
         "remote_release_executed",
         "push_executed",
+        "portfolio_ci_executed",
+        "portfolio_ci_passed",
         "tag_created",
         "production_deployed",
         "kubernetes_production_ready",
@@ -126,7 +138,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "mdcp.local-release-readiness.v1",
+      "const": "mdcp.local-release-readiness.v1.1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -136,7 +148,7 @@
       "type": "string"
     },
     "evidence_class": {
-      "const": "local_portfolio_release_readiness",
+      "const": "github_private_staging_corrective_readiness",
       "title": "Evidence Class",
       "type": "string"
     },
@@ -195,6 +207,21 @@
       "title": "Static Firewall Sha256",
       "type": "string"
     },
+    "portfolio_ci_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Portfolio Ci Commit",
+      "type": "string"
+    },
+    "portfolio_ci_run_url": {
+      "pattern": "^https://github\\.com/kuotunyu/model-delivery-control-plane/actions/runs/[1-9][0-9]*$",
+      "title": "Portfolio Ci Run Url",
+      "type": "string"
+    },
+    "portfolio_ci_conclusion": {
+      "const": "failure",
+      "title": "Portfolio Ci Conclusion",
+      "type": "string"
+    },
     "public_surface_entries": {
       "items": {
         "$ref": "#/$defs/PublicSurfaceEntry"
@@ -226,7 +253,7 @@
       "type": "string"
     },
     "claim_ceiling": {
-      "const": "mdcp.local-portfolio-claim-ceiling.v1",
+      "const": "mdcp.private-staging-corrective-claim-ceiling.v1",
       "title": "Claim Ceiling",
       "type": "string"
     },
@@ -249,6 +276,9 @@
     "v1_serving_identity",
     "v2_serving_identity",
     "static_firewall_sha256",
+    "portfolio_ci_commit",
+    "portfolio_ci_run_url",
+    "portfolio_ci_conclusion",
     "public_surface_entries",
     "public_surface_inventory_sha256",
     "h2_status",
