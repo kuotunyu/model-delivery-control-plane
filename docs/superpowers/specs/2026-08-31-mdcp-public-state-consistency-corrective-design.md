@@ -1,8 +1,11 @@
 # MDCP Public-State Consistency Corrective Design
 
-**Date:** 2026-08-31  
-**Repository:** `kuotunyu/model-delivery-control-plane`  
-**Branch:** `codex/wave0-foundation-feasibility`  
+**Date:** 2026-08-31
+
+**Repository:** `kuotunyu/model-delivery-control-plane`
+
+**Branch:** `codex/wave0-foundation-feasibility`
+
 **Base commit:** `6588d4e1c0b79b9120f7e43f50bb45a3b6a8ede2`
 
 ## 1. Purpose
