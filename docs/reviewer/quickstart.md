@@ -3,10 +3,10 @@
 這條 reviewer path 讓你先在低摩擦、CPU-only 的條件下驗證 repository 的核心 claims，再決定是否
 進一步閱讀完整 architecture 與 test suite。
 
-repository remains Private; portfolio_ci_passed: true
+repository is Public; portfolio_ci_passed: true
 Windows-native success commit: 8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1
 Windows-native success run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462
-The mixed-EOL corrective passed Private remote Portfolio CI.
+The mixed-EOL corrective passed Windows-native remote Portfolio CI during Private staging.
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false；因此兩者都不表示
@@ -95,7 +95,7 @@ Technical closure 的 historical measurement 是 `1546 passed, 7 skipped in 681.
 - [Actual-vs-designed architecture](../architecture.md)
 - [Release evidence taxonomy](release-evidence.md)
 - [Threat model](../threat-model.md)
-- [Private Windows-native Portfolio CI](../../.github/workflows/portfolio-ci.yml)
+- [Windows-native Portfolio CI](../../.github/workflows/portfolio-ci.yml)
 - [Manual Release CI design surface](../../.github/workflows/release-ci.yml)
 
 Docker、validator internals 與 workflow source 可以作為 optional deep inspection；這不是要求 reviewer

@@ -784,12 +784,14 @@ def test_evidence_taxonomy_and_license_qualifiers_are_explicit() -> None:
 
     for evidence_class in (
         "Historical formal closure evidence",
-        "Private Windows-native Portfolio CI evidence",
+        "Windows-native Portfolio CI evidence",
         "Synthetic fixture evidence",
         "Designed remote release-CI evidence",
         "不存在的 evidence",
     ):
         assert evidence_class in guide
+    assert "### 4. Windows-native Portfolio CI evidence" in guide
+    assert "### 4. Private Windows-native Portfolio CI evidence" not in guide
     assert (
         "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE "
         "!= REMOTE_RELEASED != PRODUCTION_READY"
@@ -1052,7 +1054,7 @@ def test_readiness_evidence_is_canonical_public_and_binds_surface() -> None:
     assert readiness.claim_execution.llm_workload_implemented is False
 
 
-def test_final_readiness_docs_bind_success_and_preserve_failed_history() -> None:
+def test_final_readiness_docs_bind_public_state_and_preserve_failed_history() -> None:
     ubuntu = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33311024512"
     windows = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33316653641"
     success = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462"
@@ -1063,7 +1065,8 @@ def test_final_readiness_docs_bind_success_and_preserve_failed_history() -> None
     ):
         text = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
         assert success in text
-        assert "repository remains Private" in text
+        assert "repository is Public; portfolio_ci_passed: true" in text
+        assert "repository remains Private" not in text
         assert "portfolio_ci_passed: true" in text
         assert "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE" in text
     for logical_path in ("README.md", "docs/reviewer/quickstart.md"):
@@ -1075,6 +1078,7 @@ def test_final_readiness_docs_bind_success_and_preserve_failed_history() -> None
     )
     assert ubuntu in evidence_guide
     assert windows in evidence_guide
+    assert "during Private staging" in evidence_guide
 
 
 def test_public_claim_ceiling_distinguishes_private_ci_push_from_publication() -> None:

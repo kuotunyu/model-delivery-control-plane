@@ -54,13 +54,13 @@ flowchart LR
 
 | Surface | Status | 可主張範圍 |
 |---|---|---|
-| Portfolio CI | Private；Windows-native remote gate 已通過 | mixed-EOL corrective commit 與 exact success run 可直接核對 |
+| Portfolio CI | Public；Windows-native remote gate 已通過；evidence recorded during Private staging | mixed-EOL corrective commit 與 exact success run 可直接核對 |
 | Release CI | Manual design surface only | 未 dispatch；不是 release evidence |
 
-repository remains Private; portfolio_ci_passed: true
+repository is Public; portfolio_ci_passed: true
 Windows-native success commit: 8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1
 Windows-native success run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33322212462
-The mixed-EOL corrective passed Private remote Portfolio CI.
+The mixed-EOL corrective passed Windows-native remote Portfolio CI during Private staging.
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Release CI: manual design surface only; not dispatched and not evidence of a release.
 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。
@@ -102,7 +102,7 @@ pwsh ./scripts/reviewer-fast-path.ps1
 - Historical public index：[evidence-index.json](evidence/public/v02/search/evidence-index.json)
 - Evidence taxonomy 與可主張範圍：[Release evidence guide](docs/reviewer/release-evidence.md)
 - Security assumptions 與攻擊面：[Threat model](docs/threat-model.md)
-- Portfolio CI（repository remains Private；Windows-native corrective run 已通過）：[portfolio-ci.yml](.github/workflows/portfolio-ci.yml)
+- Portfolio CI（repository is Public；Windows-native corrective run 已通過）：[portfolio-ci.yml](.github/workflows/portfolio-ci.yml)
 - Release CI（manual design surface，未 dispatch）：[release-ci.yml](.github/workflows/release-ci.yml)
 
 Technical formal closure 是 immutable historical commit
@@ -126,7 +126,7 @@ PowerShell 7 與 GitHub Actions。historical technical closure 的完整測量�
 
 ## Claim ceiling
 
-- repository remains Private; portfolio_ci_passed: true。Windows-native mixed-EOL corrective commit `8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1` 的 exact remote run 已通過。
+- repository is Public; portfolio_ci_passed: true。Windows-native mixed-EOL corrective commit `8bc91a548846af0b1f1be1fc9ae6fbb80b7f63f1` 的 exact remote run 已於 Private staging 通過。
 - WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 - 所有 release、tag、package、P2、H2、workload、Kubernetes 與 production claims 仍為 false。
 - Release CI 是 manual design surface，未 dispatch；未執行 remote release，也沒有 tag、GitHub Release 或 GHCR publication evidence。
