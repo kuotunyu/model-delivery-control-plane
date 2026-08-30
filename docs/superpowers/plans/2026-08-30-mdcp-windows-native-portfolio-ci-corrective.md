@@ -47,8 +47,8 @@ Require formatting only for the exact three changed Python files above; global f
 Use the verified identity APIs:
 
 ```powershell
-uv run --no-sync python -c "from mdcp.contracts.release import serving_identity_v1; print(serving_identity_v1())"
-uv run --no-sync python -c "from mdcp.contracts.serving_identity_v2 import serving_identity_v2; print(serving_identity_v2())"
+uv run --no-sync python -c "from pathlib import Path; from mdcp.contracts.release import serving_inventory_digest, serving_inventory_from_root; print(serving_inventory_digest(serving_inventory_from_root(Path.cwd())))"
+uv run --no-sync python -c "from pathlib import Path; from mdcp.contracts.serving_identity_v2 import V2_SERVING_PATHS, build_v2_serving_inventory; print(build_v2_serving_inventory(Path.cwd(), V2_SERVING_PATHS).inventory_sha256)"
 ```
 
 Expected v1 is `d81af556dbc06b3f9d703f38f47867044f99d3d908a7bfc816c8bf6a60719209`; v2 is `198610d3cfcb48bf713b414a1d11073c2ac2e438f4a4dd99fc8dd907789152ea`; `uv.lock` is `781845de1b742769bbc446906425dcd9f74358ec457bdb1d28b63699ec1277ae`. Search receipt/index, source/worker inventory, and static-firewall values remain those frozen in the design.
