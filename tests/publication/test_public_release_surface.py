@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -589,36 +590,60 @@ def test_readme_heading_order_and_reviewer_setup_are_stable() -> None:
 def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     heading = "## 對應 ML／AI／CV／LLM 職務能力"
+    next_heading = "## 實際 implemented verification path"
 
+    assert readme.count(heading) == 1
     assert readme.index("## 目前完成度") < readme.index(heading)
-    assert readme.index(heading) < readme.index("## 實際 implemented verification path")
-    for role in (
-        "ML Engineer",
-        "AI Engineer",
-        "Computer Vision / LLM Engineer",
-        "MLOps / reliability / security",
-    ):
-        assert role in readme
-    for target in (
-        "src/mdcp/contracts/workload.py",
-        "src/mdcp/contracts/serving_identity_v2.py",
-        "tests/contract/workload/test_serving_identity_v2.py",
-        "src/mdcp/validator/service.py",
-        "src/mdcp/verify/bundle.py",
-        "evidence/public/portfolio/local-release-readiness.json",
-        "docs/reviewer/release-evidence.md",
-        "src/mdcp/temporal/formal_worker.py",
-        "src/mdcp/temporal/firewall.py",
-        "src/mdcp/temporal/runtime_guards.py",
-    ):
-        assert f"]({target})" in readme
-    for boundary in (
-        "已實作的具體 workload 是 temporal regression",
-        "local verification 不等於 remote release 或 production evidence",
-        "不宣稱已實作 CV 或 LLM workload",
-        "control/router/canary/rollback/recovery 仍是 Designed only",
-    ):
-        assert boundary in readme
+    assert readme.index(heading) < readme.index(next_heading)
+    section = readme[readme.index(heading) : readme.index(next_heading)]
+    expected_rows = (
+        (
+            "ML Engineer",
+            (
+                "src/mdcp/contracts/workload.py",
+                "src/mdcp/contracts/serving_identity_v2.py",
+                "tests/contract/workload/test_serving_identity_v2.py",
+            ),
+            "已實作的具體 workload 是 temporal regression",
+        ),
+        (
+            "AI Engineer",
+            (
+                "src/mdcp/validator/service.py",
+                "src/mdcp/verify/bundle.py",
+                "evidence/public/portfolio/local-release-readiness.json",
+            ),
+            "local verification 不等於 remote release 或 production evidence",
+        ),
+        (
+            "Computer Vision / LLM Engineer",
+            (
+                "src/mdcp/contracts/serving_identity_v2.py",
+                "docs/reviewer/release-evidence.md",
+            ),
+            "不宣稱已實作 CV 或 LLM workload",
+        ),
+        (
+            "MLOps / reliability / security",
+            (
+                "src/mdcp/temporal/formal_worker.py",
+                "src/mdcp/temporal/firewall.py",
+                "src/mdcp/temporal/runtime_guards.py",
+            ),
+            "control/router/canary/rollback/recovery 仍是 Designed only",
+        ),
+    )
+
+    for role, targets, boundary in expected_rows:
+        row = next(line for line in section.splitlines() if line.startswith(f"| {role} |"))
+        for target in targets:
+            assert f"]({target})" in row
+        assert boundary in row
+
+    assert re.findall(r"\]\(([^)]+)\)", section) == [
+        target for _, targets, _ in expected_rows for target in targets
+    ]
+    assert len(set(re.findall(r"\]\(([^)]+)\)", section))) == 10
 
 
 def test_reviewer_demo_command_and_claim_ceiling_are_documented() -> None:
