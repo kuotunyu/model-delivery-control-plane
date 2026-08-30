@@ -19,6 +19,13 @@ try {
     }
 
     if ($null -eq $commandFailure) {
+        & uv run --no-sync python scripts/reviewer-demo.py --repository-root .
+        if ($LASTEXITCODE -ne 0) {
+            $commandFailure = 'reviewer demo failed'
+        }
+    }
+
+    if ($null -eq $commandFailure) {
         & uv run --no-sync pytest -p no:cacheprovider -q `
             tests/publication/test_public_release_surface.py `
             tests/publication/test_release_workflow.py `

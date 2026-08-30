@@ -20,6 +20,31 @@ uv sync --frozen --group ml
 若 packages 尚未在本機 cache，這個 setup step 可能使用 network；它不計入 warm verification
 時間。依賴建立完成後，下面的 fast path 使用 `--no-sync`，verification 本身不需要 network。
 
+## 2 分鐘 fail-closed demo
+
+從 repository root 執行這個 shell-neutral proof：
+
+```text
+uv run --no-sync python scripts/reviewer-demo.py --repository-root .
+```
+
+預期輸出固定為：
+
+```text
+MDCP_DEMO_PASS case=baseline
+MDCP_DEMO_REJECT case=remote_release_claim reason=PUBLIC_RELEASE_SLICE_EVIDENCE_INVALID
+MDCP_DEMO_REJECT case=public_surface_tamper reason=PUBLIC_RELEASE_SLICE_INVENTORY_MISMATCH
+MDCP_REVIEWER_DEMO_PASS cases=3 repository_mutations=0
+```
+
+`repository_mutations=0` 表示 demo 前後的 Git porcelain bytes 完全相同。所有故意 mutation 都只存在
+於 memory 或 OS-managed temporary directory，不會修改 repository 內的檔案；這是 local reviewer
+evidence，不是 remote release 或 production evidence。
+
+```text
+MDCP_REVIEWER_DEMO_PASS != REMOTE_RELEASED != PRODUCTION_READY
+```
+
 ## Level 1：Fast path（建議先跑）
 
 ```powershell
@@ -33,6 +58,7 @@ topology，再執行 curated publication/contract/process/security tests；任�
 
 ```text
 uv run --no-sync python scripts/verify-public-release.py --repository-root .
+uv run --no-sync python scripts/reviewer-demo.py --repository-root .
 uv run --no-sync pytest -p no:cacheprovider -q tests/publication/test_public_release_surface.py tests/publication/test_release_workflow.py tests/contract/workload/test_serving_identity_isolation.py tests/contract/workload/test_serving_identity_v2.py tests/unit/temporal/test_formal_worker_protocol.py tests/integration/temporal/test_formal_worker_process.py tests/security/temporal/test_public_evidence_boundary.py
 ```
 

@@ -46,6 +46,19 @@ flowchart LR
 uv sync --frozen --group ml
 ```
 
+### 2 分鐘 fail-closed demo
+
+從 repository root 執行 shell-neutral proof：
+
+```text
+uv run --no-sync python scripts/reviewer-demo.py --repository-root .
+```
+
+`MDCP_DEMO_PASS case=baseline` 表示 baseline local evidence 通過；
+`PUBLIC_RELEASE_SLICE_EVIDENCE_INVALID` 是故意偽造 remote release claim 的預期拒絕，
+`PUBLIC_RELEASE_SLICE_INVENTORY_MISMATCH` 是故意竄改 public surface 的預期拒絕。
+所有故意 mutation 都只發生在 memory 或 OS-managed temporary directory；demo 不會修改 repository 內的檔案。這是 local reviewer evidence，不是 remote release 或 production evidence。
+
 之後執行 CPU-only、無資料集、無模型執行、無 Docker、verification 期間無 network 的 warm path：
 
 ```powershell

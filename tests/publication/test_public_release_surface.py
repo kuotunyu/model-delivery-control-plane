@@ -624,8 +624,11 @@ def test_fast_path_is_fail_fast_offline_and_matches_the_documented_selector() ->
     assert "Set-StrictMode -Version Latest" in script
     assert "$ErrorActionPreference = 'Stop'" in script
     assert "uv run --no-sync python scripts/verify-public-release.py" in script
+    assert "uv run --no-sync python scripts/reviewer-demo.py" in script
     assert "uv run --no-sync pytest -p no:cacheprovider -q" in script
     assert script.index("verify-public-release.py") < script.index("pytest -p no:cacheprovider")
+    assert script.index("verify-public-release.py") < script.index("reviewer-demo.py")
+    assert script.index("reviewer-demo.py") < script.index("pytest -p no:cacheprovider")
     assert "PUBLIC_RELEASE_FAST_PATH_PASS" in script
     assert "uv sync" not in script
     for selected_test in selected_tests:
@@ -644,7 +647,7 @@ def test_fast_path_is_fail_fast_offline_and_matches_the_documented_selector() ->
 
 
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell unavailable")
-@pytest.mark.parametrize("failing_call", (1, 2))
+@pytest.mark.parametrize("failing_call", (1, 2, 3))
 def test_fast_path_detects_mutation_when_a_command_fails(tmp_path: Path, failing_call: int) -> None:
     repository = tmp_path / "repository"
     scripts = repository / "scripts"
@@ -660,6 +663,7 @@ $startingLocation = (Get-Location).Path
 $env:PYTHONDONTWRITEBYTECODE = 'original'
 $script:gitCalls = 0
 $script:uvCalls = 0
+$script:uvArguments = @()
 
 function git {{
     $script:gitCalls += 1
@@ -671,6 +675,7 @@ function git {{
 
 function uv {{
     $script:uvCalls += 1
+    $script:uvArguments += ($args -join ' ')
     if ($script:uvCalls -eq {failing_call}) {{
         [IO.File]::WriteAllText((Join-Path $repository 'mutation.txt'), 'mutation')
         $global:LASTEXITCODE = 1
@@ -689,6 +694,7 @@ catch {{
 }}
 
 Write-Output "UV_CALLS=$script:uvCalls"
+Write-Output "UV_ARGUMENTS=$($script:uvArguments -join '|')"
 Write-Output "GIT_CALLS=$script:gitCalls"
 $locationRestored = ((Get-Location).Path -eq $startingLocation).ToString().ToLowerInvariant()
 $bytecodeRestored = ($env:PYTHONDONTWRITEBYTECODE -eq 'original').ToString().ToLowerInvariant()
@@ -711,10 +717,105 @@ Write-Output "BYTECODE_RESTORED=$bytecodeRestored"
     assert completed.returncode == 0
     assert "ERROR=reviewer fast path changed repository state" in output
     assert f"UV_CALLS={failing_call}" in output
+    expected_arguments = (
+        "run --no-sync python scripts/verify-public-release.py --repository-root .",
+        "run --no-sync python scripts/reviewer-demo.py --repository-root .",
+        "run --no-sync pytest -p no:cacheprovider -q "
+        "tests/publication/test_public_release_surface.py "
+        "tests/publication/test_release_workflow.py "
+        "tests/contract/workload/test_serving_identity_isolation.py "
+        "tests/contract/workload/test_serving_identity_v2.py "
+        "tests/unit/temporal/test_formal_worker_protocol.py "
+        "tests/integration/temporal/test_formal_worker_process.py "
+        "tests/security/temporal/test_public_evidence_boundary.py",
+    )
+    assert f"UV_ARGUMENTS={'|'.join(expected_arguments[:failing_call])}" in output
     assert "GIT_CALLS=2" in output
     assert "LOCATION_RESTORED=true" in output
     assert "BYTECODE_RESTORED=true" in output
     assert "UNEXPECTED_PASS" not in output
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell unavailable")
+def test_fast_path_runs_verifier_demo_and_curated_tests_in_order(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    scripts = repository / "scripts"
+    scripts.mkdir(parents=True)
+    wrapper = scripts / "reviewer-fast-path.ps1"
+    wrapper.write_bytes((REPOSITORY_ROOT / "scripts/reviewer-fast-path.ps1").read_bytes())
+    escaped_repository = str(repository).replace("'", "''")
+    harness = repository / "harness.ps1"
+    harness.write_text(
+        f"""$ErrorActionPreference = 'Stop'
+$repository = '{escaped_repository}'
+$startingLocation = (Get-Location).Path
+$env:PYTHONDONTWRITEBYTECODE = 'original'
+$script:gitCalls = 0
+$script:uvCalls = 0
+$script:uvArguments = @()
+
+function git {{
+    $script:gitCalls += 1
+    $global:LASTEXITCODE = 0
+}}
+
+function uv {{
+    $script:uvCalls += 1
+    $script:uvArguments += ($args -join ' ')
+    $global:LASTEXITCODE = 0
+}}
+
+try {{
+    . (Join-Path $repository 'scripts/reviewer-fast-path.ps1')
+    Write-Output 'PASS'
+}}
+catch {{
+    Write-Output "ERROR=$($_.Exception.Message)"
+}}
+
+Write-Output "UV_CALLS=$script:uvCalls"
+Write-Output "UV_ARGUMENTS=$($script:uvArguments -join '|')"
+Write-Output "GIT_CALLS=$script:gitCalls"
+$locationRestored = ((Get-Location).Path -eq $startingLocation).ToString().ToLowerInvariant()
+$bytecodeRestored = ($env:PYTHONDONTWRITEBYTECODE -eq 'original').ToString().ToLowerInvariant()
+Write-Output "LOCATION_RESTORED=$locationRestored"
+Write-Output "BYTECODE_RESTORED=$bytecodeRestored"
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ("pwsh", "-NoProfile", "-File", str(harness)),
+        cwd=tmp_path,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=20,
+    )
+    output = completed.stdout.decode("utf-8", errors="strict")
+
+    expected_arguments = (
+        "run --no-sync python scripts/verify-public-release.py --repository-root .",
+        "run --no-sync python scripts/reviewer-demo.py --repository-root .",
+        "run --no-sync pytest -p no:cacheprovider -q "
+        "tests/publication/test_public_release_surface.py "
+        "tests/publication/test_release_workflow.py "
+        "tests/contract/workload/test_serving_identity_isolation.py "
+        "tests/contract/workload/test_serving_identity_v2.py "
+        "tests/unit/temporal/test_formal_worker_protocol.py "
+        "tests/integration/temporal/test_formal_worker_process.py "
+        "tests/security/temporal/test_public_evidence_boundary.py",
+    )
+
+    assert completed.returncode == 0
+    assert "PUBLIC_RELEASE_FAST_PATH_PASS evidence_class=local_portfolio mutations=0" in output
+    assert "PASS" in output
+    assert "ERROR=" not in output
+    assert "UV_CALLS=3" in output
+    assert f"UV_ARGUMENTS={'|'.join(expected_arguments)}" in output
+    assert "GIT_CALLS=2" in output
+    assert "LOCATION_RESTORED=true" in output
+    assert "BYTECODE_RESTORED=true" in output
 
 
 def test_checked_in_readiness_schema_matches_the_closed_model() -> None:
