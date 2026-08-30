@@ -42,7 +42,10 @@ Historical Windows mixed-EOL failed run: https://github.com/kuotunyu/model-deliv
 
 WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE != REMOTE_RELEASED != PRODUCTION_READY
 Linux read-only smoke (not portability proof)
-Linux smoke is configured; successful remote evidence is not yet claimed.
+Linux read-only smoke first-run commit: c31337bae7a6b6a988984368821337158392c94f
+Linux read-only smoke failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33334963036
+The first run passed verifier/demo before the Windows-only golden vector failed closed; this corrective verifies that boundary without excluding tests.
+Successful remote Linux smoke evidence is not claimed by these bytes.
 LINUX_READ_ONLY_SMOKE_PASS != CROSS_PLATFORM_PORTABLE
 Windows full suite remains the authoritative gate.
 Release CI: manual design surface only; not dispatched and not evidence of a release.

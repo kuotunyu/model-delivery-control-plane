@@ -1084,7 +1084,9 @@ def test_final_readiness_docs_bind_public_state_and_preserve_failed_history() ->
     assert "during Private staging" in evidence_guide
 
 
-def test_linux_read_only_smoke_is_bounded_and_pending_remote_evidence() -> None:
+def test_linux_read_only_smoke_preserves_failed_first_run_and_corrective_boundary() -> None:
+    first_commit = "c31337bae7a6b6a988984368821337158392c94f"
+    failed_run = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33334963036"
     for logical_path in (
         "README.md",
         "docs/reviewer/quickstart.md",
@@ -1092,7 +1094,11 @@ def test_linux_read_only_smoke_is_bounded_and_pending_remote_evidence() -> None:
     ):
         text = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
         assert "Linux read-only smoke (not portability proof)" in text
-        assert "Linux smoke is configured; successful remote evidence is not yet claimed." in text
+        assert f"Linux read-only smoke first-run commit: {first_commit}" in text
+        assert f"Linux read-only smoke failed run: {failed_run}" in text
+        assert "The first run passed verifier/demo before the Windows-only golden vector" in text
+        assert "without excluding tests" in text
+        assert "Successful remote Linux smoke evidence is not claimed by these bytes." in text
         assert "LINUX_READ_ONLY_SMOKE_PASS != CROSS_PLATFORM_PORTABLE" in text
         assert "Windows full suite remains the authoritative gate." in text
         assert "Linux read-only smoke success commit:" not in text
