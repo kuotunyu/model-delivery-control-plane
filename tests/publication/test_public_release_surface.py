@@ -1068,7 +1068,10 @@ def test_final_readiness_docs_bind_public_state_and_preserve_failed_history() ->
         assert "repository is Public; portfolio_ci_passed: true" in text
         assert "repository remains Private" not in text
         assert "portfolio_ci_passed: true" in text
-        assert "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE" in text
+        assert (
+            "WINDOWS_NATIVE_REMOTE_PORTFOLIO_CI_PASS != CROSS_PLATFORM_PORTABLE "
+            "!= REMOTE_RELEASED != PRODUCTION_READY"
+        ) in text
     for logical_path in ("README.md", "docs/reviewer/quickstart.md"):
         text = (REPOSITORY_ROOT / logical_path).read_text(encoding="utf-8")
         assert ubuntu not in text
