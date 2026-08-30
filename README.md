@@ -24,6 +24,18 @@ controls 可轉用於 ML、AI、Computer Vision 與 LLM engineering，但不把�
 | Control service、router、canary、rollback、recovery | Designed only | architecture/specification，沒有 end-to-end deployment claim |
 | GitHub release workflow | Not executed remotely | checked-in workflow 可供 inspection；本 slice 未執行 remote release |
 
+## 對應 ML／AI／CV／LLM 職務能力
+
+以下對照的是這個 repository 可直接驗證的 engineering evidence；CV／LLM 欄位表示
+delivery-control patterns 的可轉用性，不是已完成對應 workload。
+
+| 目標職務／能力 | 可直接檢查的 evidence | 誠實邊界 |
+|---|---|---|
+| ML Engineer | [workload contract](src/mdcp/contracts/workload.py)、[v2 serving identity](src/mdcp/contracts/serving_identity_v2.py)、[contract tests](tests/contract/workload/test_serving_identity_v2.py) | 已實作的具體 workload 是 temporal regression |
+| AI Engineer | [offline validator](src/mdcp/validator/service.py)、[bundle verification](src/mdcp/verify/bundle.py)、[local readiness](evidence/public/portfolio/local-release-readiness.json) | local verification 不等於 remote release 或 production evidence |
+| Computer Vision / LLM Engineer | [content-addressed serving identity](src/mdcp/contracts/serving_identity_v2.py)、[release evidence taxonomy](docs/reviewer/release-evidence.md) | engineering pattern 可轉用；不宣稱已實作 CV 或 LLM workload |
+| MLOps / reliability / security | [dedicated formal worker](src/mdcp/temporal/formal_worker.py)、[static firewall](src/mdcp/temporal/firewall.py)、[runtime guards](src/mdcp/temporal/runtime_guards.py) | control/router/canary/rollback/recovery 仍是 Designed only |
+
 ## 實際 implemented verification path
 
 ```mermaid

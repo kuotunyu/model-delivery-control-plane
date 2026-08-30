@@ -586,6 +586,41 @@ def test_readme_heading_order_and_reviewer_setup_are_stable() -> None:
     assert "uv run --no-sync python scripts/verify-public-release.py" in quickstart
 
 
+def test_readme_maps_target_roles_to_concrete_evidence_without_expanding_claims() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    heading = "## 對應 ML／AI／CV／LLM 職務能力"
+
+    assert readme.index("## 目前完成度") < readme.index(heading)
+    assert readme.index(heading) < readme.index("## 實際 implemented verification path")
+    for role in (
+        "ML Engineer",
+        "AI Engineer",
+        "Computer Vision / LLM Engineer",
+        "MLOps / reliability / security",
+    ):
+        assert role in readme
+    for target in (
+        "src/mdcp/contracts/workload.py",
+        "src/mdcp/contracts/serving_identity_v2.py",
+        "tests/contract/workload/test_serving_identity_v2.py",
+        "src/mdcp/validator/service.py",
+        "src/mdcp/verify/bundle.py",
+        "evidence/public/portfolio/local-release-readiness.json",
+        "docs/reviewer/release-evidence.md",
+        "src/mdcp/temporal/formal_worker.py",
+        "src/mdcp/temporal/firewall.py",
+        "src/mdcp/temporal/runtime_guards.py",
+    ):
+        assert f"]({target})" in readme
+    for boundary in (
+        "已實作的具體 workload 是 temporal regression",
+        "local verification 不等於 remote release 或 production evidence",
+        "不宣稱已實作 CV 或 LLM workload",
+        "control/router/canary/rollback/recovery 仍是 Designed only",
+    ):
+        assert boundary in readme
+
+
 def test_reviewer_demo_command_and_claim_ceiling_are_documented() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     quickstart = (REPOSITORY_ROOT / "docs/reviewer/quickstart.md").read_text(encoding="utf-8")
