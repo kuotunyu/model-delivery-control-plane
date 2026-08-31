@@ -45,7 +45,9 @@ Linux read-only smoke (not portability proof)
 Linux read-only smoke first-run commit: c31337bae7a6b6a988984368821337158392c94f
 Linux read-only smoke failed run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33334963036
 The first run passed verifier/demo before the Windows-only golden vector failed closed; this corrective verifies that boundary without excluding tests.
-Successful remote Linux smoke evidence is not claimed by these bytes.
+Linux read-only smoke success commit: 91d80b6e932f72ed95a2fe422966c177fbb7da8d
+Linux read-only smoke success run: https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33336107355
+The corrective passed the bounded Linux smoke and the authoritative Windows gate.
 LINUX_READ_ONLY_SMOKE_PASS != CROSS_PLATFORM_PORTABLE
 Windows full suite remains the authoritative gate.
 Release CI: manual design surface only; not dispatched and not evidence of a release.

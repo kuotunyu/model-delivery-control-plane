@@ -1084,9 +1084,13 @@ def test_final_readiness_docs_bind_public_state_and_preserve_failed_history() ->
     assert "during Private staging" in evidence_guide
 
 
-def test_linux_read_only_smoke_preserves_failed_first_run_and_corrective_boundary() -> None:
+def test_linux_read_only_smoke_binds_exact_success_and_preserves_failed_history() -> None:
     first_commit = "c31337bae7a6b6a988984368821337158392c94f"
     failed_run = "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33334963036"
+    success_commit = "91d80b6e932f72ed95a2fe422966c177fbb7da8d"
+    success_run = (
+        "https://github.com/kuotunyu/model-delivery-control-plane/actions/runs/33336107355"
+    )
     for logical_path in (
         "README.md",
         "docs/reviewer/quickstart.md",
@@ -1098,11 +1102,15 @@ def test_linux_read_only_smoke_preserves_failed_first_run_and_corrective_boundar
         assert f"Linux read-only smoke failed run: {failed_run}" in text
         assert "The first run passed verifier/demo before the Windows-only golden vector" in text
         assert "without excluding tests" in text
-        assert "Successful remote Linux smoke evidence is not claimed by these bytes." in text
+        assert f"Linux read-only smoke success commit: {success_commit}" in text
+        assert f"Linux read-only smoke success run: {success_run}" in text
+        assert (
+            "The corrective passed the bounded Linux smoke and the authoritative Windows gate."
+            in text
+        )
+        assert "Successful remote Linux smoke evidence is not claimed by these bytes." not in text
         assert "LINUX_READ_ONLY_SMOKE_PASS != CROSS_PLATFORM_PORTABLE" in text
         assert "Windows full suite remains the authoritative gate." in text
-        assert "Linux read-only smoke success commit:" not in text
-        assert "Linux read-only smoke success run:" not in text
 
 
 def test_public_claim_ceiling_distinguishes_private_ci_push_from_publication() -> None:
