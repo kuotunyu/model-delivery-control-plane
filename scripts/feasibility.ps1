@@ -2,7 +2,7 @@
 param(
     [ValidateSet('CgroupResource', 'LoadHarness', 'AtomicTransaction', 'StackBudget', 'All')]
     [string]$Gate = 'All',
-    [string]$RuntimeRoot = 'D:\model-delivery-control-plane-runtime\wave0'
+    [string]$RuntimeRoot = 'D:\portfolio-private-evidence\model-delivery-control-plane-runtime\wave0'
 )
 
 $ErrorActionPreference = 'Stop'
